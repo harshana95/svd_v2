@@ -1,0 +1,152 @@
+name: SVD
+model_type: PropLearn_model
+is_train: true
+report_to: comet_ml
+push_to_hub: true
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: PropagationLearning
+experiment_key: PropLearn
+
+dflat:
+  h: 512
+  w: 512
+  in_dx_m: [!!float 500e-9, !!float 500e-9]
+  out_dx_m: [!!float 1000e-9, !!float 1000e-9]
+
+  wavelength_set_m: [!!float 550e-9]
+  
+  f_distance_m: !!float 10e-3
+  sensor_distance_m : !!float 9e-3
+  aperture_radius_m: !!float 1e-3
+  initialization:
+    type: metalens
+    f: !!float 10e-3
+    s_1: !!float 0.91e-2
+    s_2: !!float 1e-2
+  model_name: Nanocylinders_TiO2_U300H600
+  depth_min: !!float 10e-3
+  depth_max: !!float 1000e-3
+  
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: ylecun/mnist
+    split: train
+    # skip_cache: true
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: image
+    lq_key: sensor
+    label_key: label
+
+    common_transforms_keys: [image]
+    transforms:
+      to_tensor:
+      rescale:
+        factor: 4
+      # select_channels:
+      #  channels: [False, True, False]
+      poisson_noise:
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
+
+  val:
+    type: HuggingFaceDataset
+    name: ylecun/mnist
+    split: test
+    # skip_cache: true
+
+    use_shuffle: false
+    gt_key: image
+    lq_key: sensor
+    label_key: label
+    
+    common_transforms_keys: [image]
+    transforms:
+      to_tensor:
+      rescale:
+        factor: 4
+      # select_channels:
+      #  channels: [False, True, False]
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+      
+# network structures
+network:
+  type: Vector2ImageNet
+  input_dim: 3
+  latent_dim: 256
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/FinalModels/StructureDeblur/NAFNetRealMono 2025 02 07 02.21.30/
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 2e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*L1
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+# validation settings
+val:
+  save_images: false
+  max_images: 10
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 32
+
+  metrics:
+    mse:
+      crop: ~
+    argmax:
+      crop: ~
+    

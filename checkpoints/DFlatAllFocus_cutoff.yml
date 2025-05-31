@@ -1,0 +1,249 @@
+name: SVD
+model_type: DFlatAllFocus_model
+is_train: true
+report_to: comet_ml
+push_to_hub: true
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: Dflat
+experiment_key: MS_cutoff_color
+
+tracker_kwargs:
+  comet_ml:
+    online: true
+
+dflat:
+  array_size: [1, 1]
+  array_spacing: [!!float 0e-6, !!float 0e-6]
+  downscale_factor: [1, 1]
+  diffraction_engine: fresnel
+  model_name: Nanocylinders_TiO2_U300H600
+  h: 2048
+  w: 2048
+  aperture_radius_m: !!float 1e-3
+  out_distance_m: !!float 10e-3
+  # in_dx_m: [!!float 300e-9, !!float 300e-9]
+  # out_dx_m: [!!float 500e-9, !!float 500e-9]
+  
+  cutoff_mtf: 0.2
+
+  wavelength_set_m: [!!float 550e-9] # [!!float 400e-9, !!float 550e-9, !!float 700e-9] # 
+  initialization:
+    # type: shifted_axicon
+
+    # type: focusing_lens
+    # depth_set_m: [!!float 1e-2]
+
+    # type: multiplexed
+    # depth_set_array_m: [!!float 1e-2, !!float 1e-1, !!float 1e0, !!float 1e1]
+    # grid_size: [2, 2]
+    # # depth_set_array_m: [!!float 1e-2, !!float 3e-2, !!float 7e-2, !!float 10e-2]
+
+    type: multiplexed_cell
+    depth_set_array_m: [!!float 1e-2, !!float 1e1]
+    grid_size: [1, 2]
+    cell_size: 16
+
+  
+  ps_locs:
+    # loc0: [-400e-6,-400e-6] # no Z value because we have variable depth
+    # loc1: [-400e-6, 0.0]
+    # loc2: [-400e-6, 400e-6]
+    # loc3: [0.0,-400e-6]
+    loc4: [0.0, 0.0]
+    # loc5: [0.0, 400e-6]
+    # loc6: [400e-6,-400e-6]
+    # loc7: [400e-6, 0.0]
+    # loc8: [400e-6, 400e-6]
+
+  depth_min: !!float 1e-2
+  depth_max: !!float 1e1
+  
+  
+datasets:
+  train1:
+    type: HuggingFaceDataset
+    name: harshana95/ForegroundDataset
+    split: train
+    trust_remote_code: true
+
+    use_shuffle: false
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [foreground, mask]
+    transforms:
+      to_tensor:
+      select_channels:
+       channels: [True, True, True, False]
+      grayscale:
+      crop:
+        h: 128
+        w: 128
+      rescale:
+        factor: 8
+      poisson_noise:
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
+  
+  train2:
+    type: HuggingFaceDataset
+    name: harshana95/BackgroundDataset
+    split: train
+    trust_remote_code: true
+
+    use_shuffle: false
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [background]
+    transforms:
+      to_tensor:
+      select_channels:
+       channels: [True, True, True, False]
+      grayscale:
+      crop:
+        h: 128
+        w: 128
+      rescale:
+        factor: 8
+      poisson_noise:
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
+
+  val1:
+    type: HuggingFaceDataset
+    name: harshana95/ForegroundDataset
+    split: validation
+    trust_remote_code: true
+    
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    
+    common_transforms_keys: [foreground, mask]
+    transforms:
+      to_tensor:
+      select_channels:
+       channels: [True, True, True, False]
+      grayscale:
+      crop:
+        h: 128
+        w: 128
+      rescale:
+        factor: 8
+      poisson_noise:
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
+
+  val2:
+    type: HuggingFaceDataset
+    name: harshana95/BackgroundDataset
+    split: validation
+    trust_remote_code: true
+    
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    
+    common_transforms_keys: [background]
+    transforms:
+      to_tensor:
+      select_channels:
+       channels: [True, True, True, False]
+      grayscale:
+      crop:
+        h: 128
+        w: 128
+      rescale:
+        factor: 8
+      poisson_noise:
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
+      
+# network structures
+network:
+  type: UnetTM
+  in_channels: 1
+  out_channels: 1
+  n_features: 16
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/FinalModels/StructureDeblur/NAFNetRealMono 2025 02 07 02.21.30/
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optimize_shape_param: true  # optimize MS shape parameters?
+
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 1e-4
+    learning_rate_ms: !!float 1e-1
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 4
+
+  max_train_steps: 100000
+  validation_steps: 5000
+  checkpointing_steps: 10000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+# validation settings
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

@@ -1,0 +1,205 @@
+name: SVD
+model_type: Diffusion_model
+is_train: true
+report_to: comet_ml
+push_to_hub: true
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+revision: ~
+variant: ~
+use_ema: false
+image_resolution: [512, 512]
+tracker_project_name: SVD
+experiment_key: DiffusionDeblurSDXL
+
+datasets:
+  train1:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: train
+    num_proc: 4
+    map_batch_size: 16
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.5
+      select_channels:
+        channels: [True, True, True]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
+      apply_model:
+        keys: [lq_key]
+        keys_new: [refined]
+        model_name: Restormer_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+
+  train2:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: train
+    num_proc: 4
+    map_batch_size: 16
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.5
+      select_channels:
+       channels: [False, True, False]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
+      apply_model:
+        keys: [lq_key]
+        keys_new: [refined]
+        model_name: Restormer_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealMono 2025 03 03 12.50.50/Restormer_arch_1/
+
+  val1:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: validation
+    num_proc: 4
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+    
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.5
+      select_channels:
+       channels: [True, True, True]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
+      apply_model:
+        keys: [lq_key]
+        keys_new: [refined]
+        model_name: Restormer_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+
+  val2:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: validation
+    num_proc: 4
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+    
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.5
+      select_channels:
+       channels: [False, True, False]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
+      apply_model:
+        keys: [lq_key]
+        keys_new: [refined]
+        model_name: Restormer_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealMono 2025 03 03 12.50.50/Restormer_arch_1/
+
+# network structures
+network:
+  type: Restormer
+  inp_channels: 3
+  out_channels: 3
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 20000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+# validation settings
+val:
+  save_images: true
+  batch_size: 1
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

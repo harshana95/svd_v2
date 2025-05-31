@@ -1,0 +1,136 @@
+name: SVD
+model_type: Simple_model
+is_train: true
+report_to: comet_ml
+push_to_hub: true
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: SVD
+experiment_key: UnetRealMono
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: train
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 1
+      select_channels:
+       channels: [False, True, False]
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+
+  val:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: validation
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 1
+      select_channels:
+       channels: [False, True, False]
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+# network structures
+network:
+  type: Unet
+  in_channels: 1
+  out_channels: 1
+  attention_head_dim: 8
+  down_block_types: ["DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"]
+  up_block_types: ["AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"]
+  block_out_channels: [224, 448, 672, 896]
+
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/SVD/NAFNetSyntheticGaussian 2025 02 02 21.25.05/
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 2e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: true
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+
+# validation settings
+val:
+  save_images: true
+  patched: true
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 16
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

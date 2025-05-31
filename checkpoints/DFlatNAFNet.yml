@@ -1,0 +1,152 @@
+name: SVD
+model_type: DFlatFocus_model
+is_train: true
+report_to: comet_ml
+push_to_hub: true
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: Dflat
+experiment_key: DFlatNAFNetMono
+
+dflat:
+  wavelength_set_m: [!!float 400e-9, !!float 550e-9, !!float 700e-9]
+  initialization:
+    type: focusing_lens
+    h: 256
+    w: 256  # should match the GT image size before patching
+  model_name: Nanocylinders_TiO2_U300H600
+  out_distance_m: !!float 1e-2
+  ps_locs: 
+    loc0: [-400e-6,-400e-6,1e-2]
+    loc1: [-400e-6, 400e-6,1e-2]
+    loc2: [0.0, 0.0, 1e-2]
+    loc3: [ 400e-6, 400e-6,1e-2]
+    loc4: [ 400e-6,-400e-6,1e-2]
+
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: train
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.25
+      select_channels:
+       channels: [False, True, False]
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+
+  val:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: validation
+    
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.25
+      select_channels:
+       channels: [False, True, False]
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+# network structures
+network:
+  type: NAFNet
+  img_channel: 1
+  width: 32
+  enc_blk_nums: [1, 1, 1, 28]
+  middle_blk_num: 1
+  dec_blk_nums: [1, 1, 1, 1]
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/FinalModels/StructureDeblur/NAFNetRealMono 2025 02 07 02.21.30/
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 2e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 4
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+# validation settings
+val:
+  save_images: false
+  patched: true
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

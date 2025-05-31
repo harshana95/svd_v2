@@ -1,0 +1,31 @@
+psf_data_path: /scratch/gilbreth/wweligam/dataset/gaussian_synthetic
+save_dir: /scratch/gilbreth/wweligam/dataset/test_image_dataset
+gt_crop: ~
+cap_crop: ~
+data_percent: 100
+val_perc: 1.0
+
+dataset:
+  type: SVBDataset
+  gt_dataset_path: /scratch/gilbreth/wweligam/hybrid_Flickr2k_gt_v2/
+  gt_dataset_file_pattern: !!str \*
+  gt_key: gt
+  lq_key: blur
+
+  transforms:
+    to_tensor:
+      keys: [gt_key]
+    select_channels:
+      keys: [gt_key]
+      channels: [True, True, True, False]
+    crop:
+      keys: [gt_key]
+      h: 1024
+      w: 1024
+    sv_convolution:
+      keys: [gt_key]
+      keys_new: [lq_key]
+
+    rescale:
+      keys: [gt_key]
+      factor: 1
