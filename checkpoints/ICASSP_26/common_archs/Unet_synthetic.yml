@@ -1,5 +1,5 @@
-name: SVD
-model_type: Diffusion_model
+name: SVD_Synthetic
+model_type: Simple2Dataset_model
 is_train: true
 report_to: comet_ml
 push_to_hub: true
@@ -7,23 +7,16 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
-revision: ~
-variant: ~
-use_ema: false
-image_resolution: [512, 512]
-tracker_project_name: SVD
-experiment_key: DiffusionMetaZoomNew
-dataset_caching: false
+tracker_project_name: SVD_Synthetic
+experiment_key: UnetSyntheticDeeplens
 
 datasets:
   train1:
     type: HuggingFaceDataset
-    name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
+    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
     split: train
     num_proc: 4
     map_batch_size: 16
-    trust_remote_code: true
 
     use_shuffle: true
     num_worker_per_gpu: 4
@@ -34,16 +27,16 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
-      rescale:
-        factor: 0.5
       crop:
         h: 1024
         w: 1024
+      rescale:
+        factor: 0.5
       select_channels:
         channels: [True, True, True]
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -52,11 +45,10 @@ datasets:
 
   train2:
     type: HuggingFaceDataset
-    name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/5x/
+    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
     split: train
     num_proc: 4
     map_batch_size: 16
-    trust_remote_code: true
 
     use_shuffle: true
     num_worker_per_gpu: 4
@@ -67,17 +59,16 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
-      rescale:
-        factor: 0.5
       crop:
         h: 1024
         w: 1024
+      rescale:
+        factor: 0.5
       select_channels:
-       keys: [gt]  # blur has only 1 channel
        channels: [False, True, False]
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -86,10 +77,9 @@ datasets:
 
   val1:
     type: HuggingFaceDataset
-    name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
+    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
     split: validation
     num_proc: 4
-    trust_remote_code: true
 
     use_shuffle: false
     gt_key: gt
@@ -99,16 +89,16 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
-      rescale:
-        factor: 0.5
       crop:
         h: 1024
         w: 1024
+      rescale:
+        factor: 0.5
       select_channels:
        channels: [True, True, True]
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -117,10 +107,9 @@ datasets:
 
   val2:
     type: HuggingFaceDataset
-    name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/5x/
+    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
     split: validation
     num_proc: 4
-    trust_remote_code: true
 
     use_shuffle: false
     gt_key: gt
@@ -130,17 +119,16 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
-      rescale:
-        factor: 0.5
       crop:
         h: 1024
         w: 1024
+      rescale:
+        factor: 0.5
       select_channels:
-       keys: [gt]  # blur has only 1 channel
        channels: [False, True, False]
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
+      # identity:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -149,23 +137,28 @@ datasets:
 
 # network structures
 network:
-  type: Restormer
-  inp_channels: 3
+  type: Unet
+  in_channels: 4
   out_channels: 3
+  attention_head_dim: 8
+  down_block_types: ["DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"]
+  up_block_types: ["AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"]
+  block_out_channels: [224, 448, 672, 896]
+
 
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/SVD/DiffusionMetaZoomNew 2025 05 21 22.44.24/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ # /scratch/gilbreth/wweligam/experiments/SVD/UnetSyntheticDeeplens 2025 08 29 11.09.16/
+  resume_from_checkpoint: ~ # latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 1e-5
+    learning_rate: !!float 2e-4
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -184,29 +177,28 @@ train:
   batch_size: 1
 
   max_train_steps: 50000
-  validation_steps: 1000
-  checkpointing_steps: 20000
+  validation_steps: 250
+  checkpointing_steps: 100
   checkpoints_total_limit: 2
 
-  patched: false
+  patched: true
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
-  max_minibatch: 4
+  max_minibatch: 8
 
 # validation settings
 val:
   save_images: true
-  batch_size: 1
-
-  patched: false
+  patched: true
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
-  max_minibatch: 4
+  max_minibatch: 16
+  batch_size: 1
 
   metrics:
-    psnr:
+    psnr: # metric name, can be arbitrary
       crop: 30
     mse:
        crop: 30

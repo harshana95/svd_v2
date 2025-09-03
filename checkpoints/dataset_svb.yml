@@ -1,16 +1,15 @@
-psf_data_path: /scratch/gilbreth/wweligam/dataset/gaussian_synthetic
-save_dir: /scratch/gilbreth/wweligam/dataset/test_image_dataset
+save_dir: /depot/chan129/users/harshana/Datasets/Synthetic/
 gt_crop: ~
 cap_crop: ~
-data_percent: 100
 val_perc: 1.0
 
 dataset:
   type: SVBDataset
-  gt_dataset_path: /scratch/gilbreth/wweligam/hybrid_Flickr2k_gt_v2/
+  gt_dataset_path: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
   gt_dataset_file_pattern: !!str \*
   gt_key: gt
   lq_key: blur
+  data_percent: [0, 100]
 
   transforms:
     to_tensor:

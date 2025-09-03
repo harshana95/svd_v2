@@ -32,5 +32,8 @@ def get_dataset_util(util_name, util_opt):
     util_cls = getattr(dataset_utils, util_name, None)
     if util_cls is None:
         raise ValueError(f"{util_name} not found in dataset_utils.py")
-    util = util_cls(**util_opt)
+    if len(util_opt) == 0:
+        util = util_cls(**util_opt)
+    else:
+        util = util_cls(**util_opt.__dict__)
     return util

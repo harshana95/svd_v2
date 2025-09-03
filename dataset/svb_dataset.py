@@ -25,8 +25,11 @@ class SVBDataset(data.Dataset):
         # print(f"Number of images in {_dataset_path} = {len(dataset)} using {opt.data_percent}%")
         # dataset = dataset[:int(len(dataset) * opt.data_percent / 100)]
 
-        self.dataset = load_dataset(opt.gt_dataset_path, drop_labels=True)['train']
+        self.dataset = load_dataset(opt.gt_dataset_path, drop_labels=True, split=f'train')
         self.dataset = self.dataset.rename_column('image', self.gt_key)
+        self.selected_indices = list(range(int(len(self.dataset)*opt.data_percent[0]/100), int(len(self.dataset)*opt.data_percent[1]/100)))
+        self.dataset = self.dataset.select(self.selected_indices)
+        
         # print(self.dataset)
         # print(self.dataset.__getitem__(0))
         self.dataset = self.setup_dataset(self.dataset, opt)
@@ -50,7 +53,7 @@ class SVBDataset(data.Dataset):
             keys = transform_opt.pop('keys', None)
             keys_new = transform_opt.pop('keys_new', None)
             if keys is None:
-                keys = [gt_key, lq_key]
+                keys = opt.common_transforms_keys
             if keys_new is None:
                 keys_new = []
             keys = [key.replace("gt_key", gt_key) for key in keys]
@@ -69,6 +72,6 @@ class SVBDataset(data.Dataset):
         def apply_transforms(batch):
             return all_transforms(batch)
         
-        dataset = dataset.map(apply_transforms, num_proc=16, batched=True, batch_size=16, load_from_cache_file=False if opt.skip_cache else True, keep_in_memory=False)
+        dataset = dataset.map(apply_transforms, num_proc=opt.num_proc, batched=True, batch_size=16, load_from_cache_file=False if opt.skip_cache else True, keep_in_memory=False)
         dataset.set_format('pt')
         return dataset

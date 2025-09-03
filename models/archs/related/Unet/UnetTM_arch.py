@@ -89,7 +89,9 @@ class UnetTM_arch(PreTrainedModel):
         self.decoder = DecodeCell(config.n_features, config.out_channels)
 
 
-    def forward(self, x):
+    def forward(self, x, *args):
+        if len(args) > 0:
+            x = torch.cat([x, *args], dim=1)
         enc1, enc2, enc3, h = self.encoder(x)
         output = self.decoder(h, enc3, enc2, enc1)
         return output

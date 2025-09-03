@@ -1,0 +1,32 @@
+psf_data_path: /scratch/gilbreth/wweligam/dataset/gaussian_synthetic
+save_dir: /depot/chan129/users/harshana/Datasets/Synthetic/
+gt_crop: ~
+cap_crop: ~
+val_perc: 1.0
+
+dataset:
+  type: DeepLensDataset
+  gt_dataset_path: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+  gt_dataset_file_pattern: !!str \*
+  gt_key: gt
+  lq_key: blur
+  data_percent: [0,100]
+  num_proc: 4
+  render_method: 'psf_patch'
+  lens_path: /depot/chan129/users/harshana/svd_v2/lenses/cooke40_inferior.json
+  sensor_res: [1024, 1024]
+
+  transforms:
+    to_tensor:
+      keys: [gt_key]
+    select_channels:
+      keys: [gt_key]
+      channels: [True, True, True, False]
+    crop:
+      keys: [gt_key]
+      h: 1024
+      w: 1024
+
+    rescale:
+      keys: [gt_key]
+      factor: 1

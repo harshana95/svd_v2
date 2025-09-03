@@ -15,7 +15,7 @@ datasets:
     type: HuggingFaceDataset
     name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
     split: train
-    num_proc: 16
+    num_proc: 46
 
     use_shuffle: true
     num_worker_per_gpu: 4
@@ -46,7 +46,7 @@ datasets:
     type: HuggingFaceDataset
     name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
     split: validation
-    num_proc: 16
+    num_proc: 46
 
     use_shuffle: false
     gt_key: gt

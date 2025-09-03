@@ -140,7 +140,92 @@ def find_attr(modules, attr):
         raise ValueError(f'{attr} is not found.')
     return cls_
 
+class DictAsMember(dict):
+    def __init__(self, **entries):
+        for key, value in entries.items():
+            if isinstance(value, dict):
+                self.__dict__[key] = DictAsMember(**value)
+            elif isinstance(value, list):
+                self.__dict__[key] = [DictAsMember(**item) if isinstance(item, dict) else item for item in value]
+            else:
+                self.__dict__[key] = value
+    def __getitem__(self, key):
+        """Allows dictionary-style getting of attributes."""
+        # Use dict.get() for safe access
+        value = self.__dict__.get(key)
+        return value
+    
+    # --- Attribute-style access ---
+    def __getattr__(self, name):
+        """Allows attribute-style getting, returning None for missing attrs."""
+        # Use __getitem__ logic for safe access
+        return self.__getitem__(name)
+    
+    def get(self, key, default=None):
+        """Allows dictionary-style getting of attributes with a default value."""
+        return self.__dict__.get(key, default)
 
+    def __setitem__(self, key, value):
+        """Allows dictionary-style setting of attributes."""
+        # Convert nested dictionaries on assignment, just like in __init__
+        if isinstance(value, dict):
+            self.__dict__[key] = DictAsMember(**value)
+        elif isinstance(value, list):
+            self.__dict__[key] = [DictAsMember(**item) if isinstance(item, dict) else item for item in value]
+        else:
+            self.__dict__[key] = value
+            
+    def __delitem__(self, key):
+        """Allows dictionary-style deletion of attributes."""
+        del self.__dict__[key]
+
+    def __repr__(self):
+        """Provides a user-friendly representation of the object."""
+        return f"Struct({self.__dict__})"
+    
+    def __iter__(self):
+        return iter(self.__dict__)
+    
+    def __len__(self):
+        return len(self.__dict__)
+    
+    def pop(self, key, default=...):
+        """
+        Removes a key and returns its value, just like a dictionary's pop method.
+        An optional default can be provided to avoid a KeyError.
+        """
+        if default is ...:
+            try:
+                value = self.__dict__.pop(key)
+            except KeyError:
+                raise KeyError(f"'{key}' not found in Struct.")
+        else:
+            value = self.__dict__.pop(key, default)
+
+        return value
+    def pretty_print(self, indent=0, indent_char='  '):
+        """Prints the object as a beautiful, nested tree."""
+        def _print_nested(obj, indent, prefix=""):
+            if isinstance(obj, DictAsMember):
+                for i, (key, value) in enumerate(obj.__dict__.items()):
+                    is_last_item = (i == len(obj.__dict__) - 1)
+                    print(f"{indent_char * indent}{prefix}{'└─ ' if is_last_item else '├─ '}{key}:", end="")
+                    if isinstance(value, (DictAsMember, list)):
+                        print()
+                        _print_nested(value, indent + 1, '│  ' if not is_last_item else '   ')
+                    else:
+                        print(f" {value}")
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    is_last_item = (i == len(obj) - 1)
+                    print(f"{indent_char * indent}{prefix}{'└─ ' if is_last_item else '├─ '}-", end="")
+                    if isinstance(item, (DictAsMember, list)):
+                        print()
+                        _print_nested(item, indent + 1, '│  ' if not is_last_item else '   ')
+                    else:
+                        print(f" {item}")
+
+        _print_nested(self, indent)
 def ordered_yaml():
     """Support OrderedDict for yaml.
 

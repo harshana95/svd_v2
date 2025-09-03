@@ -140,16 +140,16 @@ class DFlatArrayDepth_model(BaseModel):
                 
         # ========================== define generator network
         network_opt = opt.network
-        network_opt['array_size'] = self.array_size
-        network_opt['downscale_factor'] = downscale_factor
-        self.net_g = define_network(network_opt)
-        self.models.append(self.net_g)
+        if network_opt is not None:
+            network_opt['array_size'] = self.array_size
+            network_opt['downscale_factor'] = downscale_factor
+            self.net_g = define_network(network_opt)
+            self.models.append(self.net_g)
 
-        if self.is_train:
-            self.init_training_settings()
+            if self.is_train:
+                self.net_g.train()
 
-    def init_training_settings(self):
-        self.net_g.train()
+        # setup loss function
         train_opt = self.opt['train']
         self.criterion = Loss(train_opt.loss).to(self.accelerator.device)
     

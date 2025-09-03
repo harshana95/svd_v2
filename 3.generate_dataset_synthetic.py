@@ -2,8 +2,8 @@ import matplotlib
 import yaml
 
 from dataset import create_dataset
-from utils.misc import get_basename, ordered_yaml
-matplotlib.use("TkAgg")
+from utils.misc import DictAsMember, get_basename
+matplotlib.use("Agg")
 
 import argparse
 import glob
@@ -26,14 +26,20 @@ from tqdm import tqdm
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-opt', type=str, help='Path to option YAML file.')
-    parser.add_argument('-test', action='store_true', help='Save in test.')
+    parser.add_argument('--opt', type=str, help='Path to option YAML file.')
+    parser.add_argument('--comment', type=str, help='')
+    parser.add_argument('--psf_data_path', type=str, help='')
     args = parser.parse_args()
     with open(args.opt, mode='r') as f:
-        Loader, _ = ordered_yaml()
-        opt = yaml.load(f, Loader=Loader)
+        data = yaml.safe_load(f)
+        if isinstance(data, dict):
+            opt = DictAsMember(**data)
+        else:
+            opt = data
+        # Loader, _ = ordered_yaml()
+        # opt = yaml.load(f, Loader=Loader)
         
-    dataset_name = f"synthetic_{get_basename(opt.dataset.gt_dataset_path)}_{get_basename(opt.psf_data_path)}"
+    dataset_name = f"synthetic_{get_basename(opt.dataset.gt_dataset_path)}_{get_basename(args.psf_data_path)}_{args.comment}"
 
     # initialize save locations
     print(f"Saving to {join(opt.save_dir, dataset_name)}", "Dataset name", dataset_name)
@@ -58,7 +64,7 @@ if __name__ == "__main__":
         f.flush()
 
     # load PSFs and simulator
-    psf_ds, metadata = PSFSimulator.load_psfs(opt.psf_data_path, "PSFs_with_basis.h5")
+    psf_ds, metadata = PSFSimulator.load_psfs(args.psf_data_path, "PSFs_with_basis.h5")
     image_shape = psf_ds['H_img'].shape[:2]
     psf_size = psf_ds['psfs'].shape[-1]
 

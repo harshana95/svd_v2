@@ -1,6 +1,6 @@
 import matplotlib
 from tqdm import tqdm
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 
 import argparse
 import os
@@ -17,7 +17,7 @@ from utils.pca_utils import get_pca_components
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--psf_data_path', default="/scratch/gilbreth/wweligam/dataset/gaussian_synthetic")
+    parser.add_argument('--psf_data_path', default="/scratch/gilbreth/wweligam/dataset/deeplens_synthetic")
 
     parser.add_argument('--psf_decomp', type=str, default='PCA', choices=["PCA", "sections", "Zernike", "Uniform"])
     parser.add_argument('--interpolation_samples', type=int, default=128)

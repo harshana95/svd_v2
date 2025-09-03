@@ -13,13 +13,12 @@ from tqdm import tqdm
 
 from models.archs import define_network
 from models.base_model import BaseModel
-from tmp.edof import fig_to_array
 from utils.image_utils import display_images
 from utils.zernike import phase2psf, zernike_poly
 from utils.loss import Loss
 
 from utils.dataset_utils import merge_patches
-from utils.misc import log_image, log_metrics
+from utils.misc import fig_to_array, log_image, log_metrics
 
 class MetaDepthPhase1_model(BaseModel):
     def __init__(self, opt, logger):

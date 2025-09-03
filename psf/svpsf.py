@@ -10,10 +10,23 @@ import scipy
 from huggingface_hub import hf_hub_download
 from tqdm import tqdm
 from zernike import RZern
+from deeplens import GeoLens
 
-from psf.motionblur.kernels import KernelDataset
-from utils import generate_folder
+try:
+    from utils import get_dataset_util
+    from utils.dataset_utils import DictWrapper, crop_arr
+    from psf.motionblur.kernels import KernelDataset
+    from utils import generate_folder
+except:
+    import sys
+    from pathlib import Path
+    current_file_path = Path(__file__).resolve()
+    sys.path.append(str(current_file_path.parent.parent))
 
+    from utils import get_dataset_util
+    from utils.dataset_utils import DictWrapper, crop_arr
+    from psf.motionblur.kernels import KernelDataset
+    from utils import generate_folder
 
 def normal_index_func(_i, _s):
     return _i - (_s - 1) / 2
@@ -43,7 +56,7 @@ def apply_Homography(x, y, H):
 
 
 class PSFSimulator:
-    def __init__(self, image_shape, psf_size=11, normalize=True):
+    def __init__(self, image_shape, psf_size=11, normalize=True, wavelengths=[472.5, 532.8, 685]):
         """
         @param image_shape: image shape should be the corresponding shape of the image on sensor
         @param psf_size:
@@ -52,6 +65,8 @@ class PSFSimulator:
         self.image_shape = np.array(image_shape)
         self.psf_size = psf_size
         self.normalize = normalize
+        self.wavelengths = wavelengths
+
         self.cart = None
         self.L = None
 
@@ -60,6 +75,10 @@ class PSFSimulator:
 
         # motion kernel used for generating motion blur
         self.motion = KernelDataset(psf_size, psf_size // 2)
+
+        # lens model for deeplens
+        self.lens = None
+        self.lens_path = None
         
         h, w = self.image_shape
         self.R = 0.5 * ((h * h + w * w) ** 0.5)
@@ -128,6 +147,10 @@ class PSFSimulator:
         xx_offset, yy_offset = 0, 0
         chromatic = kwargs.get('chromatic', [0,0,0])[ch]
         chromatic_trans = kwargs.get('chromatic_trans', [1, 1, 1])[ch]
+        if psf_type == 'random':
+            psf_type = random.choice(['gaussian', 'motion'])
+
+        # setup constants
         if psf_type == "gaussian" or psf_type == "disk": # xx, yy used for psf_type == 'gaussian' or psf_type == 'disk'
             if chromatic != 0:
                 xx_offset = (x/self.R)*(self.psf_size/2)*chromatic
@@ -140,8 +163,15 @@ class PSFSimulator:
             self.yy = self.yy - (self.psf_size / 2) + yy_offset
             self.xx /= self.psf_size/2
             self.yy /= self.psf_size/2
-        if psf_type == 'random':
-            psf_type = random.choice(['gaussian', 'motion'])
+        elif psf_type == 'deeplens':
+            # setup simulator
+            if self.lens is None or self.lens_path != kwargs['lens_path']:
+                self.lens_path = kwargs['lens_path']
+                self.lens = GeoLens(filename=kwargs["lens_path"])
+                self.lens.double()
+                self.lens.set_sensor(sensor_res=kwargs["sensor_res"], sensor_size=self.lens.sensor_size)
+            
+        # generate the PSF
         if psf_type == 'gaussian':
             if kwargs['gaussian_type'] == 'elliptical':
                 s1_scale, s2_scale = sigma_scales_elliptical(x, y, self.R)
@@ -202,6 +232,12 @@ class PSFSimulator:
             psf = np.fft.fftshift(np.abs(np.fft.fft2(np.fft.ifftshift(self.mask * np.exp(-1j * phase)))) ** 2)
             psf = np.nan_to_num(psf)
             metadata = zvecs[0]
+        elif psf_type == 'deeplens':
+            x_norm, y_norm = x/(self.image_shape[1]//2), y/(self.image_shape[0]//2)  # Shape of [N, 3], x, y in range [-1, 1], z in range [-Inf, 0].
+            y_norm = -y_norm  # flip y axis
+            psf = self.lens.psf([x_norm, y_norm, -10000.0], ks=self.psf_size, recenter=True, wvln=self.wavelengths[ch]/1000) # wvln in um
+            psf = psf.cpu().numpy()
+            metadata = [x, y, x_norm, y_norm]
         else:
             raise ValueError("Invalid PSF type.")
             
@@ -270,7 +306,7 @@ class PSFSimulator:
                     psf_sum = 1
                 psfs[:,:, y, x] /= psf_sum/inc
             pbar.update()
-            pbar.set_postfix_str(f"x={x:04d} y={y:04d}  meta={' '.join([f'{int(abs(m)):02d}' for m in metadata_arr[:,:,y,x, -2:].flatten()])}")
+            pbar.set_postfix_str(f"x={x:04d} y={y:04d}  meta={' '.join([f'{m:4.2f}' for m in metadata_arr[0,0,y,x, :].flatten()])}")
         print(f"Max psf size: {max_psf_size}")
         pbar.close()
         metadata_arr = np.array(metadata_arr).transpose([0, 1, 4, 2, 3])  # inc outc d h w

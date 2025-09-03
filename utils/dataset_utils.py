@@ -1,9 +1,7 @@
 import PIL
-import cv2
 import einops
 import numpy as np
 import torch
-import torchvision
 from matplotlib import pyplot as plt
 from pynoise.noisemodule import Perlin
 from pynoise.noiseutil import grayscale_gradient, RenderImage, noise_map_plane, noise_map_plane_gpu
@@ -94,6 +92,8 @@ class to_tensor:
     
 class grayscale:
     def __call__(self, x):
+        if x.shape[-3] == 1:
+            return x
         R = x[..., 0:1, :, :]
         G = x[..., 1:2, :, :]
         B = x[..., 2:3, :, :]

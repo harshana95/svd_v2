@@ -22,7 +22,6 @@ from utils.PSFfromWavefront import PointSpreadFunctionNew
 
 from models.archs import define_network
 from models.base_model import BaseModel
-from tmp.edof import fig_to_array
 from utils.dflat_utils import reverse_lookup_search_Nanocylinders_TiO2_U300nm_H600nm
 from utils.image_utils import display_images
 from utils.mtf import get_mtf
@@ -30,7 +29,7 @@ from utils.zernike import phase2psf, zernike_poly
 from utils.loss import Loss
 
 from utils.dataset_utils import crop_arr, merge_patches
-from utils.misc import log_image, log_metrics
+from utils.misc import fig_to_array, log_image, log_metrics
 
 class MetaDepthPhase2_model(BaseModel):
     def __init__(self, opt, logger):
@@ -132,6 +131,7 @@ class MetaDepthPhase2_model(BaseModel):
         self.models.append(self.net)
         self.criterion = Loss(opt['train'].loss).to(self.accelerator.device)   
 
+
     def plot_psfs(self):
         fig, axes = plt.subplots(1, 2, figsize=(10,5))
         iw = self.incident_wavefront.cpu().numpy()[0,0]
@@ -231,13 +231,15 @@ class MetaDepthPhase2_model(BaseModel):
                 incident_wavefront=self.incident_wavefront,
                 aperture=self.A[None,None],
                 normalize_to_aperture=True)
+            psfs.append(intensity[:, 0, 0, :, :, :])
             # print(y0,x0, y0_px, x0_px, i, j)
             meas[..., y0_px-px1:y0_px+px2, x0_px-px1:x0_px+px2] += intensity[:, 0,0,:, :, :] * image[:,:,i:i+1, j:j+1]
-            psfs.append(intensity[:, 0, 0, :, :, :])
+            
         data['psfs'] = torch.cat(psfs, dim=0)
         data['meas'] = self.resize(meas)
         # data['meas'] /= data['meas'].max()
         self.sample = data
+
 
     def optimize_parameters(self):
         for optimizer in self.optimizers:

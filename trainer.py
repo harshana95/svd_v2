@@ -1,17 +1,16 @@
 import comet_ml
 import argparse
 import yaml
-
+import torch.multiprocessing as mp
 from accelerate.logging import get_logger
-from dataset import create_dataset
 from models import create_model
-from psf.svpsf import PSFSimulator
-from utils import ordered_yaml
-from torch.utils.data import DataLoader
 
+from utils.misc import DictAsMember
+# export QT_QPA_PLATFORM=offscreen
 logger = get_logger(__name__)
 
 def main(opt):
+    # mp.set_start_method('spawn')
     # ============================================ 1. Initialize
     model = create_model(opt, logger)
 
@@ -36,8 +35,12 @@ if __name__ == '__main__':
     parser.add_argument('-test', action='store_true', help='Save in test.')
     args = parser.parse_args()
     with open(args.opt, mode='r') as f:
-        Loader, _ = ordered_yaml()
-        opt = yaml.load(f, Loader=Loader)
+        data = yaml.safe_load(f)
+        if isinstance(data, dict):
+            opt = DictAsMember(**data)
+        else:
+            opt = data
+        opt.pretty_print()
         if args.test:
             opt['name'] = 'test'
             opt['tracker_project_name'] = 'test'

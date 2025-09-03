@@ -15,9 +15,10 @@ from torchvision.transforms import transforms
 
 from dataset import create_dataset
 from dataset.ZipDatasetWrapper import ZipDatasetWrapper
-from models.DiffusionPipeline import DiffusionTwoImagePipeline
-from models.Simple_model import Simple_model
-from models.base_model import BaseModel
+from models.archs import define_network
+from models.archs.LKPN_arch import EfficientAffineConvolution
+from models.two_dataset_model import TwoDatasetBasemodel
+from pipelines.DiffusionWithLKPNPipeline import DiffusionTwoImageLKPNPipeline
 from utils.dataset_utils import merge_patches
 from utils.loss import Loss
 from utils import log_image, log_metrics
@@ -106,10 +107,10 @@ def compute_embeddings(prompt_batch, accelerator, res, proportion_empty_prompts,
 
     return {"prompt_embeds": prompt_embeds, **unet_added_cond_kwargs}
 
-class Diffusion_model(BaseModel):
+class Diffusion_MultiInput_model(TwoDatasetBasemodel):
 
     def __init__(self, opt, logger):
-        super(Diffusion_model, self).__init__(opt, logger)
+        super(Diffusion_MultiInput_model, self).__init__(opt, logger)
         # For mixed precision training we cast the text_encoder and vae weights to half-precision
         # as these models are only used for inference, keeping weights in full precision is not required.
         weight_dtype = torch.float32
@@ -162,25 +163,43 @@ class Diffusion_model(BaseModel):
         unet = UNet2DConditionModel.from_pretrained(
             pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant
         )
+
         # Create EMA for the unet.
         if opt.use_ema:
             self.ema_unet = EMAModel(unet.parameters(), model_cls=UNet2DConditionModel, model_config=unet.config)
 
         t2iadapter_1 = T2IAdapter(
-            in_channels=3 * 2,
+            in_channels=4 * 2,
             channels=(320, 640, 1280, 1280),
             num_res_blocks=2,
-            downscale_factor=16,
+            downscale_factor=2,
             adapter_type="full_adapter_xl",
         )
         t2iadapter_2 = T2IAdapter(
-            in_channels=1 * 2,
+            in_channels=4 * 2,
             channels=(320, 640, 1280, 1280),
             num_res_blocks=2,
-            downscale_factor=16,
+            downscale_factor=2,
             adapter_type="full_adapter_xl",
         )
+        # t2iadapter_1 = T2IAdapter(
+        #     in_channels=3 * 2,
+        #     channels=(320, 640, 1280, 1280),
+        #     num_res_blocks=2,
+        #     downscale_factor=16,
+        #     adapter_type="full_adapter_xl",
+        # )
+        # t2iadapter_2 = T2IAdapter(
+        #     in_channels=3 * 2,
+        #     channels=(320, 640, 1280, 1280),
+        #     num_res_blocks=2,
+        #     downscale_factor=16,
+        #     adapter_type="full_adapter_xl",
+        # )
 
+        lkpn = define_network(opt.LKPN_network)
+        self.eac = EfficientAffineConvolution(k=opt.LKPN_network.k)
+        
         text_encoder_one.requires_grad_(False)
         text_encoder_two.requires_grad_(False)
         vae.requires_grad_(False)
@@ -208,15 +227,16 @@ class Diffusion_model(BaseModel):
         del text_encoder_two
 
         vae.to(self.accelerator.device)
-
+        
         self.unet = unet
         self.vae = vae
+        self.lkpn = lkpn
         self.noise_scheduler = noise_scheduler
         self.t2iadapter_1 = t2iadapter_1
         self.t2iadapter_2 = t2iadapter_2
         self.tokenizer_one = tokenizer_one
         self.tokenizer_two = tokenizer_two
-        self.models = [unet, t2iadapter_1, t2iadapter_2]
+        self.models = [unet, t2iadapter_1, t2iadapter_2, lkpn]
         if opt.use_ema:
             self.ema_unet.to(self.accelerator.device)
 
@@ -225,7 +245,8 @@ class Diffusion_model(BaseModel):
 
         # Optimizer creation
         optimizer_class = torch.optim.AdamW
-        params_to_optimize = list(self.t2iadapter_1.parameters()) + list(self.t2iadapter_2.parameters()) + list(self.unet.parameters())
+        params_to_optimize = list(self.t2iadapter_1.parameters()) + list(self.t2iadapter_2.parameters()) + list(self.unet.parameters()) 
+        lkpn_params_to_optimize = list(self.lkpn.parameters())
         
         optimizer = optimizer_class(
             params_to_optimize,
@@ -234,43 +255,23 @@ class Diffusion_model(BaseModel):
             weight_decay=opt.adam_weight_decay,
             eps=opt.adam_epsilon,
             )
+        lkpn_optimizer = optimizer_class(
+            lkpn_params_to_optimize,
+            lr=opt.learning_rate,
+            betas=(opt.adam_beta1, opt.adam_beta2),
+            weight_decay=opt.adam_weight_decay,
+            eps=opt.adam_epsilon,
+            )
         self.optimizers.append(optimizer)
-
-    def setup_dataloaders(self):
-        # create train and validation dataloaders
-        
-        train_set1 = create_dataset(self.opt.datasets.train1)
-        train_set2 = create_dataset(self.opt.datasets.train2)
-        self.dataloader = DataLoader(
-            ZipDatasetWrapper({'1': train_set1, '2': train_set2}, transforms=transforms.Compose([]), random=False),
-            shuffle=self.opt.datasets.train1.use_shuffle,
-            batch_size=self.opt.train.batch_size,
-            num_workers=self.opt.datasets.train1.get('num_worker_per_gpu', 1),
-        )
-        self.dataloader.dataset.gt_key = train_set1.gt_key
-        self.dataloader.dataset.lq_key = train_set1.lq_key
-        self.dataloader.dataset.rf_key = train_set1.opt.rf_key
-                
-        val_set1 = create_dataset(self.opt.datasets.val1)
-        val_set2 = create_dataset(self.opt.datasets.val2)
-        self.test_dataloader = DataLoader(
-            ZipDatasetWrapper({'1': val_set1, '2': val_set2}, transforms=transforms.Compose([]), random=False),
-            shuffle=self.opt.datasets.val1.use_shuffle,
-            batch_size=self.opt.val.batch_size,
-            num_workers=self.opt.datasets.val1.get('num_worker_per_gpu', 1),
-        )
-        self.test_dataloader.dataset.gt_key = val_set1.gt_key
-        self.test_dataloader.dataset.lq_key = val_set1.lq_key
-        self.test_dataloader.dataset.rf_key = val_set1.opt.rf_key
+        self.optimizers.append(lkpn_optimizer)
 
 
     def feed_data(self, data, is_train=True):
         self.sample = data
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
-        rf_key = self.dataloader.dataset.rf_key if is_train else self.test_dataloader.dataset.rf_key
         if self.opt.train.patched:
-            self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2", rf_key+"_1", rf_key+"_2"], 
+            self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2",], 
                        opt=self.opt.train if is_train else self.opt.val)
     
     def get_sigmas(self, timesteps, n_dim=4, dtype=torch.float32):
@@ -288,24 +289,14 @@ class Diffusion_model(BaseModel):
     def optimize_parameters(self):
         gt_key = self.dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key
-        rf_key = self.dataloader.dataset.rf_key
 
         image_1 = self.sample[lq_key+"_1"]
         image_2 = self.sample[lq_key+"_2"]
-        refined_1 = self.sample[rf_key+"_1"]
-        refined_2 = self.sample[rf_key+"_2"]
+        image_2 = einops.repeat(image_2, 'b 1 h w -> b c h w', c=3)
+        
         gt_1 = self.sample[gt_key+"_1"]
         gt_2 = self.sample[gt_key+"_2"]
-        down_block_additional_residuals_1x = self.t2iadapter_1(torch.cat([refined_1, image_1], dim=-3))
-        down_block_additional_residuals_nx = self.t2iadapter_2(torch.cat([refined_2, image_2], dim=-3))
 
-        down_block_additional_residuals = []
-        for i in range(len(down_block_additional_residuals_1x)):
-            down_block_additional_residuals.append(
-                down_block_additional_residuals_1x[i].to(dtype=self.weight_dtype) * \
-                down_block_additional_residuals_nx[i].to(dtype=self.weight_dtype)
-            )
-        
         # encode pixel values with batch size of at most 8 to avoid OOM
         gt_latents = []
         for i in range(0, gt_1.shape[0], 8):
@@ -314,15 +305,14 @@ class Diffusion_model(BaseModel):
         gt_latents = gt_latents * self.vae.config.scaling_factor
         gt_latents = gt_latents.to(self.weight_dtype)
 
-        # Sample noise that we'll add to the latents
+         # Sample noise that we'll add to the latents
         noise = torch.randn_like(gt_latents)
         bsz = gt_latents.shape[0]
 
-        noise_level = 1
         # Cubic sampling to sample a random timestep for each image.
         # For more details about why cubic sampling is used, refer to section 3.4 of https://arxiv.org/abs/2302.08453
         timesteps = torch.rand((bsz,), device=gt_latents.device)
-        timesteps = noise_level * (1 - timesteps ** 3) * self.noise_scheduler.config.num_train_timesteps
+        timesteps = (1 - timesteps ** 3) * self.noise_scheduler.config.num_train_timesteps
         timesteps = timesteps.long().to(self.noise_scheduler.timesteps.dtype)
         timesteps = timesteps.clamp(0, self.noise_scheduler.config.num_train_timesteps - 1)
 
@@ -334,6 +324,52 @@ class Diffusion_model(BaseModel):
         sigmas = self.get_sigmas(timesteps, len(noisy_latents.shape), noisy_latents.dtype)
         inp_noisy_latents = noisy_latents / ((sigmas ** 2 + 1) ** 0.5)  # these are around -4 to +4
 
+        
+        # get latents for img1 and img2
+        z_1 = self.vae.encode(image_1).latent_dist.sample() * self.vae.config.scaling_factor
+        z_2 = self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
+        
+        # calculate latent kernels
+        k_1 = self.lkpn(inp_noisy_latents, z_1, timesteps)
+        k_2 = self.lkpn(inp_noisy_latents, z_2, timesteps)
+
+        # convolve latents with estimated kernels
+        batch_size, channels, height, width = inp_noisy_latents.shape
+        k_1 = k_1.view(batch_size, channels, self.lkpn.k, self.lkpn.k, height, width)
+        k_2 = k_2.view(batch_size, channels, self.lkpn.k, self.lkpn.k, height, width)
+        k_1 = k_1.permute(0, 1, 4, 5, 2, 3)
+        k_2 = k_2.permute(0, 1, 4, 5, 2, 3)
+        z_1_ref = self.eac(k_1, z_1)
+        z_2_ref = self.eac(k_2, z_2)
+
+        # LKPN loss
+        loss_lkpn = torch.mean(torch.nn.functional.mse_loss(z_1_ref, gt_latents))  # latent space loss 
+        loss_lkpn += torch.mean(torch.nn.functional.mse_loss(z_2_ref, gt_latents))  # latent space loss
+        # loss_lkpn += torch.mean(torch.nn.functional.mse_loss(self.vae.decode(z_1_ref / self.vae.config.scaling_factor).sample, gt_1))  # pixel space loss
+        # loss_lkpn += torch.mean(torch.nn.functional.mse_loss(self.vae.decode(z_2_ref / self.vae.config.scaling_factor).sample, gt_1))  # pixel space loss
+        loss_lkpn *= 1
+        self.accelerator.backward(loss_lkpn)
+        if self.accelerator.sync_gradients:
+            params_to_clip = list(self.lkpn.parameters())
+            self.accelerator.clip_grad_norm_(params_to_clip, 1.0)
+        self.optimizers[1].step()
+        self.optimizers[1].zero_grad()
+        z_1_ref = z_1_ref.detach()
+        z_2_ref = z_2_ref.detach()
+
+        
+        # concatenate latents and convolved latents and pass them throught T2I adapters
+        down_block_additional_residuals_1x = self.t2iadapter_1(torch.cat([z_1, z_1_ref], dim=-3))
+        down_block_additional_residuals_nx = self.t2iadapter_2(torch.cat([z_2, z_2_ref], dim=-3))
+
+        # generate down block additional residuals by multiplying the outputs of two adapters
+        down_block_additional_residuals = []
+        for i in range(len(down_block_additional_residuals_1x)):
+            down_block_additional_residuals.append(
+                down_block_additional_residuals_1x[i].to(dtype=self.weight_dtype) * \
+                down_block_additional_residuals_nx[i].to(dtype=self.weight_dtype)
+            )
+        
         # Predict the noise residual
         model_pred = self.unet(
             inp_noisy_latents,
@@ -358,25 +394,27 @@ class Diffusion_model(BaseModel):
         else:
             raise ValueError(f"Unknown prediction type {self.noise_scheduler.config.prediction_type}")
 
-        # MSE loss
-        loss = torch.mean(
+        # diffusion MSE loss
+        loss_diff = torch.mean(
             (weighing.float() * (denoised_latents.float() - target.float()) ** 2).reshape(target.shape[0], -1),
             dim=1,
         )
-        loss = loss.mean()
+        loss_diff = loss_diff.mean()
+        
+        # total loss
+        loss_all = loss_diff + loss_lkpn
 
-        self.accelerator.backward(loss)
+        self.accelerator.backward(loss_diff)
         if self.accelerator.sync_gradients:
             params_to_clip = list(self.t2iadapter_1.parameters()) + list(self.t2iadapter_2.parameters()) + list(self.unet.parameters())
             self.accelerator.clip_grad_norm_(params_to_clip, 0.01)
-        for i in range(len(self.optimizers)):
-            self.optimizers[i].step()
-            self.optimizers[i].zero_grad()
+        self.optimizers[0].step()
+        self.optimizers[0].zero_grad()
         if self.accelerator.sync_gradients:
             if self.opt.use_ema:
                 self.ema_unet.step(self.unet.parameters())
 
-        return {'all': loss}
+        return {'all': loss_all, 'diff': loss_diff, 'lkpn': loss_lkpn}
     
     @torch.no_grad()
     def validation(self):
@@ -386,12 +424,16 @@ class Diffusion_model(BaseModel):
         for model in self.models:
             model.eval()
         noise_scheduler_tmp = EulerDiscreteScheduler.from_pretrained(self.opt.pretrained_model_name_or_path, subfolder="scheduler")
-        self.pipeline = DiffusionTwoImagePipeline(
+        self.pipeline = DiffusionTwoImageLKPNPipeline(
             self.vae,
             self.unet,
+            self.lkpn,
+            self.eac,
             self.t2iadapter_1,
             self.t2iadapter_2,
             noise_scheduler_tmp,
+            use_1_as_start=self.opt.val.use_1_as_start,
+            use_2_as_start=self.opt.val.use_2_as_start,
         )
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 
@@ -399,39 +441,35 @@ class Diffusion_model(BaseModel):
         print(f"Tesing using {len(dataloader)} training data...")
         dataloader = self.accelerator.prepare(dataloader)
         for batch in dataloader:
-            idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key,self.dataloader.dataset.rf_key)
+            idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
         self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
-            idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key,self.test_dataloader.dataset.rf_key)
+            idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
             
 
         for model in self.models:
             model.train()
             
-    def validate_step(self, batch, idx,lq_key,gt_key, rf_key):
+    def validate_step(self, batch, idx,lq_key,gt_key):
         self.feed_data(batch, is_train=False)
         
-        
-
         if self.opt.val.patched:
             b,c,h,w = self.original_size[lq_key]
             pred = []
             for _ in self.setup_patches():    
                 image_1 = self.sample[lq_key+"_1"]
                 image_2 = self.sample[lq_key+"_2"]
-                refined_1 = self.sample[rf_key+"_1"]
-                refined_2 = self.sample[rf_key+"_2"]
                 bsz = image_1.shape[0]  
                 out = self.pipeline(
                     image_1,
                     image_2,
-                    refined_1,
-                    refined_2,
                     prompt_embeds=self.prompt_ids[:bsz],
                     added_cond_kwargs={k: v[:bsz] for k, v in self.unet_added_conditions.items()},
                     rescale_image_a=1, 
                     rescale_image_b=1,
                     num_inference_steps=50,
+                    output_intermediate_steps=True,
+                    n_output_intermediate_steps=10,
                 )
                 pred.append(out.images)
             pred = torch.cat(pred, dim=0)
@@ -440,40 +478,36 @@ class Diffusion_model(BaseModel):
             for i in range(len(pred)):
                 merged = merge_patches(pred[i], self.sample[lq_key+'_patched_pos'])
                 out.append(merged[..., :h, :w])
-            refined_1 = self.sample[rf_key+"_1_original"]
-            refined_2 = self.sample[rf_key+"_2_original"]
             lq1 = self.sample[lq_key+'_1_original']
             lq2 = self.sample[lq_key+'_2_original']
             gt = self.sample[gt_key+'_1_original']
             out = torch.stack(out)
         else: 
-            refined_1 = self.sample[rf_key+"_1"]
-            refined_2 = self.sample[rf_key+"_2"]
             lq1 = self.sample[lq_key+"_1"]
             lq2 = self.sample[lq_key+"_2"]
             gt = self.sample[gt_key+"_1"]
             bsz = lq1.shape[0]  
-            out = self.pipeline(
+            output = self.pipeline(
                 lq1,
                 lq2,
-                refined_1,
-                refined_2,
                 prompt_embeds=self.prompt_ids[:bsz],
                 added_cond_kwargs={k: v[:bsz] for k, v in self.unet_added_conditions.items()},
                 rescale_image_a=1, 
                 rescale_image_b=1,
                 num_inference_steps=50,
-            ).images            
+                output_intermediate_steps=True,
+                n_output_intermediate_steps=10,
+            )
+            out = output.images
+            steps = output.step_outputs
 
         lq1 = lq1.cpu().numpy()
         lq2 = lq2.cpu().numpy()
-        refined_1 = refined_1.cpu().numpy()
-        refined_2 = refined_2.cpu().numpy()
         gt = gt.cpu().numpy()
         out = out.cpu().numpy()
         for i in range(len(gt)):
             idx += 1
-            image1 = [lq1[i], refined_1[i], lq2[i], refined_2[i], gt[i], out[i]]
+            image1 = [lq1[i], lq2[i], gt[i], out[i]]
             for j in range(len(image1)):
                 if image1[j].shape[0] == 1:
                     image1[j] = einops.repeat(image1[j], '1 h w -> 3 h w')
@@ -482,5 +516,13 @@ class Diffusion_model(BaseModel):
             log_image(self.opt, self.accelerator, image1, f'{idx}', self.global_step)  # image format (N,C,H,W)
             log_image(self.opt, self.accelerator, np.clip(np.stack([out[i]]), 0,1), f'out_{idx}', self.global_step)
             log_metrics(gt[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
+
+            # log intermediate steps
+            image2 = []
+            for step in steps:
+                image2.append(step[i].cpu().numpy())
+            image2 = np.stack(image2).clip(0, 1)
+            log_image(self.opt, self.accelerator, image2, f'steps_{idx}', self.global_step)  # image format (N,C,H,W)
+            
         return idx
     

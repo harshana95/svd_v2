@@ -6,6 +6,9 @@ import math
 import os
 from pathlib import Path
 import sys
+import timeit
+import einops
+from matplotlib import pyplot as plt
 import numpy as np
 import torch
 from collections import OrderedDict
@@ -44,10 +47,12 @@ def load_model_hook(models, input_dir):
         model = models.pop()
         class_name = model._get_name()
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
-        
+        print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
         try:
             c = find_attr(_arch_modules, class_name)
+            assert c is not None
         except ValueError as e:  # class is not written by us. Try to load from diffusers
+            print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
             m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
             c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
         
@@ -177,7 +182,7 @@ class BaseModel():
                     break
                 plt.subplot(121), plt.imshow(sample[self.gt_key][_i].cpu().numpy().transpose([1, 2, 0]))
                 plt.subplot(122), plt.imshow(sample[self.blur_key][_i].cpu().numpy().transpose([1, 2, 0]))
-                plt.savefig(join(self.logger.save_dir, f'{name}_input_sample_{_i}.png'))
+                plt.savefig(os.path.join(self.logger.save_dir, f'{name}_input_sample_{_i}.png'))
 
         # check for image and kernel shape
         i = 0
@@ -294,9 +299,6 @@ class BaseModel():
 
     def optimize_parameters(self):
         pass
-    
-    def validation(self):
-        pass
 
 
     def grids(self, keys, opt):
@@ -310,9 +312,12 @@ class BaseModel():
         self.minibatch_size = opt.max_minibatch
         for key in keys:
             self.original_size[key] = self.sample[key].size()
-
-            crop_size_h = opt['patch_size_h'] if 'patch_size_h' in opt else int(opt['patch_size_h_ratio'] * self.original_size[key][-2])
-            crop_size_w = opt['patch_size_w'] if 'patch_size_w' in opt else int(opt['patch_size_w_ratio'] * self.original_size[key][-1])
+            crop_size_h = opt.get('patch_size_h', None)
+            crop_size_w = opt.get('patch_size_w', None)
+            if crop_size_h is None:
+                crop_size_h = int(opt['patch_size_h_ratio'] * self.original_size[key][-2])
+            if crop_size_w is None:
+                crop_size_w = int(opt['patch_size_w_ratio'] * self.original_size[key][-1])
             overlap = opt['patch_overlap']
             stride_h, stride_w = int(crop_size_h * (1 - overlap)), int(crop_size_w * (1 - overlap))
             patched, patched_pos = patchify(self.sample[key], crop_size_h, crop_size_w, stride_h, stride_w)
@@ -483,14 +488,14 @@ class BaseModel():
         for model in self.models:
             model.eval()
         
-        dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
-                                shuffle=False, 
-                                batch_size=1)
-        print(f"Tesing using {len(dataloader)} training data...")
-        dataloader = self.accelerator.prepare(dataloader)
-        for batch in dataloader:
-            idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
-        self.accelerator._dataloaders.remove(dataloader)
+        # dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
+        #                         shuffle=False, 
+        #                         batch_size=1)
+        # print(f"Tesing using {len(dataloader)} training data...")
+        # dataloader = self.accelerator.prepare(dataloader)
+        # for batch in dataloader:
+        #     idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
+        # self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
             idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
             

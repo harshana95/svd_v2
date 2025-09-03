@@ -31,6 +31,7 @@ class WienerDeconvolution_arch(PreTrainedModel):
     initial_K has shape (1, 1, n_psfs) for each psf.
 
     """
+    config_class = WienerDeconvolution_config
     def __init__(self, config):
         super().__init__(config)
         

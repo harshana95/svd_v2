@@ -31,5 +31,7 @@ class Unet_arch(PreTrainedModel):
         )
         self.init_weights()
 
-    def forward(self, x):
+    def forward(self, x, *args):
+        if len(args) > 0:
+            x = torch.cat([x, *args], dim=1)
         return self.model(x, timestep=1).sample

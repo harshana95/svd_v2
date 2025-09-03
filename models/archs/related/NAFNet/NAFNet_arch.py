@@ -84,13 +84,19 @@ class NAFBlock(nn.Module):
 
 class NAFNet(nn.Module):
 
-    def __init__(self, img_channel=3, width=16, middle_blk_num=1, enc_blk_nums=[], dec_blk_nums=[], **kwargs):
+    def __init__(self, in_channels=3, out_channels=3, img_channel=-1, width=16, middle_blk_num=1, enc_blk_nums=[], dec_blk_nums=[], **kwargs):
         super().__init__()
-
-        self.intro = nn.Conv2d(in_channels=img_channel, out_channels=width, kernel_size=3, padding=1, stride=1, groups=1,
+        if img_channel != -1:
+            raise Exception("img_channel is deprecated, please use in_channels and out_channels instead")
+        
+        self.intro = nn.Conv2d(in_channels=in_channels, out_channels=width, kernel_size=3, padding=1, stride=1, groups=1,
                               bias=True)
-        self.ending = nn.Conv2d(in_channels=width, out_channels=img_channel, kernel_size=3, padding=1, stride=1, groups=1,
+        self.ending = nn.Conv2d(in_channels=width, out_channels=out_channels, kernel_size=3, padding=1, stride=1, groups=1,
                               bias=True)
+        if in_channels != out_channels:
+            self.skip = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1, stride=1, groups=1,)
+        else:
+            self.skip = nn.Identity()
 
         self.encoders = nn.ModuleList()
         self.decoders = nn.ModuleList()
@@ -152,7 +158,7 @@ class NAFNet(nn.Module):
             x = decoder(x)
 
         x = self.ending(x)
-        x = x + inp
+        x = x + self.skip(inp)
 
         return x[:, :, :H, :W]
 
