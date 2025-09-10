@@ -1,7 +1,7 @@
 import einops
 import numpy as np
 import torch
-from models.DFlatArrayIR_model import DFlatArrayIR_model
+from models.DFlatModels.DFlatArrayIR_model import DFlatArrayIR_model
 from utils import log_image, log_metrics
 
 
@@ -73,7 +73,7 @@ class DFlatArrayClassifier_model(DFlatArrayIR_model):
                     image1[j] = einops.repeat(image1[j], '1 h w -> 3 h w')
             image1 = np.stack(image1)
             image1 = np.clip(image1, 0, 1)
-            log_image(self.opt, self.accelerator, image1, f'{idx}', self.global_step)  # image format (N,C,H,W)
+            log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)  # image format (N,C,H,W)
             
             if self.opt.val.max_images is not None and idx > self.opt.val.max_images:
                 break

@@ -1,24 +1,21 @@
-name: SVD_real
-model_type: Diffusion_MultiInput_model
+name: SVD_Real
+model_type: Simple2Dataset_model
 is_train: true
 report_to: comet_ml
-push_to_hub: true
+push_to_hub: false
 num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
-revision: ~
-variant: ~
-use_ema: false
-image_resolution: [512, 512]
 tracker_project_name: SVD_real
-experiment_key: OursRealDiffusionDeblurSDXL
+experiment_key: SRPPNNReal
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 
 datasets:
   train1:
     type: HuggingFaceDataset
-    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    name: ${dataset_1_name}
     split: train
     num_proc: 4
     map_batch_size: 16
@@ -52,7 +49,7 @@ datasets:
 
   train2:
     type: HuggingFaceDataset
-    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    name: ${dataset_2_name}
     split: train
     num_proc: 4
     map_batch_size: 16
@@ -86,7 +83,7 @@ datasets:
 
   val1:
     type: HuggingFaceDataset
-    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    name: ${dataset_1_name}
     split: validation
     num_proc: 4
 
@@ -118,7 +115,7 @@ datasets:
 
   val2:
     type: HuggingFaceDataset
-    name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    name: ${dataset_2_name}
     split: validation
     num_proc: 4
 
@@ -150,26 +147,24 @@ datasets:
 
 # network structures
 network:
-
-LKPN_network:
-  type: LKPN
-  input_channels: 4
-  k: 5
-  time_emb_dim: 256
+  type: SRPPNN
+  sf: 1
+  mul_channel: 3
+  pan_channel: 1
   
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/SVD_real/OursRealDiffusionDeblurSDXL 2025 09 02 01.17.35/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ # /scratch/gilbreth/wweligam/experiments/SVD/UnetSyntheticDeeplens 2025 08 29 11.09.16/
+  resume_from_checkpoint: ~ # latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 1e-5
+    learning_rate: !!float 2e-4
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -179,38 +174,34 @@ train:
   scheduler:
     type: cosine_with_restarts
     lr_warmup_steps: 500
-    lr_num_cycles: 10
+    lr_num_cycles: 3
     lr_power: 1.0
 
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 1
+  batch_size: 8
 
-  max_train_steps: 500000
-  validation_steps: 1000
-  checkpointing_steps: 5000
+  max_train_steps: 100000
+  validation_steps: 5000
+  checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
   patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
-  max_minibatch: 4
+  max_minibatch: 8
 
 # validation settings
 val:
   save_images: true
-  batch_size: 1
-
   patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
-  max_minibatch: 4
-
-  use_1_as_start: false
-  use_2_as_start: false
+  max_minibatch: 16
+  batch_size: 1
 
   metrics:
     psnr: # metric name, can be arbitrary

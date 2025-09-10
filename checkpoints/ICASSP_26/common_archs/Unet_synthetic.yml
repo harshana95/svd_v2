@@ -2,18 +2,20 @@ name: SVD_Synthetic
 model_type: Simple2Dataset_model
 is_train: true
 report_to: comet_ml
-push_to_hub: true
+push_to_hub: false
 num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 tracker_project_name: SVD_Synthetic
 experiment_key: UnetSyntheticDeeplens
+dataset_1_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
+dataset_2_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
 
 datasets:
   train1:
     type: HuggingFaceDataset
-    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
+    name: ${dataset_1_name}
     split: train
     num_proc: 4
     map_batch_size: 16
@@ -45,7 +47,7 @@ datasets:
 
   train2:
     type: HuggingFaceDataset
-    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
+    name: ${dataset_2_name}
     split: train
     num_proc: 4
     map_batch_size: 16
@@ -77,7 +79,7 @@ datasets:
 
   val1:
     type: HuggingFaceDataset
-    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
+    name: ${dataset_1_name}
     split: validation
     num_proc: 4
 
@@ -107,7 +109,7 @@ datasets:
 
   val2:
     type: HuggingFaceDataset
-    name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
+    name: ${dataset_2_name}
     split: validation
     num_proc: 4
 
@@ -158,7 +160,7 @@ train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 2e-4
+    learning_rate: !!float 2e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01

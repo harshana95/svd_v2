@@ -209,7 +209,7 @@ class MetaDepthPhase1_model(BaseModel):
                     image1[j] = einops.repeat(image1[j], '1 h w -> 3 h w')
             image1 = np.stack(image1)
             image1 = np.clip(image1, 0, 1)
-            log_image(self.opt, self.accelerator, image1, f'{idx}', self.global_step)  # image format (N,C,H,W)
+            log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)  # image format (N,C,H,W)
             log_metrics(out[i, :1], image[i], self.opt.val.metrics, self.accelerator, self.global_step, 'image')
             log_metrics(out[i, 1:], depth[i], self.opt.val.metrics, self.accelerator, self.global_step, 'depth')
         return idx

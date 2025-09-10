@@ -339,12 +339,12 @@ class DFlatDepth_model(BaseModel):
             image1 = [lq[i], gt[i], out_allfocus[i], out_depths[i], gt_depth[i]]
             image1 = np.stack(image1)
             image1 = np.clip(image1, 0, 1)
-            log_image(self.opt, self.accelerator, np.clip(np.stack([mask[i]]), 0,1), f'mask_{idx}', self.global_step)
-            log_image(self.opt, self.accelerator, np.clip(np.stack([mask_meas[i]]), 0,1), f'maskmeas_{idx}', self.global_step)
+            log_image(self.opt, self.accelerator, np.clip(np.stack([mask[i]]), 0,1), f'mask_{idx:04d}', self.global_step)
+            log_image(self.opt, self.accelerator, np.clip(np.stack([mask_meas[i]]), 0,1), f'maskmeas_{idx:04d}', self.global_step)
             
-            log_image(self.opt, self.accelerator, image1, f'{idx}', self.global_step)  # image format (N,C,H,W)
-            log_image(self.opt, self.accelerator, np.clip(np.stack([out_allfocus[i]]), 0,1), f'out_{idx}', self.global_step)
-            log_image(self.opt, self.accelerator, np.clip(np.stack([out_depths[i]]), 0,1), f'depth_{idx}', self.global_step)
+            log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)  # image format (N,C,H,W)
+            log_image(self.opt, self.accelerator, np.clip(np.stack([out_allfocus[i]]), 0,1), f'out_{idx:04d}', self.global_step)
+            log_image(self.opt, self.accelerator, np.clip(np.stack([out_depths[i]]), 0,1), f'depth_{idx:04d}', self.global_step)
             log_metrics(gt[i], out_allfocus[i], self.opt.val.metrics, self.accelerator, self.global_step)
             log_metrics(gt_depth[i], out_depths[i], self.opt.val.metrics, self.accelerator, self.global_step, comment='depth_')
         return idx

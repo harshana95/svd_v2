@@ -2,23 +2,23 @@ name: MetaDepth
 model_type: DFlatArrayDepthONN_model
 is_train: true
 report_to: comet_ml
-push_to_hub: true
+push_to_hub: false
 num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-tracker_project_name: Dflat
-experiment_key: DFlatArrayDepthONN
+tracker_project_name: MetaDepth
+experiment_key: MSArrayDepthONN_practical
 
 dflat:
   model_name: Nanocylinders_TiO2_U300H600
-  array_size: [8, 6]  # cols, rows  # 48 channel output from first layer
-  array_spacing: [!!float 2000e-6, !!float 2000e-6] # col, row spacing
-  downscale_factor: [1, 1]
+  array_size: [16, 24]  # cols, rows  
+  array_spacing: [!!float 800e-6, !!float 800e-6] # col, row spacing (12mm x 20 mm MS array)
+  downscale_factor: [1, 1]  # 100MP -> 50MP 
   h: 512
   w: 512
-  in_dx_m: [!!float 3000e-9, !!float 3000e-9]
-  out_dx_m: [!!float 5000e-9, !!float 5000e-9]  # pixel pitch
+  in_dx_m: [!!float 1500e-9, !!float 1500e-9]
+  out_dx_m: [!!float 2740e-9, !!float 2740e-9]  # pixel pitch
   pixel_dx_m: [!!float 1e-2, !!float 1e-2] # 1 pixel is 1cm (w) x 1cm (h) in real life. Is it a good assumption? Disregard this. We will assume objects as image. Thus size varies
 
   wavelength_set_m: [!!float 400e-9, !!float 550e-9, !!float 700e-9]
@@ -34,7 +34,7 @@ dflat:
     # loc1: [-400e-6, 0.0]
     # loc2: [-400e-6, 400e-6]
     # loc3: [0.0,-400e-6]
-    loc4: [0.0, 0.0]
+    - [0.0, 0.0]
     # loc5: [0.0, 400e-6]
     # loc6: [400e-6,-400e-6]
     # loc7: [400e-6, 0.0]
@@ -87,7 +87,9 @@ network: ~
 
 # depth estimating network
 depth_network: 
-  type: AdaBins
+  type: file
+  path: /depot/chan129/users/harshana/svd_v2/checkpoints/DepthEstimation/kernels.pt
+  rescale: 1
 
 
 
@@ -112,9 +114,9 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
-    lr_warmup_steps: 500
-    lr_num_cycles: 3
+    type: constant
+    lr_warmup_steps: 5
+    lr_num_cycles: 2
     lr_power: 1.0
 
   loss: 1*MSE
@@ -122,9 +124,9 @@ train:
   num_train_epochs: 10
   batch_size: 1
 
-  max_train_steps: 50000
-  validation_steps: 1000
-  checkpointing_steps: 1000
+  max_train_steps: 500
+  validation_steps: 50
+  checkpointing_steps: 50
   checkpoints_total_limit: 2
 
   patched: false

@@ -1,4 +1,4 @@
-name: SVD_Synthetic
+name: SVD_Real
 model_type: Simple2Dataset_model
 is_train: true
 report_to: comet_ml
@@ -7,10 +7,10 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-tracker_project_name: SVD_Synthetic
-experiment_key: NAFNetSyntheticDeeplens
-dataset_1_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
-dataset_2_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
+tracker_project_name: SVD_real
+experiment_key: NAFNetReal
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 
 datasets:
   train1:
@@ -36,6 +36,8 @@ datasets:
         factor: 0.5
       select_channels:
         channels: [True, True, True]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -68,6 +70,8 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [False, True, False]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -98,6 +102,8 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [True, True, True]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -128,6 +134,8 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [False, True, False]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]

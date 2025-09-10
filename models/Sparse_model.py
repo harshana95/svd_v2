@@ -196,7 +196,7 @@ class Sparse_model(BaseModel):
             image1 = np.stack(image1)
             image1 = np.clip(image1, 0, 1)
             image1 = einops.rearrange(image1, '(n1 n2) c h w -> 1 c (n1 h) (n2 w)', n1=2)
-            log_image(self.opt, self.accelerator, image1, f'{idx}', self.global_step)  # image format (N,C,H,W)
+            log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)  # image format (N,C,H,W)
             log_metrics(out[i, :3], image[i], self.opt.val.metrics, self.accelerator, self.global_step, 'image')
             log_metrics(out[i, 3:], depth[i], self.opt.val.metrics, self.accelerator, self.global_step, 'depth')
         return idx

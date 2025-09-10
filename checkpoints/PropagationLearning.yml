@@ -2,7 +2,7 @@ name: SVD
 model_type: PropLearn_model
 is_train: true
 report_to: comet_ml
-push_to_hub: true
+push_to_hub: false
 num_gpu: 8
 seed: 10
 mixed_precision: !!str no

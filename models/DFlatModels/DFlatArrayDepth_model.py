@@ -1,3 +1,4 @@
+import os
 import einops
 from matplotlib import pyplot as plt
 import numpy as np
@@ -43,6 +44,7 @@ def generate_coeffs(ps_idx, sim_wl, img_size, r=0.):
 class DFlatArrayDepth_model(BaseModel):
     def __init__(self, opt, logger):
         super(DFlatArrayDepth_model, self).__init__(opt, logger)
+        INIT_NOISE_FACTOR = 1.0
 
         # ============ define DFlat PSF simulator and image generator
         settings = opt.dflat
@@ -50,7 +52,9 @@ class DFlatArrayDepth_model(BaseModel):
 
         # 1. initialize the target phase profile of the metasurface
         self.wavelength_set_m = np.array(settings.wavelength_set_m)  # if we are using hsi/rgb images, this should change
-        self.ps_locs = torch.tensor([list(map(float, v)) for v in settings.ps_locs.values()])  # point spread locations (we use a sparse grid)
+        self.ps_locs = torch.tensor([list(map(float, v)) for v in settings.ps_locs])  # point spread locations (we use a sparse grid)
+        assert self.ps_locs.shape[0] > 0, f"Need at least one Point Spread location. Given {settings.ps_locs}"
+        logger.info(f"Point spread locations (in meters): {self.ps_locs}")
         self.depth_min = settings.depth_min
         self.depth_max = settings.depth_max
         
@@ -103,9 +107,10 @@ class DFlatArrayDepth_model(BaseModel):
         
         # need to move to GPU before parameter creation, or else move after optimizer creation
         def get_noise():
-            return 0
-            return np.random.normal(self.p.mean(), self.p.std(), np.prod(self.p.shape)).reshape(self.p.shape)
-        self.p = [torch.nn.Parameter(torch.from_numpy(self.p + get_noise()).cuda(), requires_grad=opt.train.optimize_shape_param) for _ in range(len(self.MS_pos))]
+            return np.random.normal(self.p_norm.mean(), self.p_norm.std(), np.prod(self.p_norm.shape)).reshape(self.p_norm.shape)
+        
+        # add noise to the p values 
+        self.p_norm = [torch.nn.Parameter(torch.from_numpy(self.p_norm*(1-INIT_NOISE_FACTOR) + get_noise()*INIT_NOISE_FACTOR).cuda(), requires_grad=opt.train.optimize_shape_param) for _ in range(len(self.MS_pos))]
         # [B, H, W, D] where D = model.dim_in - 1 is the number of shape parameters
 
         # 3. load optical model
@@ -152,7 +157,15 @@ class DFlatArrayDepth_model(BaseModel):
         # setup loss function
         train_opt = self.opt['train']
         self.criterion = Loss(train_opt.loss).to(self.accelerator.device)
+    def save_other_parameters(self, path):
+        p_cpu = [pp.detach().cpu() for pp in self.p_norm]
+        torch.save(p_cpu, os.path.join(path, 'shape_params.pt'))
     
+    def load_other_parameters(self, path):
+        p_cpu = torch.load(os.path.join(path, 'shape_params.pt'))
+        for i in range(len(self.p_norm)):
+            self.p_norm[i].data = p_cpu[i].data.to(self.p_norm[i].device)
+
     def setup_optimizers(self):
         opt = self.opt.train.optim
 
@@ -168,7 +181,7 @@ class DFlatArrayDepth_model(BaseModel):
         
         # add shape parameters as a parameter to optimize
         params_to_optimize = [{'params': optim_params}, 
-                              {'params': self.p, 'lr': opt.learning_rate * 0.00001}]
+                              {'params': self.p_norm, 'lr': opt.learning_rate}]
         optimizer = optimizer_class(
             params_to_optimize,
             lr=opt.learning_rate,
@@ -222,13 +235,13 @@ class DFlatArrayDepth_model(BaseModel):
         self.all_psf_intensity = []
         all_meas = []
         # simulate PSF for current p
-        for i in range(len(self.p)):
+        for i in range(len(self.p_norm)):
             ps_locs = torch.cat([torch.cat([self.ps_locs, torch.ones(len(self.ps_locs), 1)*fg_depth], dim=-1),
                                  torch.cat([self.ps_locs, torch.ones(len(self.ps_locs), 1)*bg_depth], dim=-1)], dim=0)
             ps_locs -= self.MS_pos[i] # MS at center, translate obj
 
-            assert not torch.isnan(self.p[i]).sum(), f'{torch.isnan(self.p[i]).sum()} Nan in p'
-            est_amp, est_phase = self.optical_model(self.p[i], self.wavelength_set_m, pre_normalized=False)
+            assert not torch.isnan(self.p_norm[i]).sum(), f'{torch.isnan(self.p_norm[i]).sum()} Nan in p_norm'
+            est_amp, est_phase = self.optical_model(self.p_norm[i], self.wavelength_set_m, pre_normalized=True)
             psf_intensity, _ = self.PSF(
                 est_amp.to(dtype=torch.float32, device=mask.device),
                 est_phase.to(dtype=torch.float32, device=mask.device),
@@ -333,7 +346,7 @@ class DFlatArrayDepth_model(BaseModel):
                     psfs[j] = [psf]
         for k in psfs.keys():
             is_fg = k < len(self.ps_locs)
-            image1 = einops.rearrange(np.stack(psfs[j]), '(n1 n2) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
+            image1 = einops.rearrange(np.stack(psfs[k]), '(n1 n2) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
             image1 = np.stack([image1])
             image1 = image1/image1.max()
             image1 = np.clip(image1, 0, 1)
@@ -367,17 +380,17 @@ class DFlatArrayDepth_model(BaseModel):
         out = out.cpu().numpy()
         for i in range(len(gt)):
             idx += 1
-            # save_images_as_zip(lq[i], self.opt.path.experiments_root, f'lq_{idx}.zip')
+            # save_images_as_zip(lq[i], self.opt.path.experiments_root, f'lq_{idx:04d}.zip')
             lq_i = einops.rearrange(lq[i], '(n1 n2) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
             lq_i = np.stack([lq_i])
             lq_i = np.clip(lq_i, 0, 1)
-            log_image(self.opt, self.accelerator, lq_i, f'lq_{idx}', self.global_step)
+            log_image(self.opt, self.accelerator, lq_i, f'lq_{idx:04d}', self.global_step)
 
             image1 = [gt[i], out[i], gt_depth[i]]
             image1 = np.stack(image1)
             image1 = np.clip(image1, 0, 1)
-            log_image(self.opt, self.accelerator, image1, f'{idx}', self.global_step)
-            log_image(self.opt, self.accelerator, np.clip(np.stack([out[i]]), 0,1), f'out_{idx}', self.global_step)
+            log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)
+            log_image(self.opt, self.accelerator, np.clip(np.stack([out[i]]), 0,1), f'out_{idx:04d}', self.global_step)
             log_metrics(gt_depth[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
         return idx
 

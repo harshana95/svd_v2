@@ -1,4 +1,4 @@
-name: SVD_Synthetic
+name: SVD_Real
 model_type: Simple2Dataset_model
 is_train: true
 report_to: comet_ml
@@ -7,10 +7,10 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-tracker_project_name: SVD_Synthetic
-experiment_key: NAFNetSyntheticDeeplens
-dataset_1_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
-dataset_2_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
+tracker_project_name: SVD_real
+experiment_key: PNNReal
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 
 datasets:
   train1:
@@ -36,6 +36,8 @@ datasets:
         factor: 0.5
       select_channels:
         channels: [True, True, True]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -68,6 +70,8 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [False, True, False]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -98,6 +102,8 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [True, True, True]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -128,6 +134,8 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [False, True, False]
+      rotate:
+        angle: -90
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -139,15 +147,11 @@ datasets:
 
 # network structures
 network:
-  type: NAFNet
-  in_channels: 4
-  out_channels: 3
-  width: 32
-  enc_blk_nums: [1, 1, 1, 28]
-  middle_blk_num: 1
-  dec_blk_nums: [1, 1, 1, 1]
-
-
+  type: PNN
+  sf: 1
+  mul_channel: 3
+  pan_channel: 1
+  
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
@@ -178,12 +182,12 @@ train:
   num_train_epochs: 10
   batch_size: 8
 
-  max_train_steps: 50000
-  validation_steps: 500
+  max_train_steps: 100000
+  validation_steps: 5000
   checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
@@ -192,7 +196,7 @@ train:
 # validation settings
 val:
   save_images: true
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2

@@ -215,17 +215,16 @@ class DiffusionTwoImagePipeline(
         )
         lamb = 0.9
         if self.use_1_as_start:
-            image_2 = einops.repeat(image_2, 'b 1 h w -> b c h w', c=3)
-            latents = lamb * latents + (1 - lamb) * self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
-        if self.use_2_as_start:
             latents = lamb * latents + (1 - lamb) * self.vae.encode(image_1).latent_dist.sample() * self.vae.config.scaling_factor
+        if self.use_2_as_start:
+            latents = lamb * latents + (1 - lamb) * self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
 
         # 6.1 Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
         # 7. Prepare added time ids & embeddings & adapter features
-        adapter_state1 = self.adapter1(torch.cat([refined_1, image_1], dim=-3))
-        adapter_state2 = self.adapter2(torch.cat([refined_2, image_2], dim=-3))
+        adapter_state1 = self.adapter1(torch.cat([image_1, refined_1], dim=-3))
+        adapter_state2 = self.adapter2(torch.cat([image_2, refined_2], dim=-3))
         adapter_state = []
         for i in range(len(adapter_state1)):
             adapter_state.append((adapter_state1[i] * adapter_state2[i]) * adapter_conditioning_scale)

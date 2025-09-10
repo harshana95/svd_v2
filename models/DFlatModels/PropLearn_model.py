@@ -203,7 +203,7 @@ class PropLearn_model(BaseModel):
 
             img = fig_to_array(fig)
             plt.close(fig)
-            log_image(self.opt, self.accelerator, img[None], f'{idx}', self.global_step)
+            log_image(self.opt, self.accelerator, img[None], f'{idx:04d}', self.global_step)
             log_metrics(psf[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
         return idx
 

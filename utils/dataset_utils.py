@@ -3,8 +3,8 @@ import einops
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
-from pynoise.noisemodule import Perlin
-from pynoise.noiseutil import grayscale_gradient, RenderImage, noise_map_plane, noise_map_plane_gpu
+# from pynoise.noisemodule import Perlin
+# from pynoise.noiseutil import grayscale_gradient, RenderImage, noise_map_plane, noise_map_plane_gpu
 from torchvision.transforms import transforms
 import torch.nn.functional as F
 from torchvision.transforms.functional import pil_to_tensor
@@ -218,47 +218,47 @@ class poisson_noise:
         return self.add_noise(sample)
 
 
-class perlin_noise:
-    def __init__(self, refresh_noise_for_each=True):
-        super().__init__()
-        self.refresh_noise_for_each = refresh_noise_for_each
-        self.p = Perlin(frequency=6, octaves=10, persistence=0.6, lacunarity=2, seed=0)
-        self.gradient = grayscale_gradient()
-        self.render = RenderImage(light_enabled=True, light_contrast=3, light_brightness=2)
-        self.lx, self.ux = 100, 200
-        self.lz, self.uz = 100, 200
-        self.noise_min = 0.8
-        self.noise_max = 1.0
+# class perlin_noise:
+#     def __init__(self, refresh_noise_for_each=True):
+#         super().__init__()
+#         self.refresh_noise_for_each = refresh_noise_for_each
+#         self.p = Perlin(frequency=6, octaves=10, persistence=0.6, lacunarity=2, seed=0)
+#         self.gradient = grayscale_gradient()
+#         self.render = RenderImage(light_enabled=True, light_contrast=3, light_brightness=2)
+#         self.lx, self.ux = 100, 200
+#         self.lz, self.uz = 100, 200
+#         self.noise_min = 0.8
+#         self.noise_max = 1.0
 
-        self.nm = None
-        self.tmp_h, self.tmp_w = -1, -1
+#         self.nm = None
+#         self.tmp_h, self.tmp_w = -1, -1
 
-    def add_noise(self, image):
-        h, w = image.shape[-2:]
-        if self.nm is None or h != self.tmp_h or w != self.tmp_w or self.refresh_noise_for_each:
-            self.p = Perlin(frequency=6, octaves=10, persistence=0.6, lacunarity=2, seed=np.random.randint(1e6))
-            self.nm = noise_map_plane_gpu(width=w, height=h,
-                                          lower_x=self.lx, upper_x=self.ux,
-                                          lower_z=self.lz, upper_z=self.uz,
-                                          source=self.p)
-            self.tmp_h = h
-            self.tmp_w = w
-        noise: PIL.Image = self.render.render(w, h, self.nm, 'remove_img_save_from_source.png', self.gradient)
-        if noise is None:
-            raise Exception("!!!!!!!!!! Return image in noiseutil.py in pynoise package !!!!!")
-        noise = pil_to_tensor(noise)
-        if image.max() <= 1.0:
-            noise = noise.to(torch.float32).to(image.device)
-            noise /= 255
-            noisy = image * ((noise*(self.noise_max - self.noise_min)) + self.noise_min)
-        else:
-            noise = noise * (int(255 * self.noise_max) - int(255*self.noise_min)) + int(255*self.noise_min)
-            noisy = image * noise // 255
-            # noisy[noisy < noise//2] = 255  # avoid overflowing
-        return noisy
+#     def add_noise(self, image):
+#         h, w = image.shape[-2:]
+#         if self.nm is None or h != self.tmp_h or w != self.tmp_w or self.refresh_noise_for_each:
+#             self.p = Perlin(frequency=6, octaves=10, persistence=0.6, lacunarity=2, seed=np.random.randint(1e6))
+#             self.nm = noise_map_plane_gpu(width=w, height=h,
+#                                           lower_x=self.lx, upper_x=self.ux,
+#                                           lower_z=self.lz, upper_z=self.uz,
+#                                           source=self.p)
+#             self.tmp_h = h
+#             self.tmp_w = w
+#         noise: PIL.Image = self.render.render(w, h, self.nm, 'remove_img_save_from_source.png', self.gradient)
+#         if noise is None:
+#             raise Exception("!!!!!!!!!! Return image in noiseutil.py in pynoise package !!!!!")
+#         noise = pil_to_tensor(noise)
+#         if image.max() <= 1.0:
+#             noise = noise.to(torch.float32).to(image.device)
+#             noise /= 255
+#             noisy = image * ((noise*(self.noise_max - self.noise_min)) + self.noise_min)
+#         else:
+#             noise = noise * (int(255 * self.noise_max) - int(255*self.noise_min)) + int(255*self.noise_min)
+#             noisy = image * noise // 255
+#             # noisy[noisy < noise//2] = 255  # avoid overflowing
+#         return noisy
 
-    def __call__(self, sample):
-        return self.add_noise(sample)
+#     def __call__(self, sample):
+#         return self.add_noise(sample)
 
 
 class padding:

@@ -1,5 +1,5 @@
-name: SVD_Synthetic
-model_type: Simple2Dataset_model
+name: SVD_Real
+model_type: Diffusion_TwoInput_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -7,10 +7,15 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-tracker_project_name: SVD_Synthetic
-experiment_key: NAFNetSyntheticDeeplens
-dataset_1_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_color_synthetic_color
-dataset_2_name: harshana95/synthetic_hybrid_Flickr2k_gt_v2_deeplens_synthetic_mono
+pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+revision: ~
+variant: ~
+use_ema: false
+image_resolution: [512, 512]
+tracker_project_name: SVD_Real
+experiment_key: OursNoLKPNReal
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 
 datasets:
   train1:
@@ -36,9 +41,11 @@ datasets:
         factor: 0.5
       select_channels:
         channels: [True, True, True]
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
+      rotate:
+        angle: -90
+      identity:
+        keys: [lq_key]
+        keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -68,9 +75,11 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [False, True, False]
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
+      rotate:
+        angle: -90
+      identity:
+        keys: [lq_key]
+        keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -98,9 +107,11 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [True, True, True]
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
+      rotate:
+        angle: -90
+      identity:
+        keys: [lq_key]
+        keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -128,9 +139,11 @@ datasets:
         factor: 0.5
       select_channels:
        channels: [False, True, False]
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
+      rotate:
+        angle: -90
+      identity:
+        keys: [lq_key]
+        keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -139,28 +152,20 @@ datasets:
 
 # network structures
 network:
-  type: NAFNet
-  in_channels: 4
-  out_channels: 3
-  width: 32
-  enc_blk_nums: [1, 1, 1, 28]
-  middle_blk_num: 1
-  dec_blk_nums: [1, 1, 1, 1]
-
 
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~ # /scratch/gilbreth/wweligam/experiments/SVD/UnetSyntheticDeeplens 2025 08 29 11.09.16/
-  resume_from_checkpoint: ~ # latest
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/test/OursNoLKPNReal 2025 09 09 11.44.47/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 2e-4
+    learning_rate: !!float 5e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -170,34 +175,38 @@ train:
   scheduler:
     type: cosine_with_restarts
     lr_warmup_steps: 500
-    lr_num_cycles: 3
+    lr_num_cycles: 10
     lr_power: 1.0
 
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 8
+  batch_size: 1
 
-  max_train_steps: 50000
-  validation_steps: 500
-  checkpointing_steps: 1000
+  max_train_steps: 500000
+  validation_steps: 1000
+  checkpointing_steps: 5000
   checkpoints_total_limit: 2
 
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
-  max_minibatch: 8
+  max_minibatch: 4
 
 # validation settings
 val:
   save_images: true
-  patched: true
+  batch_size: 1
+
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
-  max_minibatch: 16
-  batch_size: 1
+  max_minibatch: 4
+
+  use_1_as_start: false
+  use_2_as_start: true
 
   metrics:
     psnr: # metric name, can be arbitrary

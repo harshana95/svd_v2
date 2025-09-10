@@ -4,6 +4,7 @@ import yaml
 import torch.multiprocessing as mp
 from accelerate.logging import get_logger
 from models import create_model
+from omegaconf import OmegaConf
 
 from utils.misc import DictAsMember
 # export QT_QPA_PLATFORM=offscreen
@@ -35,15 +36,18 @@ if __name__ == '__main__':
     parser.add_argument('-test', action='store_true', help='Save in test.')
     args = parser.parse_args()
     with open(args.opt, mode='r') as f:
-        data = yaml.safe_load(f)
+        data = OmegaConf.load(f)
+        data = OmegaConf.to_yaml(data, resolve=True)
+        data = yaml.safe_load(data)
         if isinstance(data, dict):
             opt = DictAsMember(**data)
+            opt.pretty_print()
         else:
             opt = data
-        opt.pretty_print()
+            print(opt)
         if args.test:
             opt['name'] = 'test'
             opt['tracker_project_name'] = 'test'
         opt.test = args.test
-    print("Is test", opt.test)
+    
     main(opt)

@@ -299,7 +299,12 @@ class BaseModel():
 
     def optimize_parameters(self):
         pass
+    
+    def save_other_parameters(self, path):
+        pass
 
+    def load_other_parameters(self, path):
+        pass
 
     def grids(self, keys, opt):
         """
@@ -388,7 +393,9 @@ class BaseModel():
                 initial_global_step = 0
             else:
                 self.accelerator.print(f"Resuming from checkpoint {path}")
-                self.accelerator.load_state(os.path.join(self.opt.path.resume_from_path, path))
+                load_path = os.path.join(self.opt.path.resume_from_path, path)
+                self.accelerator.load_state(load_path)
+                self.load_other_parameters(load_path)
                 self.global_step = int(path.split("-")[1])
 
                 initial_global_step = self.global_step
@@ -420,6 +427,7 @@ class BaseModel():
 
                                 save_path = os.path.join(self.opt.path.experiments_root, f"checkpoint-{self.global_step}")
                                 self.accelerator.save_state(save_path)
+                                self.save_other_parameters(save_path)
                                 self.logger.info(f"Saved state to {save_path}")
 
                             if self.global_step % self.opt.train.validation_steps == 0:

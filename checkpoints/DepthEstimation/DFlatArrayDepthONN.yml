@@ -1,5 +1,5 @@
-name: SVD
-model_type: MetaDepthPhase2_model
+name: MetaDepth
+model_type: DFlatArrayDepthONN_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -8,28 +8,40 @@ seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 tracker_project_name: MetaDepth
-experiment_key: MetaDepthPhase2
-image_size: [64, 64]
+experiment_key: MSArrayDepthONN
 
-tracker_kwargs:
-  comet_ml:
-    online: true
-    
-# network structures
-network:
-  type: UnetTM
-  in_channels: 1
-  out_channels: 2
-  n_features: 16
-# network:
-#   type: Unet
-#   in_channels: 1
-#   out_channels: 2
-#   attention_head_dim: 8
-#   down_block_types: ["DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"]
-#   up_block_types: ["AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"]
-#   block_out_channels: [224, 448, 672, 896]
+# ===============  no array spacing. 
+dflat:
+  model_name: Nanocylinders_TiO2_U300H600
+  array_size: [16, 24]  # cols, rows  # 48 channel output from first layer
+  array_spacing: [0,0] # [!!float 3000e-6, !!float 3000e-6] # col, row spacing
+  downscale_factor: [1, 1]
+  h: 1024
+  w: 1024
+  in_dx_m: [!!float 2500e-9, !!float 2500e-9]
+  out_dx_m: [!!float 2740e-9, !!float 2740e-9]  # pixel pitch
+  pixel_dx_m: [!!float 1e-2, !!float 1e-2] # 1 pixel is 1cm (w) x 1cm (h) in real life. Is it a good assumption? Disregard this. We will assume objects as image. Thus size varies
 
+  wavelength_set_m: [!!float 400e-9, !!float 550e-9, !!float 700e-9]
+  
+  out_distance_m: !!float 1e-2
+  initialization:
+    type: focusing_lens
+    depth_set_m: [!!float 500, !!float 500, !!float 500]
+    fshift_set_m: [[!!float 0.0, !!float 0.0],[!!float 0.0, !!float 0.0],[!!float 0.0, !!float 0.0]]
+  
+  ps_locs:
+    # loc0: [-400e-6,-400e-6] # no Z value because we have variable depth
+    # loc1: [-400e-6, 0.0]
+    # loc2: [-400e-6, 400e-6]
+    # loc3: [0.0,-400e-6]
+    - [0.0, 0.0]
+    # loc5: [0.0, 400e-6]
+    # loc6: [400e-6,-400e-6]
+    # loc7: [400e-6, 0.0]
+    # loc8: [400e-6, 400e-6]
+  
+  
 datasets:
   train:
     type: HuggingFaceDataset
@@ -47,9 +59,9 @@ datasets:
       to_tensor:
       select_channels:
        channels: [False, True, False]
-      resize:
-        h: 64
-        w: 64
+      crop:
+        h: 256
+        w: 256
 
   val:
     type: HuggingFaceDataset
@@ -66,16 +78,26 @@ datasets:
       to_tensor:
       select_channels:
        channels: [False, True, False]
-      resize:
-        h: 64
-        w: 64
+      crop:
+        h: 256
+        w: 256
+
+
+# no training network structure
+network: ~
+
+# depth estimating network
+depth_network: 
+  type: file
+  path: /depot/chan129/users/harshana/svd_v2/checkpoints/DepthEstimation/kernels.pt
+  rescale: 1
+
 
 
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~
   resume_from_checkpoint: ~
 
 # training settings
@@ -93,9 +115,9 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
-    lr_warmup_steps: 500
-    lr_num_cycles: 3
+    type: constant
+    lr_warmup_steps: 5
+    lr_num_cycles: 2
     lr_power: 1.0
 
   loss: 1*MSE
@@ -103,9 +125,9 @@ train:
   num_train_epochs: 10
   batch_size: 1
 
-  max_train_steps: 50000
-  validation_steps: 1000
-  checkpointing_steps: 1000
+  max_train_steps: 500
+  validation_steps: 50
+  checkpointing_steps: 50
   checkpoints_total_limit: 2
 
   patched: false
