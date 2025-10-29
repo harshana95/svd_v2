@@ -1,0 +1,14 @@
+#!/bin/sh -l
+
+#SBATCH -p a100-80gb
+#SBATCH --mem 32G
+#SBATCH -n32
+#SBATCH -A stanchan
+#SBATCH --nodes=1 --gpus-per-node=1 
+#SBATCH --time=4-00:00:00
+#SBATCH --job-name color_osediff
+
+
+cd ../..
+conda activate mypackages
+accelerate launch trainer.py -opt ./checkpoints/MetaZoom/osediff_color.yml

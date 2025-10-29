@@ -1,5 +1,6 @@
+# LKPN + STN 
 name: SVD_Real
-model_type: Diffusion_TwoInput_model
+model_type: DiffusionLKPNSTN_TwoInput_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -8,14 +9,33 @@ seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+preprocessing_space: pixel
 revision: ~
 variant: ~
 use_ema: false
 image_resolution: [512, 512]
 tracker_project_name: SVD_Real
-experiment_key: OursNoLKPNReal
+experiment_key: Ex3_${preprocessing_space}
 dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+# network structures
+network:
+
+LKPN_network_1:
+  type: LKPN
+  input_channels: 3
+  k: 5
+  time_emb_dim: 256
+
+LKPN_network_2:
+  type: LKPN
+  input_channels: 3
+  k: 5
+  time_emb_dim: 256
+
+STN_network:
+  type: STN 
+  input_channels: 6
 
 datasets:
   train1:
@@ -34,6 +54,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -43,14 +66,13 @@ datasets:
         channels: [True, True, True]
       rotate:
         angle: -90
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
-      # apply_model:
+      # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+      apply_model:
+        keys: [lq_key]
+        model_name: NAFNet_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
 
   train2:
     type: HuggingFaceDataset
@@ -68,6 +90,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -77,15 +102,15 @@ datasets:
        channels: [False, True, False]
       rotate:
         angle: -90
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
-      # apply_model:
+      # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealMono 2025 03 03 12.50.50/Restormer_arch_1/
-
+      # apply_model:
+      apply_model:
+        keys: [lq_key]
+        model_name: NAFNet_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+        
   val1:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
@@ -100,6 +125,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -109,14 +137,13 @@ datasets:
        channels: [True, True, True]
       rotate:
         angle: -90
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
-      # apply_model:
+      # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+      apply_model:
+        keys: [lq_key]
+        model_name: NAFNet_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
 
   val2:
     type: HuggingFaceDataset
@@ -132,6 +159,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -141,23 +171,19 @@ datasets:
        channels: [False, True, False]
       rotate:
         angle: -90
-      identity:
-        keys: [lq_key]
-        keys_new: [refined]
-      # apply_model:
+      # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealMono 2025 03 03 12.50.50/Restormer_arch_1/
-
-# network structures
-network:
-
+      apply_model:
+        keys: [lq_key]
+        model_name: NAFNet_arch
+        model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+  
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/test/OursNoLKPNReal 2025 09 09 11.44.47/
+  resume_from_path: /depot/chan129/users/harshana/FinalModels/Ex3_pixel 2025 09 12 22.08.22/
   resume_from_checkpoint: latest
 
 # training settings
@@ -165,7 +191,7 @@ train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 5e-5
+    learning_rate: !!float 3e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -173,7 +199,7 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
+    type: constant
     lr_warmup_steps: 500
     lr_num_cycles: 10
     lr_power: 1.0
@@ -184,8 +210,8 @@ train:
   batch_size: 1
 
   max_train_steps: 500000
-  validation_steps: 1000
-  checkpointing_steps: 5000
+  validation_steps: 2500
+  checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
   patched: false
@@ -198,6 +224,7 @@ train:
 val:
   save_images: true
   batch_size: 1
+  num_inference_steps: 50
 
   patched: false
   patch_size_h: 256
@@ -206,7 +233,7 @@ val:
   max_minibatch: 4
 
   use_1_as_start: false
-  use_2_as_start: true
+  use_2_as_start: false
 
   metrics:
     psnr: # metric name, can be arbitrary

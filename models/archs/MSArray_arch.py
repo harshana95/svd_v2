@@ -13,10 +13,10 @@ from models.archs.related.NAFNet.NAFNet_arch import NAFBlock, NAFNet
 class MSArrayIR_config(PretrainedConfig):
     model_type = "MSArrayIR_arch"
 
-    def __init__(self, array_size=[1,1], downscale_factor=[1,1], **kwargs):
+    def __init__(self, array_size=[1,1],  **kwargs):
         super().__init__(**kwargs)
         self.array_size = array_size
-        self.downscale_factor = downscale_factor
+        
 
 
 class MSArrayIR_arch(PreTrainedModel):
@@ -29,19 +29,19 @@ class MSArrayIR_arch(PreTrainedModel):
         self.intro = nn.Conv2d(in_channels=self.c*self.n, out_channels=config.width, kernel_size=3, padding=1, stride=1, groups=1, bias=True)
 
         chan = config.width
-        self.up = nn.Sequential(
-                    nn.Conv2d(chan, chan * config.downscale_factor[0], 1, bias=False),
-                    nn.PixelShuffle(config.downscale_factor[0])
-                )
-        chan = chan // config.downscale_factor[0]
+        # self.up = nn.Sequential(
+        #             nn.Conv2d(chan, chan * config.downscale_factor[0], 1, bias=False),
+        #             nn.PixelShuffle(config.downscale_factor[0])
+        #         )
+        # chan = chan // config.downscale_factor[0]
         self.decoder = nn.Sequential(*[NAFBlock(chan) for _ in range(5)])
-        self.net = NAFNet(img_channel=chan, width=chan, middle_blk_num=config.middle_blk_num, enc_blk_nums=config.enc_blk_nums, dec_blk_nums=config.dec_blk_nums)
+        # self.net = NAFNet(img_channel=chan, width=chan, middle_blk_num=config.middle_blk_num, enc_blk_nums=config.enc_blk_nums, dec_blk_nums=config.dec_blk_nums)
         self.ending = nn.Conv2d(in_channels=chan, out_channels=self.c, kernel_size=3, padding=1, stride=1, groups=1, bias=True)
 
     def forward(self, x):
         x = einops.rearrange(x, 'b n c h w -> b (n c) h w')
         x = self.intro(x)
-        x = self.up(x)
+        # x = self.up(x)
         x = self.decoder(x)
         x = self.ending(x)
         return x

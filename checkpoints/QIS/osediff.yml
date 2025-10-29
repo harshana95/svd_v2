@@ -1,0 +1,138 @@
+name: QIS
+model_type: OSEDiff_onedataset_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+# pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1
+vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
+dape_path: ~ #/depot/chan129/users/harshana/svd_v2/DAPE.pth
+revision: ~
+variant: ~
+use_ema: false
+image_resolution: [512, 512]
+tracker_project_name: QIS
+experiment_key: QIS_OSEDiff
+
+network:
+
+datasets:
+  train:
+    type: QIS_image_dataset
+    data_path: /depot/chan129/users/harshana/Datasets/Deconvolution/Flickr2K/Flickr2K_HR/
+    split: [0, 0.995]
+    split_type: train
+    patch_size: 1024
+    sensor_params:
+      avg_PPP: 3.25
+      QE: 0.8
+      theta_dark: 1.6
+      sigma_read: 0.2
+      clicks_per_frame: 1
+      Nbits: 3
+      fwc: 200
+
+    num_proc: 1
+    map_batch_size: 1
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+
+ 
+  val:
+    type: QIS_image_dataset
+    data_path: /depot/chan129/users/harshana/Datasets/Deconvolution/Flickr2K/Flickr2K_HR/
+    split: [0.995, 1.0]
+    split_type: val
+    patch_size: 1024
+    sensor_params:
+      avg_PPP: 3.25
+      QE: 0.8
+      theta_dark: 1.6
+      sigma_read: 0.2
+      clicks_per_frame: 1
+      Nbits: 3
+      fwc: 200
+
+    num_proc: 1
+    map_batch_size: 1
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    
+    
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/SVD_Real/MetaZoom_OSEDiff 2025 09 23 11.02.39/
+  resume_from_checkpoint: ~ #latest
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 10e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 50
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  concatenate_images: false
+  use_image1: true
+  lora_finetune: true
+  use_hf_loss: false
+  timestep: 999
+
+  lambda_l2: 1.0
+  lambda_lpips: 2.0
+  cfg_vsd: 7.5
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+# validation settings
+val:
+  save_images: true
+  batch_size: 1
+  num_inference_steps: 1
+
+  patched: false
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

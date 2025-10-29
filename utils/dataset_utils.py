@@ -1,5 +1,6 @@
 import PIL
 import einops
+import kornia
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
@@ -82,6 +83,14 @@ class sv_convolution:
         X = fft2(x[:, None] * self.W, dim=(-2, -1))
         out = ifftshift(ifft2(X * self.H, dim=(-2, -1)), dim=(-2, -1)).real.sum(-3)
         return out
+    
+class homography:
+    def __init__(self, M):
+        self.M = torch.Tensor(M)[None]
+        print("homography matrix", self.M)
+    def __call__(self, x):
+        self.M = self.M.to(x.device)
+        return kornia.geometry.warp_perspective(x[None], self.M, dsize=(x.shape[-2], x.shape[-1]))[0]
 
 class to_tensor:
     # BGR to RGB, HWC to CHW, numpy to tensor
@@ -174,8 +183,9 @@ class select_channels:
         self.channels = channels.to(torch.bool)
 
     def __call__(self, x):
-        return x[..., self.channels, :, :]
-    
+        if x.shape[-3] == len(self.channels):
+            return x[..., self.channels, :, :]
+        return x
 
 class gaussian_noise:
     def __init__(self, max_sigma=0.02, sigma_dc=0.005, mu=0):
@@ -274,7 +284,7 @@ class padding:
 
 class normalize:
     def __init__(self, mean, std, inplace=False):
-        self.norm = transforms.Normalize( mean, std, inplace)
+        self.norm = transforms.Normalize( mean, std, inplace)  # (x - mean) / std
 
     def __call__(self, sample):
         return self.norm(sample)
@@ -365,6 +375,7 @@ def crop_arr(arr, h, w, mode='constant'):  # todo: this is too slow
         if istorch:
             arr = torch.nn.functional.pad(arr, pad, mode=mode)
         else:
+            print(pad)
             arr = np.pad(arr, pad, mode=mode)
     return arr
 

@@ -113,6 +113,8 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
             weight_dtype = torch.bfloat16
         self.weight_dtype = weight_dtype
 
+        self.preprocessing_space = opt.preprocessing_space
+
         pretrained_model_name_or_path = self.opt.pretrained_model_name_or_path
         revision = self.opt.revision
         variant = self.opt.variant
@@ -162,23 +164,24 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
             self.ema_unet = EMAModel(unet.parameters(), model_cls=UNet2DConditionModel, model_config=unet.config)
 
         t2iadapter_1 = T2IAdapter(
-            in_channels=3 * 2,
+            in_channels=(3 if self.preprocessing_space == 'pixel' else 4) * 2,
             channels=(320, 640, 1280, 1280),
             num_res_blocks=2,
-            downscale_factor=16,
+            downscale_factor=(16 if self.preprocessing_space == 'pixel' else 2),
             adapter_type="full_adapter_xl",
         )
         t2iadapter_2 = T2IAdapter(
-            in_channels=3 * 2,
+            in_channels=(3 if self.preprocessing_space == 'pixel' else 4) * 2,
             channels=(320, 640, 1280, 1280),
             num_res_blocks=2,
-            downscale_factor=16,
+            downscale_factor=(16 if self.preprocessing_space == 'pixel' else 2),
             adapter_type="full_adapter_xl",
         )
         
         text_encoder_one.requires_grad_(False)
         text_encoder_two.requires_grad_(False)
         vae.requires_grad_(False)
+        unet.requires_grad_(True)
 
         # Let's first compute all the embeddings so that we can free up the text encoders
         # from memory.
@@ -295,8 +298,18 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
         inp_noisy_latents = noisy_latents / ((sigmas ** 2 + 1) ** 0.5)  # these are around -4 to +4
         
         # concatenate latents and convolved latents and pass them throught T2I adapters
-        down_block_additional_residuals_1x = self.t2iadapter_1(torch.cat([image_1, refined_1], dim=-3))
-        down_block_additional_residuals_nx = self.t2iadapter_2(torch.cat([image_2, refined_2], dim=-3))
+        if self.preprocessing_space == 'pixel':
+            adapter1_input = torch.cat([image_1, refined_1], dim=-3)
+            adapter2_input = torch.cat([image_2, refined_2], dim=-3)
+        else:
+            z_1 = self.vae.encode(image_1).latent_dist.sample() * self.vae.config.scaling_factor
+            z_2 = self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
+            r_1 = self.vae.encode(refined_1).latent_dist.sample() * self.vae.config.scaling_factor
+            r_2 = self.vae.encode(refined_2).latent_dist.sample() * self.vae.config.scaling_factor
+            adapter1_input = torch.cat([z_1, r_1], dim=-3)
+            adapter2_input = torch.cat([z_2, r_2], dim=-3)
+        down_block_additional_residuals_1x = self.t2iadapter_1(adapter1_input)
+        down_block_additional_residuals_nx = self.t2iadapter_2(adapter2_input)
 
         # generate down block additional residuals by multiplying the outputs of two adapters
         down_block_additional_residuals = []
@@ -368,6 +381,7 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
             noise_scheduler_tmp,
             use_1_as_start=self.opt.val.use_1_as_start,
             use_2_as_start=self.opt.val.use_2_as_start,
+            preprocessing_space=self.preprocessing_space
         )
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 
@@ -446,8 +460,6 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
             )
             out = output.images
             steps = output.step_outputs
-            predeblur1 = output.deblur_1
-            predeblur2 = output.deblur_2
 
         lq1 = lq1.cpu().numpy()
         lq2 = lq2.cpu().numpy()

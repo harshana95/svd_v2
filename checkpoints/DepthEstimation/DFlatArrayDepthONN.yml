@@ -98,6 +98,7 @@ depth_network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
+  resume_from_path: ~
   resume_from_checkpoint: ~
 
 # training settings

@@ -12,7 +12,7 @@ from dataset import create_dataset
 from dataset.ZipDatasetWrapper import ZipDatasetWrapper
 from models.archs import define_network
 from models.base_model import BaseModel
-from utils.dataset_utils import crop_arr, grayscale, merge_patches
+from utils.dataset_utils import crop_arr, grayscale, merge_patches, sv_convolution
 from utils.image_utils import save_images_as_zip
 from utils.loss import Loss
 from utils import log_image, log_metrics
@@ -44,11 +44,13 @@ def generate_coeffs(ps_idx, sim_wl, img_size, r=0.):
 class DFlatArrayDepth_model(BaseModel):
     def __init__(self, opt, logger):
         super(DFlatArrayDepth_model, self).__init__(opt, logger)
-        INIT_NOISE_FACTOR = 1.0
+        INIT_NOISE_FACTOR = 0.01
 
         # ============ define DFlat PSF simulator and image generator
         settings = opt.dflat
         # self.pixel_dx_m = settings.pixel_dx_m
+        self.radially_symmetric = settings.get("radially_symmetric", False)
+        self.single_wavelength = settings.get("single_wavelength", False)
 
         # 1. initialize the target phase profile of the metasurface
         self.wavelength_set_m = np.array(settings.wavelength_set_m)  # if we are using hsi/rgb images, this should change
@@ -58,11 +60,13 @@ class DFlatArrayDepth_model(BaseModel):
         self.depth_min = settings.depth_min
         self.depth_max = settings.depth_max
         
+        self.depth_levels = settings.depth_levels
+
         # find the MS center positions of the array
         self.array_size = settings.array_size  # col, row
         self.array_spacing = settings.array_spacing # col, row
         self.MS_size = [(settings.w+1)*settings.in_dx_m[0], (settings.h+1)*settings.in_dx_m[1]]  # width, height
-        self.MSArray_size = [self.array_size[0]*self.array_spacing[0], self.array_size[1]*self.array_spacing[1]] # width, height
+        self.MSArray_size = [(self.array_size[0]-1)*self.array_spacing[0], (self.array_size[1]-1)*self.array_spacing[1]] # width, height
         logger.info(f"MS size (width, height): {self.MS_size} MS Array size (width, height): {self.MSArray_size}")
         self.MS_pos = []
         for i in range(self.array_size[0]): # cols
@@ -86,7 +90,7 @@ class DFlatArrayDepth_model(BaseModel):
                 "fshift_set_m": settings.initialization.fshift_set_m,
                 "out_distance_m": settings.out_distance_m,
                 "aperture_radius_m": None,
-                "radial_symmetry": False  # if True slice values along one radius
+                "radial_symmetry": self.radially_symmetric  # if True slice values along one radius
                 }
             self.amp, self.phase, self.aperture = focusing_lens(**lenssettings) # [Lam, H, W]
             print("amp phase aperture", self.amp.shape, self.phase.shape, self.aperture.shape)
@@ -104,7 +108,7 @@ class DFlatArrayDepth_model(BaseModel):
             err_thresh=1e-6,
             max_iter=100,
             opt_phase_only=False)
-        
+        print("p shape", self.p.shape)
         # need to move to GPU before parameter creation, or else move after optimizer creation
         def get_noise():
             return np.random.normal(self.p_norm.mean(), self.p_norm.std(), np.prod(self.p_norm.shape)).reshape(self.p_norm.shape)
@@ -125,8 +129,9 @@ class DFlatArrayDepth_model(BaseModel):
             out_size=self.out_size,
             out_dx_m=settings.out_dx_m,
             out_resample_dx_m=None,
-            radial_symmetry=False,
-            diffraction_engine="ASM").cuda()
+            radial_symmetry=self.radially_symmetric,
+            diffraction_engine="ASM"
+        ).cuda()
         
         # TODO: Using ps_idx for rolling PSFs might be inaccurate in some cases
         # ps idx for ps shift in pixels. if the ps are off axis, the psf might not have the same shift. TODO find a way to solve this.
@@ -146,6 +151,7 @@ class DFlatArrayDepth_model(BaseModel):
         # ========================== define generator network
         network_opt = opt.network
         if network_opt is not None:
+            network_opt['img_channel'] = network_opt['img_channel'] if not self.single_wavelength else 1
             network_opt['array_size'] = self.array_size
             network_opt['downscale_factor'] = downscale_factor
             self.net_g = define_network(network_opt)
@@ -157,9 +163,25 @@ class DFlatArrayDepth_model(BaseModel):
         # setup loss function
         train_opt = self.opt['train']
         self.criterion = Loss(train_opt.loss).to(self.accelerator.device)
+
     def save_other_parameters(self, path):
         p_cpu = [pp.detach().cpu() for pp in self.p_norm]
         torch.save(p_cpu, os.path.join(path, 'shape_params.pt'))
+
+
+        # # Write this lens to a gds file for fabrication
+        # from dflat.GDSII.assemble import assemble_cylinder_gds
+        # cell_size = self.opt.dflat.in_dx_m
+        # block_size = self.opt.dflat.in_dx_m # This can be used to repeat the cell as a larger block
+
+        # self.array_size
+        # for i, pp in enumerate(self.p_norm):
+        #     col, row = i%self.array_size[0], i//self.array_size[0]
+        #     p_norm = pp.detach().cpu().numpy()
+        #     p_denorm = self.optical_model.denormalize(p_norm)
+        #     pfab = p_denorm.squeeze(0)
+        #     mask = np.ones(pfab.shape[0:2])
+        #     assemble_cylinder_gds(pfab, mask, cell_size, block_size, savepath=os.path.join(path, f"MO_r{row}_c{col}.gds"))
     
     def load_other_parameters(self, path):
         p_cpu = torch.load(os.path.join(path, 'shape_params.pt'))
@@ -199,8 +221,9 @@ class DFlatArrayDepth_model(BaseModel):
         self.dataloader = DataLoader(
             ZipDatasetWrapper({'1': train_set1, '2': train_set2}, transforms=transforms.Compose([]), random=False),
             shuffle=self.opt.datasets.train1.use_shuffle,
-            batch_size=self.opt.train.batch_size,
+            batch_size=self.opt.train.batch_size*(self.depth_levels - 1),
             num_workers=self.opt.datasets.train1.get('num_worker_per_gpu', 1),
+            drop_last=True
         )
         self.dataloader.dataset.gt_key = train_set1.gt_key
         self.dataloader.dataset.lq_key = train_set1.lq_key
@@ -210,8 +233,9 @@ class DFlatArrayDepth_model(BaseModel):
         self.test_dataloader = DataLoader(
             ZipDatasetWrapper({'1': val_set1, '2': val_set2}, transforms=transforms.Compose([]), random=False),
             shuffle=self.opt.datasets.val1.use_shuffle,
-            batch_size=self.opt.val.batch_size,
+            batch_size=self.opt.val.batch_size*(self.depth_levels - 1),
             num_workers=self.opt.datasets.val1.get('num_worker_per_gpu', 1),
+            drop_last=True
         )
         self.test_dataloader.dataset.gt_key = val_set1.gt_key
         self.test_dataloader.dataset.lq_key = val_set1.lq_key
@@ -220,32 +244,56 @@ class DFlatArrayDepth_model(BaseModel):
     def feed_data(self, data, is_train=True):
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
-        fg = data['foreground_1']
-        bg = data['background_2']
-        mask = data['mask_1']
-        mask = torch.clamp(mask, 1e-6, 1 - 1e-6)  # if we don't clamp, we get NaNs.   
+        fg = data['foreground_1'] # batch size * (depth_levels -1)
+        bg = data['background_2'] # batch size * (depth_levels -1)
+        mask = data['mask_1']  # batch size * (depth_levels -1)
+        # print(bg.shape, fg.shape, mask.shape)
+
+        bg = bg[:len(bg)//(self.depth_levels - 1)]  # pick first batch_size images. it will load batch_size*(depth_levels -1) images
+        bg = einops.rearrange(bg, 'b c h w -> b 1 1 c h w')
+        fg = einops.rearrange(fg, '(b n) c h w -> b n 1 1 c h w', n=self.depth_levels - 1)
+        mask = einops.rearrange(mask, '(b n) c h w -> b n 1 1 c h w', n=self.depth_levels - 1)
+        
+        
+        if is_train:
+            mask = torch.clamp(mask, 1e-6, 1 - 1e-6)  # if we don't clamp, we get NaNs.   
         device = mask.device
         n_channels = fg.shape[-3]
         n_pos = len(self.ps_idx)
         
         # generate the ground truth images [all-in-focus image, depth map]
         bg_depth = torch.rand(1)*(self.depth_max - self.depth_min) + self.depth_min
-        fg_depth = torch.rand(1)*(bg_depth - self.depth_min) + self.depth_min
+        fg_depth = torch.rand(self.depth_levels - 1)*(bg_depth - self.depth_min) + self.depth_min
+        fg_depth = torch.sort(fg_depth, descending=True)[0] # from far to near for easy alpha blending
+        bg_ps_locs = torch.cat([self.ps_locs, torch.ones(len(self.ps_locs), 1)*bg_depth], dim=-1)
+        fg_ps_locs = [torch.cat([self.ps_locs, torch.ones(len(self.ps_locs), 1)*fg_depth[_i]], dim=-1) for _i in range(self.depth_levels - 1)]
+        _ps_locs = torch.cat(fg_ps_locs + [bg_ps_locs], dim=0) # [P, 3] P = n_pos * depth_levels (fg1, fg2, ..., bg)
         
         self.all_psf_intensity = []
         all_meas = []
         # simulate PSF for current p
-        for i in range(len(self.p_norm)):
-            ps_locs = torch.cat([torch.cat([self.ps_locs, torch.ones(len(self.ps_locs), 1)*fg_depth], dim=-1),
-                                 torch.cat([self.ps_locs, torch.ones(len(self.ps_locs), 1)*bg_depth], dim=-1)], dim=0)
-            ps_locs -= self.MS_pos[i] # MS at center, translate obj
+        for i in range(len(self.p_norm)):  # cols x rows
+            ps_locs = _ps_locs - self.MS_pos[i] # MS at center, translate obj
+            # find chief ray
+            #simulate the images in single sensor?
 
             assert not torch.isnan(self.p_norm[i]).sum(), f'{torch.isnan(self.p_norm[i]).sum()} Nan in p_norm'
-            est_amp, est_phase = self.optical_model(self.p_norm[i], self.wavelength_set_m, pre_normalized=True)
+            if self.single_wavelength:
+                wv_idx = (i//self.array_size[0])%len(self.wavelength_set_m)
+                wv = [self.wavelength_set_m[wv_idx]]
+                _bg = bg[..., wv_idx:wv_idx+1,:,:]
+                _fg = fg[..., wv_idx:wv_idx+1,:,:]
+                _mask = mask[..., wv_idx:wv_idx+1,:,:]
+            else:
+                wv = self.wavelength_set_m
+                _bg = bg
+                _fg = fg
+                _mask = mask
+            est_amp, est_phase = self.optical_model(self.p_norm[i], wv, pre_normalized=True)
             psf_intensity, _ = self.PSF(
                 est_amp.to(dtype=torch.float32, device=mask.device),
                 est_phase.to(dtype=torch.float32, device=mask.device),
-                self.wavelength_set_m,
+                wv,
                 ps_locs,
                 aperture=None,
                 normalize_to_aperture=True)
@@ -275,40 +323,72 @@ class DFlatArrayDepth_model(BaseModel):
             # psf has shape  [B P Z L H W]
             # scene radiance [B P Z L H W]
             # out shape      [B P Z L H W]
-            mask_meas = self.renderer(psf_intensity[:,:,:n_pos], einops.rearrange(mask, 'b c h w -> b 1 1 c h w'), rfft=True, crop_to_psf_dim=False)
-            mask_meas = self.renderer.rgb_measurement(mask_meas, self.wavelength_set_m, gamma=True, process='demosaic')
-            fg_meas = self.renderer(psf_intensity[:,:,:n_pos], einops.rearrange(fg, 'b c h w -> b 1 1 c h w'), rfft=True, crop_to_psf_dim=False)
-            fg_meas = self.renderer.rgb_measurement(fg_meas, self.wavelength_set_m, gamma=True, process='demosaic')
+            crop_size = 256
+            h1 = psf_intensity.shape[-2]//2 - crop_size//2
+            h2 = h1 + crop_size
+            
 
-            bg_meas = self.renderer(psf_intensity[:,:,n_pos:], einops.rearrange(bg, 'b c h w -> b 1 1 c h w'), rfft=True, crop_to_psf_dim=False)
-            bg_meas = self.renderer.rgb_measurement(bg_meas, self.wavelength_set_m, gamma=True, process='demosaic')
-
-            if n_channels == 1:
-                gray = grayscale()
-                mask_meas = gray(mask_meas)
-                fg_meas = gray(fg_meas)
+            # simulating bg
+            bg_meas = self.renderer(psf_intensity[:,:,-n_pos:, :, h1:h2, h1:h2], _bg, rfft=True, crop_to_psf_dim=False)
+            # bg_meas = self.renderer.rgb_measurement(bg_meas, self.wavelength_set_m, gamma=True, process='demosaic')
+            
+            # from torch.fft import fft2, ifft2, fftshift, ifftshift
+            # X = fft2(bg, dim=(-2, -1))
+            # H = fft2(psf_intensity[:, :, -n_pos:], dim=(-2,-1))
+            # out = ifftshift(ifft2(X * H, dim=(-2, -1)), dim=(-2, -1))
+            # X_log = np.log(1 + np.abs(X.real[0,0,0].cpu().numpy().transpose([1,2,0])))
+            # plt.imsave('tmp.png', (X_log/X_log.max()).clip(0,1))
+            
+            gray = grayscale()
+            if n_channels == 1:    
                 bg_meas = gray(bg_meas)
 
-            assert torch.isnan(fg_meas).sum() == 0, f'{torch.isnan(fg_meas).sum()} Nan in fg_meas'
-            assert torch.isnan(bg_meas).sum() == 0, f'{torch.isnan(bg_meas).sum()} Nan in bg_meas'
-            assert torch.isnan(mask_meas).sum() == 0, f'{torch.isnan(mask_meas).sum()} Nan in mask_meas'
+            meas = bg_meas
+            # simulating fg 
+            for d in range(self.depth_levels -1):  # loop through fg images
+                # TODO: add random translation to the fg and mask
+                i_start = n_pos*d
+                i_end = n_pos*(d+1)
+                mask_meas = self.renderer(psf_intensity[:,:,i_start:i_end, :, h1:h2, h1:h2], _mask[:, d], rfft=True, crop_to_psf_dim=False)
+                # mask_meas = self.renderer.rgb_measurement(mask_meas, self.wavelength_set_m, gamma=True, process='demosaic')
+                fg_meas = self.renderer(psf_intensity[:,:,i_start:i_end, :, h1:h2, h1:h2], _fg[:, d], rfft=True, crop_to_psf_dim=False)
+                # fg_meas = self.renderer.rgb_measurement(fg_meas, self.wavelength_set_m, gamma=True, process='demosaic')
+                mask_meas = gray(mask_meas)
+                if n_channels == 1:
+                    fg_meas = gray(fg_meas)
+
+                # alpha clipping and merging with previous measurement
+                mask_meas = mask_meas/mask_meas.max()
+                meas = meas*(1 - mask_meas) + fg_meas*mask_meas
+
+            # assert torch.isnan(fg_meas).sum() == 0, f'{torch.isnan(fg_meas).sum()} Nan in fg_meas'
+            # assert torch.isnan(bg_meas).sum() == 0, f'{torch.isnan(bg_meas).sum()} Nan in bg_meas'
+            # assert torch.isnan(mask_meas).sum() == 0, f'{torch.isnan(mask_meas).sum()} Nan in mask_meas'
 
             # fg_meas = (fg_meas * self.coeffs).sum(2, keepdim=True)/self.coeffs_sum
             # bg_meas = (bg_meas * self.coeffs).sum(2, keepdim=True)/self.coeffs_sum
             # mask_meas = (mask_meas * self.coeffs).sum(2, keepdim=True)/self.coeffs_sum
-            fg_meas = fg_meas[:, 0, 0]  # no polarization
-            bg_meas = bg_meas[:, 0, 0]
-            mask_meas = mask_meas[:, 0, 0]
-            # alpha clipping and merging fg and bg  
-            all_meas.append(bg_meas*(1 - mask_meas) + fg_meas*mask_meas) # alpha clipping and merging fg and bg
-        
-        gt = bg*(1 - mask) + fg*mask # this is not correct for all MS in the array. there can be parallax effect for GT
+
+            all_meas.append(meas[:, 0, 0])  # no polarization
+
+        # this is not correct for all MS in the array. there can be parallax effect for GT
+        gt = bg
+        for d in range(self.depth_levels -1):
+            gt = gt*(1 - mask[:, d]) + fg[:, d]*mask[:, d]
+        gt = gt[:, 0, 0]
+        # calculate depth
+        depth = bg_depth.to(device)
+        for d in range(self.depth_levels - 1):
+            depth = depth*(1-mask[:, d]) + fg_depth[d].to(device)*mask[:, d]
+        depth = depth[:, 0, 0]
+        if self.single_wavelength:
+            depth = gray(depth)
         all_meas = torch.stack(all_meas)
         all_meas = einops.rearrange(all_meas, "n b c h w -> b n c h w")
         data[gt_key] = gt
         data[lq_key] = all_meas
-        data['depth'] = bg_depth.to(device)*(1-mask) + fg_depth.to(device) *mask  # depth map
-        data['depth'] = (data['depth'] - self.depth_min)/(self.depth_max - self.depth_min)
+        data['depth'] = depth
+        data['depth'] = (data['depth'] - self.depth_min)/(self.depth_max - self.depth_min) # normalize depth to 0-1
         data['mask'] = mask
         
         self.sample = data
@@ -339,19 +419,19 @@ class DFlatArrayDepth_model(BaseModel):
             psf_intensity = self.all_psf_intensity[i]
             for j in range(psf_intensity.shape[2]):
                 psf = psf_intensity[0,0,j].detach().cpu().numpy()
-                psf = crop_arr(psf, 64,64)
+                # psf = crop_arr(psf, 64,64)
                 if j in psfs.keys():
                     psfs[j].append(psf)
                 else:
                     psfs[j] = [psf]
         for k in psfs.keys():
-            is_fg = k < len(self.ps_locs)
-            image1 = einops.rearrange(np.stack(psfs[k]), '(n1 n2) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
+            depth_obj = k//len(self.ps_locs)
+            image1 = einops.rearrange(np.stack(psfs[k]), '(n2 n1) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
             image1 = np.stack([image1])
             image1 = image1/image1.max()
             image1 = np.clip(image1, 0, 1)
             ps_loc = self.ps_locs[k%len(self.ps_locs)]
-            log_image(self.opt, self.accelerator, image1, f"img{idx}_psfs_{k}_{'fg' if is_fg else 'bg'}_{ps_loc}", self.global_step)
+            log_image(self.opt, self.accelerator, image1, f"img{idx}_psfs_{k}_depth_{depth_obj}_{ps_loc}", self.global_step)
         
         if self.opt.val.patched:
             b,c,h,w = self.original_size[lq_key]
@@ -381,12 +461,16 @@ class DFlatArrayDepth_model(BaseModel):
         for i in range(len(gt)):
             idx += 1
             # save_images_as_zip(lq[i], self.opt.path.experiments_root, f'lq_{idx:04d}.zip')
-            lq_i = einops.rearrange(lq[i], '(n1 n2) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
+            lq_i = einops.rearrange(lq[i], '(n2 n1) c h w -> c (n2 h) (n1 w)', n1=self.array_size[0], n2=self.array_size[1])
+            lq_i /= lq_i.max()
             lq_i = np.stack([lq_i])
             lq_i = np.clip(lq_i, 0, 1)
             log_image(self.opt, self.accelerator, lq_i, f'lq_{idx:04d}', self.global_step)
 
             image1 = [gt[i], out[i], gt_depth[i]]
+            for j in range(len(image1)):
+                if image1[j].shape[0] == 1:
+                    image1[j] = einops.repeat(image1[j], '1 h w -> 3 h w')
             image1 = np.stack(image1)
             image1 = np.clip(image1, 0, 1)
             log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)

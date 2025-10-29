@@ -15,6 +15,7 @@ from torchvision.transforms import transforms
 
 from dataset import create_dataset
 from dataset.ZipDatasetWrapper import ZipDatasetWrapper
+from models.Diffusion.Diffusion_TwoInput_model import Diffusion_TwoInput_model
 from models.archs import define_network
 from models.archs.LKPN_arch import EfficientAffineConvolution
 from models.two_dataset_model import TwoDatasetBasemodel
@@ -24,224 +25,19 @@ from utils.loss import Loss
 from utils import log_image, log_metrics
 
 
-
-def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str, subfolder: str = "text_encoder"):
-    text_encoder_config = PretrainedConfig.from_pretrained(
-        pretrained_model_name_or_path, subfolder=subfolder, revision=revision
-    )
-    model_class = text_encoder_config.architectures[0]
-
-    if model_class == "CLIPTextModel":
-        from transformers import CLIPTextModel
-
-        return CLIPTextModel
-    elif model_class == "CLIPTextModelWithProjection":
-        from transformers import CLIPTextModelWithProjection
-
-        return CLIPTextModelWithProjection
-    else:
-        raise ValueError(f"{model_class} is not supported.")
-    
-
-# Adapted from pipelines.StableDiffusionXLPipeline.encode_prompt
-def encode_prompt(prompt_batch, text_encoders, tokenizers, proportion_empty_prompts, is_train=True):
-    prompt_embeds_list = []
-
-    captions = []
-    for caption in prompt_batch:
-        if random.random() < proportion_empty_prompts:
-            captions.append("")
-        elif isinstance(caption, str):
-            captions.append(caption)
-        elif isinstance(caption, (list, np.ndarray)):
-            # take a random caption if there are multiple
-            captions.append(random.choice(caption) if is_train else caption[0])
-
-    with torch.no_grad():
-        for tokenizer, text_encoder in zip(tokenizers, text_encoders):
-            text_inputs = tokenizer(
-                captions,
-                padding="max_length",
-                max_length=tokenizer.model_max_length,
-                truncation=True,
-                return_tensors="pt",
-            )
-            text_input_ids = text_inputs.input_ids
-            prompt_embeds = text_encoder(
-                text_input_ids.to(text_encoder.device),
-                output_hidden_states=True,
-            )
-
-            # We are only ALWAYS interested in the pooled output of the final text encoder
-            pooled_prompt_embeds = prompt_embeds[0]
-            prompt_embeds = prompt_embeds.hidden_states[-2]
-            bs_embed, seq_len, _ = prompt_embeds.shape
-            prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
-            prompt_embeds_list.append(prompt_embeds)
-
-    prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
-    pooled_prompt_embeds = pooled_prompt_embeds.view(bs_embed, -1)
-    return prompt_embeds, pooled_prompt_embeds
-
-# Here, we compute not just the text embeddings but also the additional embeddings
-# needed for the SD XL UNet to operate.
-def compute_embeddings(prompt_batch, accelerator, res, proportion_empty_prompts, text_encoders, tokenizers, is_train=True):
-    original_size = res
-    target_size = res
-    crops_coords_top_left = (0, 0)  # (args.crops_coords_top_left_h, args.crops_coords_top_left_w)
-
-    prompt_embeds, pooled_prompt_embeds = encode_prompt(
-        prompt_batch, text_encoders, tokenizers, proportion_empty_prompts, is_train
-    )
-    add_text_embeds = pooled_prompt_embeds
-
-    # Adapted from pipeline.StableDiffusionXLPipeline._get_add_time_ids
-    add_time_ids = list(original_size + crops_coords_top_left + target_size)
-    add_time_ids = torch.tensor([add_time_ids])
-
-    prompt_embeds = prompt_embeds.to(accelerator.device)
-    add_text_embeds = add_text_embeds.to(accelerator.device)
-    add_time_ids = add_time_ids.repeat(len(prompt_batch), 1)
-    add_time_ids = add_time_ids.to(accelerator.device, dtype=prompt_embeds.dtype)
-    unet_added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
-
-    return {"prompt_embeds": prompt_embeds, **unet_added_cond_kwargs}
-
-class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
+class DiffusionLKPN_TwoInput_model(Diffusion_TwoInput_model):
 
     def __init__(self, opt, logger):
         super(DiffusionLKPN_TwoInput_model, self).__init__(opt, logger)
-        # For mixed precision training we cast the text_encoder and vae weights to half-precision
-        # as these models are only used for inference, keeping weights in full precision is not required.
-        weight_dtype = torch.float32
-        if self.accelerator.mixed_precision == "fp16":
-            weight_dtype = torch.float16
-        elif self.accelerator.mixed_precision == "bf16":
-            weight_dtype = torch.bfloat16
-        self.weight_dtype = weight_dtype
-
-        pretrained_model_name_or_path = self.opt.pretrained_model_name_or_path
-        revision = self.opt.revision
-        variant = self.opt.variant
-        # Load the tokenizers
-        tokenizer_one = AutoTokenizer.from_pretrained(
-            pretrained_model_name_or_path,
-            subfolder="tokenizer",
-            revision=revision,
-            use_fast=False,
-        )
-        tokenizer_two = AutoTokenizer.from_pretrained(
-            pretrained_model_name_or_path,
-            subfolder="tokenizer_2",
-            revision=revision,
-            use_fast=False,
-        )
-
-        # import correct text encoder classes
-        text_encoder_cls_one = import_model_class_from_model_name_or_path(
-            pretrained_model_name_or_path, revision
-        )
-        text_encoder_cls_two = import_model_class_from_model_name_or_path(
-            pretrained_model_name_or_path, revision, subfolder="text_encoder_2"
-        )
-
-        # Load scheduler and models
-        noise_scheduler = EulerDiscreteScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
-        text_encoder_one = text_encoder_cls_one.from_pretrained(
-            pretrained_model_name_or_path, subfolder="text_encoder", revision=revision, variant=variant
-        )
-        text_encoder_two = text_encoder_cls_two.from_pretrained(
-            pretrained_model_name_or_path, subfolder="text_encoder_2", revision=revision, variant=variant
-        )
-
-        vae = AutoencoderKL.from_pretrained(
-            pretrained_model_name_or_path,
-            subfolder="vae",
-            revision=revision,
-            variant=variant,
-        )
-        unet = UNet2DConditionModel.from_pretrained(
-            pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant
-        )
-
-        # Create EMA for the unet.
-        if opt.use_ema:
-            self.ema_unet = EMAModel(unet.parameters(), model_cls=UNet2DConditionModel, model_config=unet.config)
-
-        t2iadapter_1 = T2IAdapter(
-            in_channels=4 * 2,
-            channels=(320, 640, 1280, 1280),
-            num_res_blocks=2,
-            downscale_factor=2,
-            adapter_type="full_adapter_xl",
-        )
-        t2iadapter_2 = T2IAdapter(
-            in_channels=4 * 2,
-            channels=(320, 640, 1280, 1280),
-            num_res_blocks=2,
-            downscale_factor=2,
-            adapter_type="full_adapter_xl",
-        )
-        # t2iadapter_1 = T2IAdapter(
-        #     in_channels=3 * 2,
-        #     channels=(320, 640, 1280, 1280),
-        #     num_res_blocks=2,
-        #     downscale_factor=16,
-        #     adapter_type="full_adapter_xl",
-        # )
-        # t2iadapter_2 = T2IAdapter(
-        #     in_channels=3 * 2,
-        #     channels=(320, 640, 1280, 1280),
-        #     num_res_blocks=2,
-        #     downscale_factor=16,
-        #     adapter_type="full_adapter_xl",
-        # )
-
+        
         lkpn_1 = define_network(opt.LKPN_network_1)
         lkpn_2 = define_network(opt.LKPN_network_2)
         self.eac = EfficientAffineConvolution(k=opt.LKPN_network_1.k)
         
-        text_encoder_one.requires_grad_(False)
-        text_encoder_two.requires_grad_(False)
-        vae.requires_grad_(False)
-
-        # Let's first compute all the embeddings so that we can free up the text encoders
-        # from memory.
-        text_encoders = [text_encoder_one, text_encoder_two]
-        tokenizers = [tokenizer_one, tokenizer_two]
-        compute_embeddings_fn = functools.partial(
-            compute_embeddings,
-            accelerator=self.accelerator,
-            res=tuple(opt.image_resolution),
-            proportion_empty_prompts=1,  # ALL empty prompts
-            text_encoders=text_encoders,
-            tokenizers=tokenizers,
-        )
-        embeds = compute_embeddings_fn(torch.tensor([0] * opt.train.batch_size))  # create 0 embedding for input
-        self.prompt_ids = embeds['prompt_embeds']
-        self.unet_added_conditions = {"text_embeds": embeds['text_embeds'], "time_ids": embeds['time_ids']}
-
-        # Delete text encoders
-        text_encoder_one.to('cpu')
-        text_encoder_two.to('cpu')
-        del text_encoder_one
-        del text_encoder_two
-
-        vae.to(self.accelerator.device)
-        
-        self.unet = unet
-        self.vae = vae
         self.lkpn_1 = lkpn_1
         self.lkpn_2 = lkpn_2
-        self.noise_scheduler = noise_scheduler
-        self.t2iadapter_1 = t2iadapter_1
-        self.t2iadapter_2 = t2iadapter_2
-        self.tokenizer_one = tokenizer_one
-        self.tokenizer_two = tokenizer_two
-        self.models = [unet, t2iadapter_1, t2iadapter_2, lkpn_1, lkpn_2]
-        if opt.use_ema:
-            self.ema_unet.to(self.accelerator.device)
-
+        self.models += [lkpn_1, lkpn_2]
+        
     def setup_optimizers(self):
         opt = self.opt.train.optim
 
@@ -276,17 +72,6 @@ class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
             self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2",], 
                        opt=self.opt.train if is_train else self.opt.val)
     
-    def get_sigmas(self, timesteps, n_dim=4, dtype=torch.float32):
-        sigmas = self.noise_scheduler.sigmas.to(device=self.accelerator.device, dtype=dtype)
-        schedule_timesteps = self.noise_scheduler.timesteps.to(self.accelerator.device)
-        timesteps = timesteps.to(self.accelerator.device)
-
-        step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-
-        sigma = sigmas[step_indices].flatten()
-        while len(sigma.shape) < n_dim:
-            sigma = sigma.unsqueeze(-1)
-        return sigma
 
     def optimize_parameters(self):
         gt_key = self.dataloader.dataset.gt_key
@@ -297,7 +82,8 @@ class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
         image_2 = einops.repeat(image_2, 'b 1 h w -> b c h w', c=3)
         
         gt_1 = self.sample[gt_key+"_1"]
-        gt_2 = self.sample[gt_key+"_2"]
+        gt_2 = self.sample[gt_key+"_2"] 
+        gt_2 = einops.repeat(gt_2, 'b 1 h w -> b c h w', c=3)
 
         # encode pixel values with batch size of at most 8 to avoid OOM
         gt_latents = []
@@ -306,8 +92,15 @@ class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
         gt_latents = torch.cat(gt_latents, dim=0)
         gt_latents = gt_latents * self.vae.config.scaling_factor
         gt_latents = gt_latents.to(self.weight_dtype)
+        
+        gt_latents_2 = []
+        for i in range(0, gt_2.shape[0], 8):
+            gt_latents_2.append(self.vae.encode(gt_2[i: i +8]).latent_dist.sample())
+        gt_latents_2 = torch.cat(gt_latents_2, dim=0)
+        gt_latents_2 = gt_latents_2 * self.vae.config.scaling_factor
+        gt_latents_2 = gt_latents_2.to(self.weight_dtype)
 
-         # Sample noise that we'll add to the latents
+        # Sample noise that we'll add to the latents
         noise = torch.randn_like(gt_latents)
         bsz = gt_latents.shape[0]
 
@@ -328,15 +121,25 @@ class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
 
         
         # get latents for img1 and img2
-        z_1 = self.vae.encode(image_1).latent_dist.sample() * self.vae.config.scaling_factor
-        z_2 = self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
-        
+        if self.preprocessing_space == 'pixel':
+            z_1 = image_1
+            z_2 = image_2
+            z_t = self.vae.decode(inp_noisy_latents / self.vae.config.scaling_factor, return_dict=False)[0]
+            z_0_1 = gt_1
+            z_0_2 = gt_2
+        else:
+            z_1 = self.vae.encode(image_1).latent_dist.sample() * self.vae.config.scaling_factor
+            z_2 = self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
+            z_t = inp_noisy_latents
+            z_0_1 = gt_latents
+            z_0_2 = gt_latents_2
+
         # calculate latent kernels
-        k_1 = self.lkpn_1(inp_noisy_latents, z_1, timesteps)
-        k_2 = self.lkpn_2(inp_noisy_latents, z_2, timesteps)
+        k_1 = self.lkpn_1(z_t, z_1, timesteps)
+        k_2 = self.lkpn_2(z_t, z_2, timesteps)
 
         # convolve latents with estimated kernels
-        batch_size, channels, height, width = inp_noisy_latents.shape
+        batch_size, channels, height, width = z_1.shape
         k_1 = k_1.view(batch_size, channels, self.lkpn_1.k, self.lkpn_1.k, height, width)
         k_2 = k_2.view(batch_size, channels, self.lkpn_2.k, self.lkpn_2.k, height, width)
         k_1 = k_1.permute(0, 1, 4, 5, 2, 3)
@@ -345,8 +148,8 @@ class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
         z_2_ref = self.eac(k_2, z_2)
 
         # LKPN loss
-        loss_lkpn = torch.mean(torch.nn.functional.mse_loss(z_1_ref, gt_latents))  # latent space loss 
-        loss_lkpn += torch.mean(torch.nn.functional.mse_loss(z_2_ref, gt_latents))  # latent space loss
+        loss_lkpn = torch.mean(torch.nn.functional.mse_loss(z_1_ref, z_0_1))  # latent space loss 
+        loss_lkpn += torch.mean(torch.nn.functional.mse_loss(z_2_ref, z_0_2))  # latent space loss
         # loss_lkpn += torch.mean(torch.nn.functional.mse_loss(self.vae.decode(z_1_ref / self.vae.config.scaling_factor).sample, gt_1))  # pixel space loss
         # loss_lkpn += torch.mean(torch.nn.functional.mse_loss(self.vae.decode(z_2_ref / self.vae.config.scaling_factor).sample, gt_1))  # pixel space loss
         loss_lkpn *= 1
@@ -437,6 +240,7 @@ class DiffusionLKPN_TwoInput_model(TwoDatasetBasemodel):
             noise_scheduler_tmp,
             use_1_as_start=self.opt.val.use_1_as_start,
             use_2_as_start=self.opt.val.use_2_as_start,
+            preprocessing_space=self.preprocessing_space
         )
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 

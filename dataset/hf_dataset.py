@@ -43,7 +43,7 @@ class HuggingFaceDataset(data.Dataset):
             keys_new = [key.replace("gt_key", gt_key) for key in keys_new]
             keys_new = [key.replace("lq_key", lq_key) for key in keys_new]
             
-            transform = get_dataset_util(transform_name, transform_opt)
+            transform = get_dataset_util(transform_name.split('--')[0], transform_opt)
             all_transforms.append(DictWrapper(transform, keys, keys_new))
         print("All transformations for the dataset ")
         for i, tr in enumerate(all_transforms):

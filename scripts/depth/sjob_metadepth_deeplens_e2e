@@ -1,0 +1,14 @@
+#!/bin/sh -l
+
+#SBATCH -p a100-80gb
+#SBATCH --mem 32G
+#SBATCH -n8
+#SBATCH -A stanchan
+#SBATCH --nodes=1 --gpus-per-node=1 
+#SBATCH --time=2-00:00:00
+#SBATCH --job-name deeplensmetadepth
+
+
+cd ../..
+conda activate mypackages
+accelerate launch trainer.py -opt ./checkpoints/DepthEstimation/DeepLensArrayDepthE2E.yml

@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-
+import einops
+from xformers.ops import memory_efficient_attention
 from transformers import PreTrainedModel, PretrainedConfig
 
 # A helper for time embedding, typically used in diffusion models
@@ -67,37 +68,151 @@ class ResBlock(nn.Module):
         
         return h + self.shortcut(x)
 
-# A self-attention layer for a 2D feature map
 class SelfAttention(nn.Module):
+    """
+    An optimized self-attention layer for 2D feature maps that uses xformers
+    for a highly memory-efficient and fast implementation.
+
+    This version leverages a pre-compiled kernel from the xformers library,
+    which is significantly more efficient than a manual PyTorch implementation
+    for high-resolution inputs.
+    """
     def __init__(self, channels):
+        """
+        Initializes the self-attention module.
+
+        Args:
+            channels (int): The number of input channels.
+        """
         super().__init__()
         self.channels = channels
         self.norm = nn.GroupNorm(8, channels)
+        
+        # A single 1x1 convolution to generate Query, Key, and Value tensors.
         self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1, bias=False)
         self.out = nn.Conv2d(channels, channels, kernel_size=1)
 
     def forward(self, x):
+        """
+        Performs the forward pass of the self-attention layer.
+
+        Args:
+            x (torch.Tensor): The input feature map with shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The output feature map with the same shape as x.
+        """
         batch, channels, height, width = x.shape
-        # Safety check for memory. The attention matrix will be (H*W)x(H*W)
-        if height * width > 128 * 128:  # This is a good heuristic for modern GPUs
-            raise RuntimeError(
-                f"Self-attention is too memory intensive for this resolution ({height}x{width})."
-                "Consider downsampling the features or using a more efficient attention variant."
-            )
-        # Normalize and create Query, Key, Value tensors
-        h = self.norm(x)
-        qkv = self.qkv(h).view(batch, channels * 3, -1)
-        q, k, v = torch.chunk(qkv, 3, dim=1)
-
-        # Scale dot-product attention
-        scale = self.channels ** -0.5
-        attn = torch.einsum('b c n, b c m -> b n m', q, k) * scale
-        attn = F.softmax(attn, dim=-1)
-        h = torch.einsum('b n m, b c m -> b c n', attn, v)
         
-        h = h.view(batch, channels, height, width)
-        h = self.out(h)
+        # 1. Normalize the input feature map.
+        h = self.norm(x)
+        
+        # 2. Project input to Q, K, and V tensors.
+        qkv = self.qkv(h)
+        
+        # Reshape to a sequence of tokens for the attention operation.
+        qkv = qkv.view(batch, channels * 3, -1).permute(0, 2, 1).contiguous().half() # B, N, 3C
 
+        # Split the combined QKV tensor into Q, K, and V.
+        q, k, v = torch.chunk(qkv, 3, dim=-1)
+
+        # 3. Use xformers' memory-efficient attention.
+        # This single function call handles scaling, softmax, and matrix multiplication
+        # in a highly optimized way, avoiding the large intermediate attention matrix.
+        h = memory_efficient_attention(q, k, v).float()
+        
+        # 4. Reshape the output back to the original 2D feature map dimensions.
+        h = h.permute(0, 2, 1).view(batch, channels, height, width)
+        
+        # 5. Apply the output convolution and add the residual connection.
+        h = self.out(h)
+        return h + x
+    
+
+class SelfAttentionWindowed(nn.Module):
+    """
+    An optimized self-attention layer for 2D feature maps that uses a windowed
+    approach combined with xformers' memory-efficient attention kernel.
+
+    This hybrid approach provides the best of both worlds:
+    1. It limits the attention to local windows, reducing complexity.
+    2. It uses a highly optimized C++/CUDA kernel from xformers for the
+       attention calculation itself, which is much faster than a manual
+       PyTorch implementation.
+    """
+    def __init__(self, channels, window_size=16):
+        """
+        Initializes the self-attention module.
+
+        Args:
+            channels (int): The number of input channels.
+            window_size (int): The size of the local window for attention.
+                               The image will be divided into non-overlapping
+                               windows of this size.
+        """
+        super().__init__()
+        self.channels = channels
+        self.window_size = window_size
+        self.norm = nn.GroupNorm(8, channels)
+        
+        # A single 1x1 convolution to generate Query, Key, and Value tensors.
+        self.qkv = nn.Conv2d(channels, channels * 3, kernel_size=1, bias=False)
+        self.out = nn.Conv2d(channels, channels, kernel_size=1)
+
+    def forward(self, x):
+        """
+        Performs the forward pass of the self-attention layer.
+
+        Args:
+            x (torch.Tensor): The input feature map with shape (B, C, H, W).
+
+        Returns:
+            torch.Tensor: The output feature map with the same shape as x.
+        """
+        batch, channels, height, width = x.shape
+        
+        # 1. Normalize the input feature map.
+        h = self.norm(x)
+
+        # 2. Reshape the tensor into non-overlapping windows.
+        # This creates a new dimension for the windows, allowing us to
+        # compute attention within each window independently.
+        h = einops.rearrange(
+            h,
+            'b c (h_w h) (w_w w) -> (b h_w w_w) c h w',
+            h=self.window_size,
+            w=self.window_size
+        )
+        
+        # 3. Generate Q, K, and V tensors and apply attention using xformers.
+        # The flattened window dimension acts as the batch dimension for xformers.
+        qkv = self.qkv(h)
+        
+        # Reshape for memory_efficient_attention, which expects shape (B, N, C)
+        qkv = qkv.view(qkv.shape[0], channels * 3, -1).permute(0, 2, 1).contiguous().half() # (num_windows, num_pixels_in_window, 3*channels)
+        q, k, v = torch.chunk(qkv, 3, dim=-1)
+
+        # Apply xformers' memory-efficient attention.
+        h = memory_efficient_attention(q, k, v).float() # (num_windows, num_pixels_in_window, channels)
+
+        # 4. Reshape the output back to the original dimensions.
+        h = h.permute(0, 2, 1).view(
+            batch,
+            height // self.window_size,
+            width // self.window_size,
+            channels,
+            self.window_size,
+            self.window_size
+        )
+        h = einops.rearrange(
+            h,
+            'b h_w w_w c h w -> b c (h_w h) (w_w w)',
+            h=self.window_size,
+            w=self.window_size
+        )
+        
+        # 5. Apply the output convolution and add the residual connection.
+        h = self.out(h)
         return h + x
 
 # The core building block of the UNet, combining ResBlock and SelfAttention
@@ -106,6 +221,7 @@ class UNetBlock(nn.Module):
         super().__init__()
         self.resblock = ResBlock(in_channels, out_channels, time_emb_dim)
         self.attention = SelfAttention(out_channels)
+        # self.attention = SelfAttentionWindowed(out_channels)
 
     def forward(self, x, time_emb):
         x = self.resblock(x, time_emb)

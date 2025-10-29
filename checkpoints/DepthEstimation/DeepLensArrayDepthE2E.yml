@@ -1,5 +1,5 @@
-name: SVD
-model_type: DFlatArrayDepth_model
+name: DeepLens
+model_type: DeepLensArrayE2E_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -7,41 +7,34 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-tracker_project_name: Dflat
-experiment_key: DFlatArrayDepth
+tracker_project_name: DeepLens
+experiment_key: DeepLensArrayDepthE2E
 
-dflat:
-  model_name: Nanocylinders_TiO2_U300H600
-  array_size: [5, 5]  # cols, rows
-  array_spacing: [!!float 2000e-6, !!float 2000e-6] # col, row spacing
-  downscale_factor: [1, 1]
-  h: 512
-  w: 512
-  in_dx_m: [!!float 3000e-9, !!float 3000e-9]
-  out_dx_m: [!!float 5000e-9, !!float 5000e-9]  # pixel pitch
-  pixel_dx_m: [!!float 1e-2, !!float 1e-2] # 1 pixel is 1cm (w) x 1cm (h) in real life. Is it a good assumption? Disregard this. We will assume objects as image. Thus size varies
+deeplens:
+  array_size: [3, 3]  # cols, rows
+  array_spacing: [!!float 0e-6, !!float 0e-6] # col, row spacing
+  lens_file: "/depot/chan129/users/harshana/svd_v2/checkpoints/DepthEstimation/a489_doe_ours.json"
+  single_wavelength: true
 
-  wavelength_set_m: [!!float 400e-9, !!float 550e-9, !!float 700e-9]
+  wavelength_set_m: [ !!float 550e-9] #[!!float 450e-9, !!float 550e-9, !!float 650e-9]  # B G R
   
-  out_distance_m: !!float 1e-2
-  initialization:
-    type: focusing_lens
-    depth_set_m: [!!float 500, !!float 500, !!float 500]
-    fshift_set_m: [[!!float 0.0, !!float 0.0],[!!float 0.0, !!float 0.0],[!!float 0.0, !!float 0.0]]
-  
+  out_distance_m: !!float 2.5e-3
+   
+  depth_levels: 4
+
   ps_locs:
-    # loc0: [-400e-6,-400e-6] # no Z value because we have variable depth
-    # loc1: [-400e-6, 0.0]
-    # loc2: [-400e-6, 400e-6]
-    # loc3: [0.0,-400e-6]
-    loc4: [0.0, 0.0]
-    # loc5: [0.0, 400e-6]
-    # loc6: [400e-6,-400e-6]
-    # loc7: [400e-6, 0.0]
-    # loc8: [400e-6, 400e-6]
+    # - [-400e-6,-400e-6] # no Z value because we have variable depth
+    # - [-400e-6, 0.0]
+    # - [-400e-6, 400e-6]
+    # - [0.0,-400e-6]
+    - [0.0, 0.0]
+    # - [0.0, 400e-6]
+    # - [400e-6,-400e-6]
+    # - [400e-6, 0.0]
+    # - [400e-6, 400e-6]
 
-  depth_min: !!float 500e-3
-  depth_max: !!float 5000e-3
+  depth_min: !!float 10e-3
+  depth_max: !!float 1000e-3
   
   
 datasets:
@@ -51,7 +44,7 @@ datasets:
     split: train
     trust_remote_code: true
 
-    use_shuffle: false
+    use_shuffle: true
     num_worker_per_gpu: 4
     gt_key: gt
     lq_key: blur
@@ -80,7 +73,7 @@ datasets:
     split: train
     trust_remote_code: true
 
-    use_shuffle: false
+    use_shuffle: true
     num_worker_per_gpu: 4
     gt_key: gt
     lq_key: blur
@@ -164,25 +157,24 @@ network:
   type: MSArrayIR
   img_channel: 3
   width: 96
-  enc_blk_nums: [1, 1, 28]
-  middle_blk_num: 1
-  dec_blk_nums: [1, 1, 1]
 
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/FinalModels/StructureDeblur/NAFNetRealMono 2025 02 07 02.21.30/
-  resume_from_checkpoint: ~
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/DeepLens/DeepLensArrayDepthE2E 2025 10 06 22.34.27/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
-  optimize_shape_param: true  # optimize MS shape parameters?
-
+  optimize_shape_param: false  # optimize MS shape parameters?
+  optimize_lens_param: false # optimize geolens parameters?
+  check_speed: false
+  
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 2e-4
+    learning_rate: !!float 5e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -190,7 +182,7 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
+    type: constant
     lr_warmup_steps: 500
     lr_num_cycles: 3
     lr_power: 1.0
@@ -198,11 +190,11 @@ train:
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 1
+  batch_size: 8
 
-  max_train_steps: 50000
-  validation_steps: 1000
-  checkpointing_steps: 1000
+  max_train_steps: 100000
+  validation_steps: 100
+  checkpointing_steps: 100
   checkpoints_total_limit: 2
 
   patched: false

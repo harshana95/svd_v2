@@ -1,5 +1,5 @@
-name: SVD_Real
-model_type: DiffusionLKPN_TwoInput_model
+name: MetaZoom
+model_type: OSEDiff_twodataset_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -7,23 +7,30 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+# pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1
+vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
+dape_path: ~ #/depot/chan129/users/harshana/svd_v2/DAPE.pth
 revision: ~
 variant: ~
 use_ema: false
 image_resolution: [512, 512]
-tracker_project_name: SVD_Real
-experiment_key: OursRealDiffusionDeblurSDXL
+tracker_project_name: MetaZoom
+experiment_key: MetaZoom_OSEDiff_olddata_hfloss
 dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+# dataset_1_name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
+# dataset_2_name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/5x/
+
+network:
 
 datasets:
   train1:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
     split: train
-    num_proc: 4
-    map_batch_size: 16
+    num_proc: 1
+    map_batch_size: 1
 
     use_shuffle: true
     num_worker_per_gpu: 4
@@ -34,13 +41,16 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
       rescale:
         factor: 0.5
-      select_channels:
-        channels: [True, True, True]
+      # select_channels:
+      #   channels: [True, True, True]
       rotate:
         angle: -90
       # identity:
@@ -48,16 +58,19 @@ datasets:
       #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
-      #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+      #   model_name: NAFNet_arch
+      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
 
   train2:
     type: HuggingFaceDataset
     name: ${dataset_2_name}
     split: train
-    num_proc: 4
-    map_batch_size: 16
+    num_proc: 1
+    map_batch_size: 1
 
     use_shuffle: true
     num_worker_per_gpu: 4
@@ -68,6 +81,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -82,15 +98,18 @@ datasets:
       #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
-      #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealMono 2025 03 03 12.50.50/Restormer_arch_1/
-
+      #   model_name: NAFNet_arch
+      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+      normalize:
+        mean: [0.5]
+        std: [0.5]
+        
   val1:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
     split: validation
-    num_proc: 4
+    num_proc: 1
+    map_batch_size: 1
 
     use_shuffle: false
     gt_key: gt
@@ -100,13 +119,16 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
       rescale:
         factor: 0.5
-      select_channels:
-       channels: [True, True, True]
+      # select_channels:
+      #  channels: [True, True, True]
       rotate:
         angle: -90
       # identity:
@@ -114,15 +136,18 @@ datasets:
       #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
-      #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+      #   model_name: NAFNet_arch
+      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
 
   val2:
     type: HuggingFaceDataset
     name: ${dataset_2_name}
     split: validation
-    num_proc: 4
+    num_proc: 1
+    map_batch_size: 1
 
     use_shuffle: false
     gt_key: gt
@@ -132,6 +157,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -146,38 +174,25 @@ datasets:
       #   keys_new: [refined]
       # apply_model:
       #   keys: [lq_key]
-      #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealMono 2025 03 03 12.50.50/Restormer_arch_1/
-
-# network structures
-network:
-
-LKPN_network_1:
-  type: LKPN
-  input_channels: 4
-  k: 5
-  time_emb_dim: 256
-
-LKPN_network_2:
-  type: LKPN
-  input_channels: 4
-  k: 5
-  time_emb_dim: 256
+      #   model_name: NAFNet_arch
+      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+      normalize:
+        mean: [0.5]
+        std: [0.5]
   
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/OursRealDiffusionDeblurSDXL 2025 09 09 01.03.10/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/SVD_Real/MetaZoom_OSEDiff_both_noLora 2025 10 04 11.52.20/
+  resume_from_checkpoint: ~ #latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 5e-5
+    learning_rate: !!float 10e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -186,8 +201,8 @@ train:
 
   scheduler:
     type: cosine_with_restarts
-    lr_warmup_steps: 500
-    lr_num_cycles: 10
+    lr_warmup_steps: 1500
+    lr_num_cycles: 5
     lr_power: 1.0
 
   loss: 1*MSE
@@ -195,14 +210,24 @@ train:
   num_train_epochs: 10
   batch_size: 1
 
-  max_train_steps: 500000
+  concatenate_images: true
+  use_image1: true
+  lora_finetune: true
+  use_hf_loss: true  
+  timestep: 999
+
+  lambda_l2: 1.0
+  lambda_lpips: 2.0
+  cfg_vsd: 7.5
+
+  max_train_steps: 100000
   validation_steps: 1000
   checkpointing_steps: 5000
   checkpoints_total_limit: 2
 
   patched: false
-  patch_size_h: 256
-  patch_size_w: 256
+  patch_size_h: 512
+  patch_size_w: 512
   patch_overlap: 0.2
   max_minibatch: 4
 
@@ -210,15 +235,13 @@ train:
 val:
   save_images: true
   batch_size: 1
+  num_inference_steps: 1
 
   patched: false
-  patch_size_h: 256
-  patch_size_w: 256
+  patch_size_h: 512
+  patch_size_w: 512
   patch_overlap: 0.2
   max_minibatch: 4
-
-  use_1_as_start: false
-  use_2_as_start: true
 
   metrics:
     psnr: # metric name, can be arbitrary

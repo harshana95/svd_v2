@@ -90,11 +90,13 @@ class DiffusionTwoImageLKPNPipeline(
             scheduler: KarrasDiffusionSchedulers,
             use_1_as_start=False,
             use_2_as_start=False,
+            preprocessing_space='pixel'
     ):
         super().__init__()
         assert not (use_1_as_start and use_2_as_start), "Can't start from both"
         self.use_1_as_start = use_1_as_start
         self.use_2_as_start = use_2_as_start
+        self.preprocessing_space = preprocessing_space
         self.register_modules(
             vae=vae,
             unet=unet,
@@ -240,6 +242,9 @@ class DiffusionTwoImageLKPNPipeline(
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
+        if self.preprocessing_space == 'pixel':
+            z_1 = image_1
+            z_2 = image_2
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
@@ -247,11 +252,15 @@ class DiffusionTwoImageLKPNPipeline(
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
                 
                 # calculate latent kernels
-                k_1 = self.lkpn_1(latent_model_input, z_1, torch.tensor([t]*batch_size, device=device))
-                k_2 = self.lkpn_2(latent_model_input, z_2, torch.tensor([t]*batch_size, device=device))
+                if self.preprocessing_space == 'pixel':
+                    z_t = self.vae.decode(latent_model_input / self.vae.config.scaling_factor, return_dict=False)[0]
+                else:
+                    z_t = latent_model_input
+                k_1 = self.lkpn_1(z_t, z_1, torch.tensor([t]*batch_size, device=device))
+                k_2 = self.lkpn_2(z_t, z_2, torch.tensor([t]*batch_size, device=device))
 
                 # convolve latents with estimated kernels
-                batch_size, channels, height, width = latent_model_input.shape
+                batch_size, channels, height, width = z_1.shape
                 k_1 = k_1.view(batch_size, channels, self.lkpn_1.k, self.lkpn_1.k, height, width)
                 k_2 = k_2.view(batch_size, channels, self.lkpn_2.k, self.lkpn_2.k, height, width)
                 k_1 = k_1.permute(0, 1, 4, 5, 2, 3)
@@ -292,8 +301,12 @@ class DiffusionTwoImageLKPNPipeline(
                         z_2_ref = z_2_ref.to(dtype)
 
                     step_outputs.append(self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0])
-                    predeblurring_1.append(self.vae.decode(z_1_ref / self.vae.config.scaling_factor, return_dict=False)[0])
-                    predeblurring_2.append(self.vae.decode(z_2_ref / self.vae.config.scaling_factor, return_dict=False)[0])
+                    if self.preprocessing_space == "latent":
+                        predeblurring_1.append(self.vae.decode(z_1_ref / self.vae.config.scaling_factor, return_dict=False)[0])
+                        predeblurring_2.append(self.vae.decode(z_2_ref / self.vae.config.scaling_factor, return_dict=False)[0])
+                    else:
+                        predeblurring_1.append(z_1_ref)
+                        predeblurring_2.append(z_2_ref)
                     # cast back to fp16 if needed
                     if needs_upcasting:
                         self.vae.to(dtype=torch.float16)
@@ -317,9 +330,11 @@ class DiffusionSingleImageLKPNPipeline(
             adapter1: Union[T2IAdapter, MultiAdapter, List[T2IAdapter]],
             scheduler: KarrasDiffusionSchedulers,
             use_1_as_start=False,
+            preprocessing_space='pixel'
     ):
         super().__init__()
         self.use_1_as_start = use_1_as_start
+        self.preprocessing_space = preprocessing_space
         self.register_modules(
             vae=vae,
             unet=unet,
@@ -455,6 +470,8 @@ class DiffusionSingleImageLKPNPipeline(
             # cast back to fp16 if needed
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
+        if self.preprocessing_space == 'pixel':
+            z_1 = image_1
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance
@@ -462,7 +479,11 @@ class DiffusionSingleImageLKPNPipeline(
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
                 
                 # calculate latent kernels
-                k_1 = self.lkpn(latent_model_input, z_1, torch.tensor([t]*batch_size, device=device))
+                if self.preprocessing_space == 'pixel':
+                    z_t = self.vae.decode(latent_model_input / self.vae.config.scaling_factor, return_dict=False)[0]
+                else:
+                    z_t = latent_model_input
+                k_1 = self.lkpn(z_t, z_1, torch.tensor([t]*batch_size, device=device))
 
                 # convolve latents with estimated kernels
                 batch_size, channels, height, width = latent_model_input.shape
@@ -501,7 +522,10 @@ class DiffusionSingleImageLKPNPipeline(
                         z_1_ref = z_1_ref.to(dtype)
 
                     step_outputs.append(self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0])
-                    predeblurring_1.append(self.vae.decode(z_1_ref / self.vae.config.scaling_factor, return_dict=False)[0])
+                    if self.preprocessing_space == "latent":
+                        predeblurring_1.append(self.vae.decode(z_1_ref / self.vae.config.scaling_factor, return_dict=False)[0])
+                    else:
+                        predeblurring_1.append(z_1_ref)
                     # cast back to fp16 if needed
                     if needs_upcasting:
                         self.vae.to(dtype=torch.float16)

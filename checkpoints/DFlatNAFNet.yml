@@ -138,7 +138,7 @@ train:
 # validation settings
 val:
   save_images: false
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2

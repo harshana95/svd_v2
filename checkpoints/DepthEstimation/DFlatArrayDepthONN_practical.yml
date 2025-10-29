@@ -97,7 +97,8 @@ depth_network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_checkpoint: ~
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaDepth/MSArrayDepthONN_practical 2025 09 09 17.57.03/
+  resume_from_checkpoint: latest
 
 # training settings
 train:

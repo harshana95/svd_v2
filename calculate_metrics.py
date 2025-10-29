@@ -5,10 +5,11 @@ import torch
 import matplotlib.pyplot as plt
 from torchvision import transforms
 from torchmetrics.image import PeakSignalNoiseRatio, FrechetInceptionDistance, LearnedPerceptualImagePatchSimilarity
+import numpy as np
+from skimage.exposure import match_histograms
 
 def load_images_from_folder(folder, image_size):
-    image_files = sorted([f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
-    print(image_files)
+    image_files = sorted([f for f in os.listdir(folder) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff'))])
     images = []
     for fname in image_files:
         img = Image.open(os.path.join(folder, fname)).convert('RGB')
@@ -31,8 +32,25 @@ def match_and_resize_images(gt_images, pred_images):
         matched_gt_images.append(gt_img)
         matched_pred_images.append(pred_img)
     return matched_gt_images, matched_pred_images
-def save_image_pairs(gt_images, pred_images, pred_folder):
 
+def match_colors_by_histogram(gt_image, pred_image):
+    """
+    Matches the colors of the predicted image to the ground truth image using histogram matching.
+    """
+    gt_array = np.array(gt_image)
+    pred_array = np.array(pred_image)
+    
+    # Check if images have the same shape
+    if gt_array.shape != pred_array.shape:
+        raise ValueError("Ground truth and predicted images must have the same dimensions for histogram matching.")
+    
+    matched_array = np.zeros_like(pred_array)
+    for i in range(3):  # Process each channel (R, G, B)
+        matched_array[:, :, i] = match_histograms(pred_array[:, :, i], gt_array[:, :, i])
+    
+    return Image.fromarray(matched_array.astype(np.uint8))
+
+def save_image_pairs(gt_images, pred_images, pred_folder):
     pairs_folder = os.path.join(pred_folder, "pairs")
     os.makedirs(pairs_folder, exist_ok=True)
     print(f"Saving pairs in {pairs_folder}")
@@ -65,10 +83,21 @@ def main(gt_folder, pred_folder, image_size, device='cuda'):
         transforms.ToTensor(),
     ])
 
-    gt_tensors = torch.stack([transform(img) for img in gt_images]).to(device)
-    pred_tensors = torch.stack([transform(img) for img in pred_images]).to(device)
+    # Perform color matching on predicted images
+    matched_pred_images = [match_colors_by_histogram(gt_img, pred_img) for gt_img, pred_img in zip(gt_images, pred_images)]
 
-    save_image_pairs(gt_tensors.cpu().numpy(), pred_tensors.cpu().numpy(), pred_folder)
+    gt_tensors = torch.stack([transform(img) for img in gt_images]).to(device)
+    matched_pred_tensors = torch.stack([transform(img) for img in matched_pred_images]).to(device)
+
+    save_image_pairs(gt_tensors.cpu().numpy(), matched_pred_tensors.cpu().numpy(), pred_folder)
+    os.makedirs(os.path.join(pred_folder, 'out'), exist_ok=True)
+    tmp = pred_folder
+    while os.path.basename(os.path.dirname(tmp)) != "Results":
+        tmp = os.path.dirname(tmp)
+    name = os.path.basename(tmp)
+    print(name)
+    for i in range(len(matched_pred_tensors)):
+        plt.imsave(os.path.join(pred_folder, 'out', f"{name}_{i + 1}.png"), matched_pred_tensors[i].cpu().numpy().transpose([1,2,0]))
 
     # PSNR
     psnr = PeakSignalNoiseRatio(data_range=1.0).to(device)
@@ -78,7 +107,7 @@ def main(gt_folder, pred_folder, image_size, device='cuda'):
     lpips = LearnedPerceptualImagePatchSimilarity(net_type='vgg').to(device)
     lpips_values = []
 
-    for gt_img, pred_img in zip(gt_images, pred_images):
+    for gt_img, pred_img in zip(gt_images, matched_pred_images):
         
         # Convert images to tensors
         gt_tensor = transform(gt_img).unsqueeze(0).to(device)
@@ -100,7 +129,7 @@ def main(gt_folder, pred_folder, image_size, device='cuda'):
     # FID (expects images in [0, 255] uint8, shape [N, 3, H, W])
     fid = FrechetInceptionDistance(feature=64).to(device) #, feature_extractor_weights_path="/depot/chan129/users/harshana/inception_v3_google-1a9a5a14.pth").to(device)
     gt_uint8 = (gt_tensors * 255).byte()
-    pred_uint8 = (pred_tensors * 255).byte()
+    pred_uint8 = (matched_pred_tensors * 255).byte()
     fid.update(gt_uint8, real=True)
     fid.update(pred_uint8, real=False)
     fid_value = fid.compute().item()

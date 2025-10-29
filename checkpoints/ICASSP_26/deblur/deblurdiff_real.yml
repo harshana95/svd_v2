@@ -8,6 +8,7 @@ seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+preprocessing_space: latent
 revision: ~
 variant: ~
 use_ema: false
@@ -34,6 +35,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -66,6 +70,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024

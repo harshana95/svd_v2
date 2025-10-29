@@ -1,0 +1,162 @@
+name: SVD_Real
+model_type: LKPN_SingleInput_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+preprocessing_space: latent
+revision: ~
+variant: ~
+use_ema: false
+image_resolution: [512, 512]
+tracker_project_name: SVD_Real
+experiment_key: Ex0.1_${preprocessing_space}
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+
+# network structures
+network:
+  type: LKPN
+  input_channels: 4
+  k: 5
+  time_emb_dim: 256
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: ${dataset_1_name}
+    split: train
+    num_proc: 4
+    map_batch_size: 16
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.5
+      select_channels:
+        channels: [True, True, True]
+      rotate:
+        angle: -90
+      identity:
+        keys: [lq_key]
+        keys_new: [refined]
+      # apply_model:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
+      #   model_name: Restormer_arch
+      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+
+  
+  val:
+    type: HuggingFaceDataset
+    name: ${dataset_1_name}
+    split: validation
+    num_proc: 4
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+    
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
+      crop:
+        h: 1024
+        w: 1024
+      rescale:
+        factor: 0.5
+      select_channels:
+       channels: [True, True, True]
+      rotate:
+        angle: -90
+      identity:
+        keys: [lq_key]
+        keys_new: [refined]
+      # apply_model:
+      #   keys: [lq_key]
+      #   keys_new: [refined]
+      #   model_name: Restormer_arch
+      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
+
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 10
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 32
+
+  max_train_steps: 500000
+  validation_steps: 1000
+  checkpointing_steps: 5000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+# validation settings
+val:
+  save_images: true
+  batch_size: 1
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+  use_1_as_start: false
+  use_2_as_start: false
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

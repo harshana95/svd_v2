@@ -300,6 +300,16 @@ def log_image(args, accelerator, formatted_images, name, step):
             tracker.writer.log_image(np.hstack(formatted_images), name=name, step=step, image_channels="first")
         else:
             raise Exception(f"image logging not implemented for {tracker.name}")
+def log_metric(accelerator, data, step):
+    for tracker in accelerator.trackers:
+        if tracker.name == "tensorboard":
+            raise NotImplementedError()
+        elif tracker.name == "wandb":
+            raise NotImplementedError()
+        elif tracker.name == "comet_ml":
+            tracker.writer.log_metrics(data, step=step)
+        else:
+            raise Exception(f"image logging not implemented for {tracker.name}")
 
 def log_metrics(img1, img2, metrics, accelerator, step, comment=""):
     ret = {}
@@ -321,15 +331,7 @@ def log_metrics(img1, img2, metrics, accelerator, step, comment=""):
         else:
             raise Exception(f"Unknown metric {metric}")
         ret[comment+metric]= out
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            raise NotImplementedError()
-        elif tracker.name == "wandb":
-            raise NotImplementedError()
-        elif tracker.name == "comet_ml":
-            tracker.writer.log_metrics(ret, step=step)
-        else:
-            raise Exception(f"image logging not implemented for {tracker.name}")
+    log_metric(accelerator, ret, step)
 
 def calculate_psnr(img1, img2, crop=30):
     mse = calculate_mse(img1*255, img2*255, crop=crop)

@@ -12,6 +12,7 @@ from dataset.ZipDatasetWrapper import ZipDatasetWrapper
 from models.DFlatModels.DFlatArrayDepth_model import DFlatArrayDepth_model
 from models.archs import define_network
 from models.archs.related.AdaBinsMonoDepth.unet_adaptive_bins import UnetAdaptiveBins
+from models.archs.related.MonoDepth2.monodepth2_arch import DepthDecoder, ResnetEncoder
 from utils.dataset_utils import crop_arr, grayscale, merge_patches
 from utils.image_utils import save_images_as_zip
 from utils.loss import Loss
@@ -62,6 +63,40 @@ class DFlatArrayDepthONN_model(DFlatArrayDepth_model):
                 self.kernels.append(kernels[key].to(self.accelerator.device))
             self.kernels = torch.cat(self.kernels, dim=0) #[:4]
             self.kernels = F.interpolate(self.kernels, scale_factor=depth_network_opt.get('rescale', 1), mode='nearest') #, align_corners=False)
+        elif depth_network_opt.type == "monodepth2":
+            # 1. Load pretrained ResNet encoder from monodepth2
+            loaded_dict_enc = torch.load(depth_network_opt.encoder_path, map_location='cpu')
+            loaded_dict_dec = torch.load(depth_network_opt.decoder_path, map_location='cpu')
+            self.feed_height = loaded_dict_enc['height']
+            self.feed_width = loaded_dict_enc['width']
+
+            encoder = ResnetEncoder(18, False)  # ResNet-18
+            # remove irrelevant keys
+            filtered_dict_enc = {k: v for k, v in loaded_dict_enc.items() if k in encoder.state_dict()}
+            encoder.load_state_dict(filtered_dict_enc)
+            encoder.eval()
+            encoder_copy = ResnetEncoder(18, False)
+            encoder_copy.load_state_dict(filtered_dict_enc)
+            encoder_copy.eval()
+
+            # Load decoder
+            depth_decoder = DepthDecoder(num_ch_enc=encoder.num_ch_enc, scales=range(4))
+            depth_decoder.load_state_dict(loaded_dict_dec)
+            depth_decoder.eval()
+            
+            encoder.requires_grad_(False)
+            encoder_copy.requires_grad_(False)
+            depth_decoder.requires_grad_(False)
+
+            encoder.encoder.conv1.requires_grad_(True)  # see if the conv1 changes its weights or the grads are back prop to shape params
+
+            self.encoder = encoder.to(self.accelerator.device)
+            self.decoder = depth_decoder.to(self.accelerator.device)
+
+            self.depth_model = torch.nn.Sequential(encoder_copy, depth_decoder)
+            self.depth_model = self.depth_model.to(self.accelerator.device)
+
+            print(f"Feed size {self.feed_height}x{self.feed_width}")
 
     def setup_dataloaders(self):
         # create train and validation dataloaders
@@ -137,21 +172,21 @@ class DFlatArrayDepthONN_model(DFlatArrayDepth_model):
 
             self.all_psf_intensity.append(psf_intensity)
 
-            # Need to pass inputs like
-            # psf has shape  [B P Z L H W]
-            # scene radiance [B P Z L H W]
-            # out shape      [B P Z L H W]
-            meas = self.renderer(psf_intensity, einops.rearrange(x, 'b c h w -> b 1 1 c h w'), rfft=True, crop_to_psf_dim=False)
-            meas = self.renderer.rgb_measurement(meas, np.array([self.wavelength_set_m[i%len(self.wavelength_set_m)]]), gamma=True, process='demosaic')
+            # # Need to pass inputs like
+            # # psf has shape  [B P Z L H W]
+            # # scene radiance [B P Z L H W]
+            # # out shape      [B P Z L H W]
+            # meas = self.renderer(psf_intensity, einops.rearrange(x, 'b c h w -> b 1 1 c h w'), rfft=True, crop_to_psf_dim=False)
+            # meas = self.renderer.rgb_measurement(meas, np.array([self.wavelength_set_m[i%len(self.wavelength_set_m)]]), gamma=True, process='demosaic')
 
-            assert torch.isnan(meas).sum() == 0, f'{torch.isnan(meas).sum()} Nan in meas'
-            meas = meas[:, 0, 0]  # no polarization
-            all_meas.append(meas)
+            # assert torch.isnan(meas).sum() == 0, f'{torch.isnan(meas).sum()} Nan in meas'
+            # meas = meas[:, 0, 0]  # no polarization
+            # all_meas.append(meas)
         
-        all_meas = torch.stack(all_meas)
-        all_meas = einops.rearrange(all_meas, "n b c h w -> b n c h w")
-        data[lq_key] = all_meas
-        data['depth'] = d  # depth map
+        # all_meas = torch.stack(all_meas)
+        # all_meas = einops.rearrange(all_meas, "n b c h w -> b n c h w")
+        # data[lq_key] = all_meas
+        # data['depth'] = d  # depth map
         
         self.sample = data
         if self.opt.train.patched:

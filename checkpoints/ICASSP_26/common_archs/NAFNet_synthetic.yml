@@ -183,7 +183,7 @@ train:
   checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
@@ -192,7 +192,7 @@ train:
 # validation settings
 val:
   save_images: true
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2

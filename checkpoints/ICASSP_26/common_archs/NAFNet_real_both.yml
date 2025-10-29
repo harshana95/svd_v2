@@ -29,6 +29,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -63,6 +66,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -95,6 +101,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -127,6 +136,9 @@ datasets:
     common_transforms_keys: [gt, blur]
     transforms:
       to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
         h: 1024
         w: 1024
@@ -191,7 +203,7 @@ train:
   checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2
@@ -200,7 +212,7 @@ train:
 # validation settings
 val:
   save_images: true
-  patched: true
+  patched: false
   patch_size_h: 256
   patch_size_w: 256
   patch_overlap: 0.2

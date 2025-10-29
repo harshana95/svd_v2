@@ -1,0 +1,18 @@
+#!/bin/sh -l
+# FILENAME:  sjob1
+
+#SBATCH -p a100-80gb
+#SBATCH --mem 32G
+#SBATCH -n32
+#SBATCH -A stanchan
+#SBATCH --nodes=1 --gpus-per-node=1 
+#SBATCH --time=8:00:00
+#SBATCH --job-name nafnet_color
+
+
+cd ../..
+conda activate mypackages
+accelerate launch trainer.py -opt ./checkpoints/MetaZoom/NAFNet_real_color.yml &
+accelerate launch trainer.py -opt ./checkpoints/MetaZoom/NAFNet_real_mono.yml &
+accelerate launch trainer.py -opt ./checkpoints/MetaZoom/NAFNet_real_both.yml &
+wait

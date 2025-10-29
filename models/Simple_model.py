@@ -79,7 +79,7 @@ class Simple_model(BaseModel):
             lq = self.sample[lq_key]
             gt = self.sample[gt_key]
             out = self.net_g(lq)
-
+            
         lq = lq.cpu().numpy()
         gt = gt.cpu().numpy()
         out = out.cpu().numpy()

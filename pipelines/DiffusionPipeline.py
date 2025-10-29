@@ -87,11 +87,13 @@ class DiffusionTwoImagePipeline(
             scheduler: KarrasDiffusionSchedulers,
             use_1_as_start=False,
             use_2_as_start=False,
+            preprocessing_space='pixel'
     ):
         super().__init__()
         assert not (use_1_as_start and use_2_as_start), "Can't start from both"
         self.use_1_as_start = use_1_as_start
         self.use_2_as_start = use_2_as_start
+        self.preprocessing_space = preprocessing_space
         self.register_modules(
             vae=vae,
             unet=unet,
@@ -223,8 +225,19 @@ class DiffusionTwoImagePipeline(
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
         # 7. Prepare added time ids & embeddings & adapter features
-        adapter_state1 = self.adapter1(torch.cat([image_1, refined_1], dim=-3))
-        adapter_state2 = self.adapter2(torch.cat([image_2, refined_2], dim=-3))
+        if self.preprocessing_space == 'pixel':
+            adapter1_input = torch.cat([image_1, refined_1], dim=-3)
+            adapter2_input = torch.cat([image_2, refined_2], dim=-3)
+            print(f"{'='*50} PIXEL SPACE")
+        else:
+            z_1 = self.vae.encode(image_1).latent_dist.sample() * self.vae.config.scaling_factor
+            z_2 = self.vae.encode(image_2).latent_dist.sample() * self.vae.config.scaling_factor
+            r_1 = self.vae.encode(refined_1).latent_dist.sample() * self.vae.config.scaling_factor
+            r_2 = self.vae.encode(refined_2).latent_dist.sample() * self.vae.config.scaling_factor
+            adapter1_input = torch.cat([z_1, r_1], dim=-3)
+            adapter2_input = torch.cat([z_2, r_2], dim=-3)
+        adapter_state1 = self.adapter1(adapter1_input)
+        adapter_state2 = self.adapter2(adapter2_input)
         adapter_state = []
         for i in range(len(adapter_state1)):
             adapter_state.append((adapter_state1[i] * adapter_state2[i]) * adapter_conditioning_scale)

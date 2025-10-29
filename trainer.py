@@ -49,5 +49,6 @@ if __name__ == '__main__':
             opt['name'] = 'test'
             opt['tracker_project_name'] = 'test'
         opt.test = args.test
+    opt.opt_path = args.opt
     
     main(opt)

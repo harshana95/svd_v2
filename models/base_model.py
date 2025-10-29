@@ -26,6 +26,8 @@ from utils.misc import find_attr, scandir
 from models.archs import _arch_modules
 from dataset import create_dataset
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
 def save_model_hook(models, weights, output_dir):
     i = len(weights) - 1
@@ -57,9 +59,12 @@ def load_model_hook(models, input_dir):
             c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
         
         # load diffusers style into model
-        load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
-        model.load_state_dict(load_model.state_dict())
-        del load_model
+        try:
+            load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
+            model.load_state_dict(load_model.state_dict())
+            del load_model
+        except:
+            print(f"{'='*50} Failed to load {class_name} {'='*50}")
 
 class BaseModel():
     """Base model."""
@@ -71,8 +76,8 @@ class BaseModel():
         self.opt = opt
         self.logger = logger
         
-        self.accelerator.register_save_state_pre_hook(save_model_hook)
-        self.accelerator.register_load_state_pre_hook(load_model_hook)
+        self.save_handle = self.accelerator.register_save_state_pre_hook(save_model_hook)
+        self.load_handle = self.accelerator.register_load_state_pre_hook(load_model_hook)
         self.device = torch.device('cuda' if opt['num_gpu'] != 0 else 'cpu')
         self.is_train = opt['is_train']
         self.schedulers = []
@@ -117,6 +122,7 @@ class BaseModel():
                 try:
                     tracker.writer.set_name(self.experiment_name)
                     tracker.writer.log_parameters(self.opt)
+                    tracker.writer.log_asset(self.opt.opt_path, file_name="config.yml", overwrite=True)
                 except:
                     pass
         self.trackers_initialized = True
@@ -124,8 +130,8 @@ class BaseModel():
     def check_model_speed(self):
         iters = len(self.dataloader)
         wait = 1
-        warmup = 2
-        active = 5
+        warmup = 1
+        active = 1
         repeat = 1
         n = (wait + warmup + active) * repeat
         start = torch.cuda.Event(enable_timing=True)
@@ -141,7 +147,7 @@ class BaseModel():
                 profile_memory=True,
                 with_stack=True
         ) as prof:
-            pbar = tqdm(total=n*3, desc='Profiling ')
+            pbar = tqdm(total=n, desc='Profiling ')
             for i_batch, sample_batched in enumerate(self.dataloader):
                 # for _ in range(n):
                 start.record()
@@ -162,7 +168,7 @@ class BaseModel():
                     t.append(start.elapsed_time(end))
                     prof.step()
                 pbar.update()
-                if i_batch > n * 3:
+                if i_batch > n:
                     break
             pbar.close()
             print(f"Saved profiler to {os.path.join(exp_root, self.opt.path.logging_dir)}")    
@@ -394,11 +400,14 @@ class BaseModel():
             else:
                 self.accelerator.print(f"Resuming from checkpoint {path}")
                 load_path = os.path.join(self.opt.path.resume_from_path, path)
-                self.accelerator.load_state(load_path)
+                try:
+                    self.accelerator.load_state(load_path)
+                except Exception as e:
+                    print(f" {'='*50} Failed to load state {e}")
                 self.load_other_parameters(load_path)
                 self.global_step = int(path.split("-")[1])
 
-                initial_global_step = self.global_step
+                initial_global_step = self.global_step-1
                 first_epoch = self.global_step // self.num_update_steps_per_epoch
         else:
             initial_global_step = 0
@@ -426,7 +435,7 @@ class BaseModel():
                                     keep_last_checkpoints(self.opt.path.experiments_root, self.opt.train.checkpoints_total_limit, self.logger)
 
                                 save_path = os.path.join(self.opt.path.experiments_root, f"checkpoint-{self.global_step}")
-                                self.accelerator.save_state(save_path)
+                                self.accelerator.save_state(save_path, save_optimizer=False)
                                 self.save_other_parameters(save_path)
                                 self.logger.info(f"Saved state to {save_path}")
 
