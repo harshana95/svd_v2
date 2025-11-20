@@ -5,7 +5,7 @@
 #SBATCH -n32
 #SBATCH -A stanchan
 #SBATCH --nodes=1 --gpus-per-node=1 
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --job-name osediff
 
 

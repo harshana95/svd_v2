@@ -1,0 +1,142 @@
+name: SR
+model_type: OSEDiff_onedataset_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+# pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1
+vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
+dape_path: ~ #/depot/chan129/users/harshana/svd_v2/DAPE.pth
+revision: ~
+variant: ~
+use_ema: false
+image_resolution: [256, 256]
+tracker_project_name: SR
+experiment_key: RealSR
+network:
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/RealSR_V3/
+    split: train
+    num_proc: 1
+    map_batch_size: 1
+    trust_remote_code: true
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: hr
+    lq_key: lr
+
+    common_transforms_keys: [hr, lr]
+    transforms:
+      to_tensor:
+      rescale:
+        keys: [lq_key]
+        factor: 4
+
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/RealSR_V3/
+    split: validation
+    num_proc: 1
+    map_batch_size: 1
+    trust_remote_code: true
+
+    use_shuffle: false
+    gt_key: hr
+    lq_key: lr
+    
+    common_transforms_keys: [hr, lr]
+    transforms:
+      to_tensor:
+      rescale:
+        keys: [lq_key]
+        factor: 4
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/SR/RealSR 2025 11 12 15.44.40/
+  resume_from_checkpoint: latest
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 10e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 50
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  concatenate_images: false
+  use_image1: true
+  lora_finetune: true
+  use_hf_loss: true
+  use_adapter: false
+  adapter_in_channels: 1
+
+  timestep: 999
+
+  lambda_l2: 1.0
+  lambda_lpips: 2.0
+  cfg_vsd: 7.5
+
+  max_train_steps: 20000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: true
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+# validation settings
+val:
+  save_images: true
+  batch_size: 1
+  num_inference_steps: 1
+  max_val_steps: 5
+
+  patched: true
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

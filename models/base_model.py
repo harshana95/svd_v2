@@ -52,19 +52,20 @@ def load_model_hook(models, input_dir):
         print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
         try:
             c = find_attr(_arch_modules, class_name)
-            assert c is not None
         except ValueError as e:  # class is not written by us. Try to load from diffusers
             print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
             m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
             c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
         
+        assert c is not None
+        assert c.config_class is not None
         # load diffusers style into model
         try:
             load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
             model.load_state_dict(load_model.state_dict())
             del load_model
-        except:
-            print(f"{'='*50} Failed to load {class_name} {'='*50}")
+        except Exception as e:
+            print(f"{'='*50} Failed to load {class_name} {'='*50} {e} {c} {model}")
 
 class BaseModel():
     """Base model."""
@@ -85,6 +86,7 @@ class BaseModel():
         self.models = []
         self.overrode_max_train_steps = False
         self.global_step = 0
+        self.max_val_steps = opt.val.get('max_val_steps', 1000)
 
         # enable disable dataset caching
         if opt.dataset_caching or opt.dataset_caching is None:
@@ -400,10 +402,10 @@ class BaseModel():
             else:
                 self.accelerator.print(f"Resuming from checkpoint {path}")
                 load_path = os.path.join(self.opt.path.resume_from_path, path)
-                try:
-                    self.accelerator.load_state(load_path)
-                except Exception as e:
-                    print(f" {'='*50} Failed to load state {e}")
+                # try:
+                self.accelerator.load_state(load_path)
+                # except Exception as e:
+                #     print(f" {'='*50} Failed to load state {e}")
                 self.load_other_parameters(load_path)
                 self.global_step = int(path.split("-")[1])
 
@@ -515,7 +517,8 @@ class BaseModel():
         # self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
             idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
-            
+            if idx > self.max_val_steps:
+                break
 
         for model in self.models:
             model.train()

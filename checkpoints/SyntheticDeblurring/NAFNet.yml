@@ -1,0 +1,164 @@
+name: SVD_synthetic
+model_type: SimpleSynthetic_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: SVD_synthetic
+experiment_key: NAFNetSynthetic
+
+# network structures
+network:
+  type: NAFNet
+  in_channels: 3
+  out_channels: 3
+  width: 32
+  enc_blk_nums: [1, 1, 1, 28]
+  middle_blk_num: 1
+  dec_blk_nums: [1, 1, 1, 1]
+
+deeplens:
+  lens_file: "/depot/chan129/users/harshana/svd_v2/lenses/thorlabs/acl12708u.json"
+  single_wavelength: false
+  spp: 100000
+  kernel_size: 64
+
+  wavelength_set_m: [!!float 450e-9, !!float 550e-9, !!float 650e-9]  # B G R
+
+  fov: !!float 0.015  # field of view in meters
+
+  depth_min: !!float 400e-3
+  depth_max: !!float 20000e-3
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: train
+    num_proc: 1
+    map_batch_size: 16
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rotate:
+        angle: -90
+      rescale:
+        factor: 0.25
+      select_channels:
+       channels: [False, True, False]
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+
+  val:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: validation
+    num_proc: 1
+    map_batch_size: 16
+    
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 1024
+        w: 1024
+      rotate:
+        angle: -90
+      rescale:
+        factor: 0.25
+      # poisson_noise:
+      #   keys: [lq_key]
+      #   peak: 1000
+      #   peak_dc: 50
+      # gaussian_noise:
+      #   keys: [lq_key]
+      #   max_sigma: 0.02
+      #   sigma_dc: 0.005
+      #   mu: 0
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 16
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+# validation settings
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

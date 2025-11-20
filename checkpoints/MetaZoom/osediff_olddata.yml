@@ -184,8 +184,8 @@ datasets:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/SVD_Real/MetaZoom_OSEDiff_both_noLora 2025 10 04 11.52.20/
-  resume_from_checkpoint: ~ #latest
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_hfloss 2025 10 29 20.34.07/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
@@ -200,7 +200,7 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
+    type: constant
     lr_warmup_steps: 1500
     lr_num_cycles: 5
     lr_power: 1.0
@@ -213,14 +213,17 @@ train:
   concatenate_images: true
   use_image1: true
   lora_finetune: true
-  use_hf_loss: true  
+  use_hf_loss: true
+  use_adapter: true
+  adapter_in_channels: 1
+
   timestep: 999
 
   lambda_l2: 1.0
   lambda_lpips: 2.0
   cfg_vsd: 7.5
 
-  max_train_steps: 100000
+  max_train_steps: 500000
   validation_steps: 1000
   checkpointing_steps: 5000
   checkpoints_total_limit: 2

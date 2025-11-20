@@ -1,0 +1,114 @@
+name: PSF
+model_type: PSF_Emb_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: PSF
+experiment_key: DeepLens_PSF_interpolation
+
+deeplens:
+  lens_file: "/depot/chan129/users/harshana/svd_v2/lenses/thorlabs/acl12708u.json"
+  single_wavelength: false
+  spp: 100000
+  kernel_size: 64
+
+  wavelength_set_m: [!!float 450e-9, !!float 550e-9, !!float 650e-9]  # B G R
+
+  fov: !!float 0.015  # field of view in meters
+
+  depth_min: !!float 400e-3
+  depth_max: !!float 20000e-3
+  
+  
+datasets:
+  train:
+    type: DummyDataset
+    size: 1024
+    use_shuffle: true
+    
+  val:
+    type: DummyDataset
+    size: 16
+    use_shuffle: false
+    
+# network structures
+# network:
+#   type: PSF_MLP
+#   in_features: 4
+#   kernel_size: ${deeplens.kernel_size}
+#   hidden_features: 64
+#   hidden_layers: 3
+
+network:
+  type: PSF_Emb
+  in_channel: 3
+  out_channel: 3
+  width: 16 
+  enc_blk_nums: [1, 1, 1, 1]
+  middle_blk_num: 1
+  dec_blk_nums: [1, 1, 1, 1]
+  t_dim: 4
+  
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/PSF/DeepLens_PSF_interpolation 2025 11 06 22.07.22/
+  resume_from_checkpoint: latest
+
+# training settings
+train:
+  optimize_shape_param: true  # optimize MS shape parameters?
+  check_speed: false
+  
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 2e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 150
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 16
+
+  max_train_steps: 100000
+  validation_steps: 1000
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+# validation settings
+val:
+  save_images: false
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 4
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

@@ -9,11 +9,12 @@ class DummyDataset(data.Dataset):
     def __init__(self, opt):
         self.opt = opt
         self.len = opt['size']
+        self.key = 'x'
         
     def __len__(self):
         return self.len
 
     def __getitem__(self, idx):
-        return idx
+        return {self.key: idx}
 
     
