@@ -8,7 +8,7 @@ seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 # pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
-pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1
+pretrained_model_name_or_path: Manojb/stable-diffusion-2-1-base
 vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
 dape_path: ~ #/depot/chan129/users/harshana/svd_v2/DAPE.pth
 revision: ~
@@ -16,25 +16,28 @@ variant: ~
 use_ema: false
 image_resolution: [512, 512]
 tracker_project_name: QIS
-experiment_key: QIS_OSEDiff
+experiment_key: CMOS_OSEDiff
 
 network:
 
 datasets:
   train:
-    type: QIS_image_dataset
-    data_path: /depot/chan129/users/harshana/Datasets/Deconvolution/Flickr2K/Flickr2K_HR/
-    split: [0, 0.995]
+    type: CMOS_image_dataset
+    data_path: /depot/chan129/users/pchennur/datasets/train_all_lolblur/train/low_blur/
+    hq_folder_path: /depot/chan129/users/pchennur/datasets/train_all_lolblur/train/high_sharp_original/
+    split: [0.0, 1.0]
     split_type: train
-    patch_size: 1024
+    patch_size: -1
     sensor_params:
-      avg_PPP: 3.25
-      QE: 0.8
-      theta_dark: 1.6
-      sigma_read: 0.2
+      lux: 0.1
+      pixel_size: 2
+      exp_time: 0.125
+      QE: 0.6
+      theta_dark: 26
+      sigma_read: 3
       clicks_per_frame: 1
-      Nbits: 3
-      fwc: 200
+      Nbits: 10
+      fwc: 8000
 
     num_proc: 1
     map_batch_size: 1
@@ -46,19 +49,22 @@ datasets:
 
  
   val:
-    type: QIS_image_dataset
-    data_path: /depot/chan129/users/harshana/Datasets/Deconvolution/Flickr2K/Flickr2K_HR/
-    split: [0.995, 1.0]
+    type: CMOS_image_dataset
+    data_path: /depot/chan129/users/pchennur/datasets/test_lolblur/low_blur/
+    hq_folder_path: /depot/chan129/users/pchennur/datasets/test_lolblur/high_sharp_original/
+    split: [0.0, 1.0]
     split_type: val
-    patch_size: 1024
+    patch_size: -1
     sensor_params:
-      avg_PPP: 3.25
-      QE: 0.8
-      theta_dark: 1.6
-      sigma_read: 0.2
+      lux: 0.1
+      pixel_size: 2
+      exp_time: 0.125
+      QE: 0.6
+      theta_dark: 26
+      sigma_read: 3
       clicks_per_frame: 1
-      Nbits: 3
-      fwc: 200
+      Nbits: 10
+      fwc: 8000
 
     num_proc: 1
     map_batch_size: 1
@@ -80,7 +86,7 @@ train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 10e-5
+    learning_rate: !!float 5e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -88,8 +94,8 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: constant
-    lr_warmup_steps: 50
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
     lr_num_cycles: 1
     lr_power: 1.0
 
@@ -102,6 +108,8 @@ train:
   use_image1: true
   lora_finetune: true
   use_hf_loss: false
+  lambda_kl: 1.0
+
   timestep: 999
 
   lambda_l2: 1.0
@@ -113,7 +121,7 @@ train:
   checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
-  patched: false
+  patched: true
   patch_size_h: 512
   patch_size_w: 512
   patch_overlap: 0.2
@@ -125,7 +133,7 @@ val:
   batch_size: 1
   num_inference_steps: 1
 
-  patched: false
+  patched: true
   patch_size_h: 512
   patch_size_w: 512
   patch_overlap: 0.2

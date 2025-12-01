@@ -56,8 +56,6 @@ datasets:
         angle: -90
       rescale:
         factor: 0.25
-      select_channels:
-       channels: [False, True, False]
       # poisson_noise:
       #   keys: [lq_key]
       #   peak: 1000
@@ -134,7 +132,7 @@ train:
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 16
+  batch_size: 4
 
   max_train_steps: 50000
   validation_steps: 1000

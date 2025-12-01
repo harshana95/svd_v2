@@ -312,3 +312,29 @@ class PSF_Emb_arch(PreTrainedModel):
 
     def decode(self, latents, emb):
         return self.model.decode(latents, emb)
+
+
+class Coord_Transform_config(PretrainedConfig):
+    model_type = "Coord_Transform_arch"
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+class Coord_Transform_arch(PreTrainedModel):
+    config_class = Coord_Transform_config
+    
+    def __init__(self, config):
+        super().__init__(config)
+        self.c = config.in_channel
+        self.outc = config.out_channel
+        c = config.in_channel
+        self.trans_modules = nn.Sequential(
+            nn.Linear(c, 2*c),
+            nn.SiLU(),
+            nn.Linear(2*c, 4*c),
+            nn.SiLU(),
+            nn.Linear(4*c, config.out_channel*4*4)
+        )
+    
+    def forward(self, x):
+        emb = timestep_embedding(x, self.c//x.shape[-1])
+        return self.trans_modules(emb).view(-1, self.outc, 4, 4)

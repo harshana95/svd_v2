@@ -19,7 +19,7 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.models.attention_processor import AttnProcessor2_0, XFormersAttnProcessor, LoRAXFormersAttnProcessor, \
     LoRAAttnProcessor2_0
 
-def preprocess_adapter_input(image):
+def hpf_adapter_input(image):
     # use a HPF to extract high-frequency components
     r = 15  # radius of the low-frequency center to be removed
     b, c, h, w = image.shape
@@ -56,6 +56,8 @@ class OSEDiffPipeline(
             unet,
             scheduler: KarrasDiffusionSchedulers,
             adapter: Optional[T2IAdapter] = None,
+            adapter_preprocess=None,
+            concatenate_images=False,
     ):
         super().__init__()
         self.register_modules(
@@ -64,6 +66,10 @@ class OSEDiffPipeline(
             scheduler=scheduler,
             adapter=adapter,
         )
+        self.concatenate_images=concatenate_images
+        self.adapter_preprocess=adapter_preprocess
+        if self.adapter_preprocess is None:
+            self.adapter_preprocess = lambda x: x
         self.register_to_config()
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
@@ -84,12 +90,10 @@ class OSEDiffPipeline(
         t = timesteps[0]
         batch_size = image_1.shape[0]
         device = image_1.device #self._execution_device
-        if image_2 is not None:
-            if image_2.shape[1] == 3:
-                image_2 = image_2[:, 1:2]
+        vae_input = image_1
+        if image_2 is not None and self.concatenate_images:
             vae_input = torch.cat([image_1, image_2], dim=1)
-        else:
-            vae_input = image_1
+
         height, width = image_1.shape[-2:]
         
         # get latents
@@ -100,9 +104,9 @@ class OSEDiffPipeline(
         # latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
         if self.adapter is not None:
             if image_2 is not None:
-                down_block_additional_residuals = self.adapter(preprocess_adapter_input(image_2))
+                down_block_additional_residuals = self.adapter(self.adapter_preprocess(image_2))
             else:
-                down_block_additional_residuals = self.adapter(preprocess_adapter_input(image_1))
+                down_block_additional_residuals = self.adapter(self.adapter_preprocess(image_1))
         else:
             down_block_additional_residuals = None
 

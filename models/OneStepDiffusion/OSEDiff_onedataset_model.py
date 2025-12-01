@@ -47,8 +47,11 @@ def load_model_hook(models, input_dir):
         for file_path in glob.glob(os.path.join(folder, "*.safetensors")):
             state_dict_part = load_file(file_path)
             combined_state_dict.update(state_dict_part)
-
-        model.load_state_dict(combined_state_dict)
+        try:
+            model.load_state_dict(combined_state_dict)
+        except Exception as e:
+            print(f"{'='*50} Failed to load {class_name} {'='*50} {model} {e}")
+        
         # load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
         # model.load_state_dict(load_model.state_dict())
         # del load_model
@@ -75,7 +78,8 @@ def initialize_unet(unet):
     lora_conf_others = LoraConfig(r=4, init_lora_weights="gaussian",target_modules=l_modules_others)
     unet.add_adapter(lora_conf_encoder, adapter_name="default_encoder")
     unet.add_adapter(lora_conf_decoder, adapter_name="default_decoder")
-    unet.add_adapter(lora_conf_others, adapter_name="default_others")        
+    unet.add_adapter(lora_conf_others, adapter_name="default_others")
+    unet.set_adapter(['default_encoder', 'default_decoder', 'default_others'])  
     return unet
 
 def initialize_vae(vae):
@@ -92,6 +96,7 @@ def initialize_vae(vae):
     
     lora_conf_encoder = LoraConfig(r=4, init_lora_weights="gaussian",target_modules=l_target_modules_encoder)
     vae.add_adapter(lora_conf_encoder, adapter_name="default_encoder")
+    vae.set_adapter(['default_encoder'])
     return vae
 
 def get_caption_generator(model_path, **kwargs):
@@ -172,6 +177,7 @@ class OSEDiff_onedataset_model(BaseModel):
 
         self.lambda_l2 = self.opt.train.lambda_l2
         self.lambda_lpips = self.opt.train.lambda_lpips
+        self.lambda_kl = self.opt.train.get('lambda_kl', 1.0)
         self.cfg_vsd = self.opt.train.cfg_vsd
 
         self.net_lpips = lpips.LPIPS(net='vgg').cuda()
@@ -328,7 +334,18 @@ class OSEDiff_onedataset_model(BaseModel):
         # loss data
         loss_l2 = F.mse_loss(output_image.float(), gt_1.float(), reduction="mean") * self.lambda_l2
         loss_lpips = self.net_lpips(output_image.float(), gt_1.float()).mean() * self.lambda_lpips
-        loss_data = loss_l2 + loss_lpips
+        loss_data = self.lambda_l2*loss_l2 + self.lambda_lpips * loss_lpips
+
+        # if self.lambda_kl == 0.0:
+        #     self.accelerator.backward(loss_data)
+        #     if self.accelerator.sync_gradients:
+        #         self.accelerator.clip_grad_norm_(self.gen_params, 1.0)
+        #     self.optimizers[0].step()
+        #     self.optimizers[0].zero_grad()
+        #     return {'all': loss_data, 
+        #         'l2': loss_l2, 
+        #         'lpips': loss_lpips, 
+        #     }
         
         # loss distribution KL
         timesteps = torch.randint(20, 980, (bsz,), device=denoised_latents.device).long()
@@ -378,7 +395,7 @@ class OSEDiff_onedataset_model(BaseModel):
         loss_kl = F.mse_loss(denoised_latents, (denoised_latents - grad).detach())
 
         # calculate total gen loss and update parameters
-        loss_gen = loss_data + loss_kl
+        loss_gen = loss_data + self.lambda_kl*loss_kl
 
         self.accelerator.backward(loss_gen)
         if self.accelerator.sync_gradients:
@@ -409,11 +426,11 @@ class OSEDiff_onedataset_model(BaseModel):
                 'l2': loss_l2, 
                 'lpips': loss_lpips, 
                 'diff': loss_d,
-                'update_err': update_err,
-                'fix_err': fix_err,
-                'output_min': output_image.min(),
-                'output_max': output_image.max(),
-                'output_mean': output_image.mean(),
+                # 'update_err': update_err,
+                # 'fix_err': fix_err,
+                # 'output_min': output_image.min(),
+                # 'output_max': output_image.max(),
+                # 'output_mean': output_image.mean(),
                 }
     
     def optimize_parameters(self):
@@ -421,16 +438,19 @@ class OSEDiff_onedataset_model(BaseModel):
         lq_key = self.dataloader.dataset.lq_key
 
         image_1 = self.sample[lq_key]
+        gt_1 = self.sample[gt_key]
         
         bsz = image_1.shape[0]
 
-        gt_1 = self.sample[gt_key]
         image_1 = image_1.clip(-1, 1)
         gt_1 = gt_1.clip(-1, 1)
+
+        if image_1.shape[1] == 1:
+            image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
         if gt_1.shape[1] == 1:
             gt_1 = einops.repeat(gt_1, 'b 1 h w -> b 3 h w')
  
-        gt_ram = self.model_vlm_transforms(gt_1*0.5+0.5)
+        gt_ram = self.model_vlm_transforms(image_1*0.5+0.5)
         caption = inference(gt_ram.to(dtype=torch.float16), self.model_vlm)
         prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
         neg_prompt_embeds = encode_prompt([self.neg_caption]*bsz, self.tokenizer, self.text_encoder)
@@ -463,6 +483,7 @@ class OSEDiff_onedataset_model(BaseModel):
             self.vae,
             self.unet,
             noise_scheduler_tmp,
+            concatenate_images=False
         )
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 
@@ -488,6 +509,8 @@ class OSEDiff_onedataset_model(BaseModel):
             pred = []
             for _ in self.setup_patches():    
                 image_1 = self.sample[lq_key]
+                if image_1.shape[1] == 1:
+                    image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
                 bsz = image_1.shape[0]  
                 lq_ram = self.model_vlm_transforms(image_1*0.5+0.5)
                 caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
@@ -513,6 +536,8 @@ class OSEDiff_onedataset_model(BaseModel):
             lq1 = self.sample[lq_key]
             gt = self.sample[gt_key]
             bsz = lq1.shape[0]  
+            if lq1.shape[1] == 1:
+                lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
             lq_ram = self.model_vlm_transforms(lq1*0.5+0.5)
             caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
             prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)

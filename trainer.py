@@ -34,6 +34,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, help='Path to option YAML file.')
     parser.add_argument('-test', action='store_true', help='Save in test.')
+    parser.add_argument('-comment', type=str, default='', help='Experiment name comment.')
     args = parser.parse_args()
     with open(args.opt, mode='r') as f:
         data = OmegaConf.load(f)
@@ -48,6 +49,7 @@ if __name__ == '__main__':
         if args.test:
             opt['name'] = 'test'
             opt['tracker_project_name'] = 'test'
+        opt['comment'] = args.comment
         opt.test = args.test
     opt.opt_path = args.opt
     

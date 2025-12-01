@@ -26,18 +26,40 @@ except:
 
 class QIS_image_dataset(torch.utils.data.Dataset):
     def __init__(self, opt): # data_path, sensor_params, patch_size = 128):
+        self.opt = opt
         self.gt_key = opt.gt_key
         self.lq_key = opt.lq_key
         self.patch_size = opt.patch_size
         self.split_type = opt.split_type
 
         self.sensor_params = opt.sensor_params
-        self.images_path = sorted(glob.glob(os.path.join(opt.data_path, '*.png')))
-        L = len(self.images_path)
-        self.images_path = self.images_path[int(opt.split[0]*L):int(opt.split[1]*L)]
+        self.QE = self.sensor_params.QE
+        self.theta_dark = self.sensor_params.theta_dark
+        self.sigma_read = self.sensor_params.sigma_read
+        self.clicks_per_frame = self.sensor_params.clicks_per_frame
+        self.Nbits = self.sensor_params.Nbits
+        self.fwc = self.sensor_params.fwc
+
+        pixel_size = self.sensor_params.pixel_size
+        lux = self.sensor_params.lux
+        self.exp_time = self.sensor_params.exp_time
+        self.PPP = 65 * pixel_size * lux * 60 * self.exp_time
+
+        self.folder_path = sorted(glob.glob(os.path.join(opt.data_path, '*')))
+        L = len(self.folder_path)
+        self.folder_path = self.folder_path[int(opt.split[0]*L):int(opt.split[1]*L)]
+
+        # finding total number of images
+        self.total_images = 0
+        self.image_list = []
+        for folder in self.folder_path:
+            img_list = sorted([os.path.join(folder, f) for f in os.listdir(folder) if f.endswith('.png') or f.endswith('.jpg')])
+            self.image_list.append(img_list)
+            self.total_images += len(img_list)
+        print(f"Total number of images: {self.total_images} in {len(self.folder_path)} folders")
 
     def __len__(self):
-        return len(self.images_path)
+        return self.total_images
     
     #random cropping can be added here for training
     def random_crop(self, img, crop_size):
@@ -56,28 +78,37 @@ class QIS_image_dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         # random QIS 1-channel (simulate 3-bit by integer levels)
-        rgb = self.images_path[idx]
-        rgb = cv2.imread(rgb)
+        # find the folder that contains the image at index idx
+        i = 0
+        while idx >= len(self.image_list[i]):
+            idx -= len(self.image_list[i])
+            i += 1
+
+        rgb = cv2.imread(self.image_list[i][idx])
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
         if self.patch_size>0:
-            if self.split_type == 'train':
-                rgb = self.random_crop(rgb, self.patch_size)
-            else:
-                rgb = self.center_crop(rgb, self.patch_size)
+            # if self.split_type == 'train':
+            #     rgb = self.random_crop(rgb, self.patch_size)
+            # else:
+            rgb = self.center_crop(rgb, self.patch_size)
 
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         gray = torch.from_numpy(gray.astype(np.float32)) / 255.0  # normalize to [0,1]
         gray = gray.unsqueeze(0)  # add channel dimension
 
-        qis = torch_forward_model(self.sensor_params.get('avg_PPP', 3.25), 
-                                      gray, 
-                                      self.sensor_params.get('QE', 0.8),
-                                      self.sensor_params.get('theta_dark', 1.6), 
-                                      self.sensor_params.get('sigma_read', 0.2),
-                                      self.sensor_params.get('clicks_per_frame', 1),
-                                      self.sensor_params.get('Nbits', 3), 
-                                      self.sensor_params.get('fwc', 200), 
-                                      normalize = True)
+        qis = torch_forward_model(
+                        self.PPP, 
+                        gray, 
+                        self.QE,
+                        self.theta_dark * self.exp_time, 
+                        self.sigma_read,
+                        self.clicks_per_frame,
+                        self.Nbits, 
+                        self.fwc, 
+                        normalize = True
+                    )
+        assert torch.isnan(qis).sum()==0, f"QIS has NaN values: {qis}"
+        assert torch.isnan(gray).sum()==0, f"Gray image has NaN values: {gray}"
         
         rgb = torch.from_numpy(rgb.astype(np.float32)) / 255.0  # normalize to [0,1]
         rgb = rgb.permute(2, 0, 1)  # HWC to CHW
@@ -245,24 +276,44 @@ def sensor_image_simulation(avg_PPP, photon_flux, QE, theta_dark, sigma_read, N,
     return img_out
 
 
+def normalize(data, max_value=255.):
+    r"""Normalizes a unit8 image to a float32 image in the range [0, 1]
+	Args:
+		data: a unint8 numpy array to normalize from [0, 255] to [0, 1]
+	"""
+    return np.float32(data / max_value)
+
+
 class GainCalculator:
+    '''
+    Gain class is mapping avg_PPP to gain value.
+    avg_PPP can be converted to lux assuming exposure time = 1/2000 sec. Ex: 3.25PPP -> 1 lux and 9.75 PPP -> 3 lux.
+    This mapping function works for QIS sensors with pixel size 1.1um and full well capacity 200e-.
+    Sensor Parameters assumed:
+    QE = 0.6
+    theta_dark = 1.6 e-/pix/frame
+    sigma_read = 0.2 e- RMS
+    Nbits = 3 bits
+    N = 1 frame
+    fwc = 200 e-
+    '''
     def __init__(self):
         # Define the (x, y) pairs
         self.data = np.array([
-            [3.25, 30], [6.50, 15], [9.75, 7.5], [13, 4.5], [20, 3.2], [26, 2.8],
-            [36, 2.4], [45, 2.2], [54, 1.8], [67, 1.5], [80, 1.3], [90, 1.1],
-            [110, 1.05], [130, 0.90], [145, 0.65], [155, 0.56], [160, 0.51]
-        ])
+            [0.5, 90], [1.5, 60], [2.5, 50], [3.25, 30], [6.5, 15], [9.75, 7.5],
+            [13, 4.5], [20, 3.2], [26, 2.8], [36, 2.4], [45, 2.2], [54, 1.8],
+            [67, 1.5], [80, 1.3], [90, 1.1], [110, 1.05], [130, 0.9], [145, 0.65],
+            [155, 0.56], [160, 0.51], [200, 0.4881704]
+            ])
         x = self.data[:, 0]
         y = self.data[:, 1]
 
         # Fit an RBF interpolator
-        self.rbf = Rbf(x, y, function='multiquadric')
+        self.rbf = Rbf(x, y, function='linear')
 
     def get_gain(self, avg_PPP, N=1):
         # Evaluate the polynomial at avg_PPP
         return self.rbf(avg_PPP) * N
-
 
 @torch.no_grad()
 def torch_forward_model(avg_PPP, photon_flux, QE, theta_dark, sigma_read, N, Nbits, fwc, normalize = True):
@@ -315,22 +366,87 @@ def torch_forward_model(avg_PPP, photon_flux, QE, theta_dark, sigma_read, N, Nbi
     return img_out
 
 
-def normalize(data, max_value=255.):
-    r"""Normalizes a unit8 image to a float32 image in the range [0, 1]
-	Args:
-		data: a unint8 numpy array to normalize from [0, 255] to [0, 1]
-	"""
-    return np.float32(data / max_value)
-
-if __name__ == '__main__':
-    def random_crop(img, crop_size):
-        h, w = img.shape[:2]
-        if h < crop_size or w < crop_size:
-            img = crop_arr(img.transpose([2,0,1]), max(crop_size, h), max(crop_size, w)).transpose([1,2,0])
-            h, w = img.shape[:2]
-        top = np.random.randint(0, h - crop_size+1)
-        left = np.random.randint(0, w - crop_size+1)
-        return img[top:top + crop_size, left:left + crop_size]
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
     
-    x = torch.randn(size=(2, 500, 3)).numpy()
-    print(random_crop(x, 256).shape)
+    # Create a simple namespace object to hold options
+    class Options:
+        pass
+    
+    sensor_params = Options()
+    sensor_params.QE = 0.8
+    sensor_params.theta_dark = 1.6  # e-/pix/s
+    sensor_params.sigma_read = 0.2
+    sensor_params.clicks_per_frame = 1
+    sensor_params.Nbits = 3
+    sensor_params.fwc = 200
+    sensor_params.pixel_size = 1.2
+    sensor_params.exp_time = 1/120
+    sensor_params.lux = 0.15
+    
+    # Create options object
+    opt = Options()
+    opt.gt_key = 'gt'
+    opt.lq_key = 'blur'
+    opt.patch_size = 256
+    opt.split_type = 'val'
+    opt.img_idx = 0
+    
+    opt.sensor_params = sensor_params
+    
+    
+    # sensor_params.theta_dark *= opt.exp_time  # adjust for exp time
+    # opt.qis_PPP = 65 * opt.qis_pixel_size * opt.lux * 60 * opt.qis_exp_time
+    
+    # Data paths - modify these to your actual data paths
+    opt.data_path = '/depot/chan129/users/pchennur/datasets/train_all_lolblur/train/high_sharp_original/'
+    opt.split = (0.0, 1.0)  # Use all data
+    
+    
+    # Create dataset
+    dataset = QIS_image_dataset(opt)
+    print(f"Dataset size: {len(dataset)}")
+    
+    # Test loading a few samples
+    num_samples_to_test = min(10, len(dataset))
+    
+    for idx in range(3, num_samples_to_test):
+        print(f"\nLoading sample {idx}...")
+        sample = dataset[idx]
+        
+        qis = sample['blur']
+        gt = sample['gt']
+        
+        print(f"  QIS shape: {qis.shape}, min: {qis.min():.4f}, max: {qis.max():.4f}")
+        print(f"  GT shape: {gt.shape}, min: {gt.min():.4f}, max: {gt.max():.4f}")
+        
+        # Check for NaN values
+        assert not torch.isnan(qis).any(), "QIS contains NaN"
+        assert not torch.isnan(gt).any(), "GT contains NaN"
+        
+        print(f"  ✓ Sample {idx} loaded successfully!")
+        
+        # Visualize the first sample
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # Denormalize from [-1, 1] to [0, 1]
+        qis_vis = (qis.permute(1, 2, 0).numpy() + 1) / 2
+        gt_vis = (gt.permute(1, 2, 0).numpy() + 1) / 2
+        
+        axes[1].imshow(np.clip(qis_vis, 0, 1))
+        axes[1].set_title('QIS Simulated')
+        axes[1].axis('off')
+        
+        axes[2].imshow(np.clip(gt_vis, 0, 1))
+        axes[2].set_title('Ground Truth RGB')
+        axes[2].axis('off')
+        
+        plt.tight_layout()
+        plt.savefig('cmos_qis_dataset_test.png', dpi=100, bbox_inches='tight')
+        print(f"  Visualization saved to 'cmos_qis_dataset_test.png'")
+        plt.show()
+        break
+    
+    print("\n✓ Dataset test completed!")
+
+

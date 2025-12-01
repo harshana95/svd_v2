@@ -15,7 +15,7 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, EMAMod
 from peft import LoraConfig
 from torchvision import transforms
 from models.OneStepDiffusion.OSEDiff_onedataset_model import OSEDiff_onedataset_model, encode_prompt, eps_to_mu
-from pipelines.OSEDiffPipeline import OSEDiffPipeline, preprocess_adapter_input
+from pipelines.OSEDiffPipeline import OSEDiffPipeline, hpf_adapter_input
 from ram import inference_ram as inference
 
 from torch.utils.data import DataLoader, Subset
@@ -29,6 +29,10 @@ from safetensors.torch import load_file
 class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
     def __init__(self, opt, logger):
         super(OSEDiff_twodataset_model, self).__init__(opt, logger)
+        if self.use_adapter and opt.train.hpf_adapter_input:
+            self.adapter_preprocess = hpf_adapter_input
+        else:
+            self.adapter_preprocess = lambda x: x
         
     def feed_data(self, data, is_train=True):
         self.sample = data
@@ -51,26 +55,25 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
 
         image_1 = self.sample[lq_key+"_1"]
         image_2 = self.sample[lq_key+"_2"]
+        gt_1 = self.sample[gt_key+"_1"] if self.use_image1 else self.sample[gt_key+"_2"]
+        # gt_2 = self.sample[gt_key+"_2"] 
 
-        if self.concatenate_images:
-            if image_2.shape[1] == 3:
-                image_2 = image_2[:, 1:2]
-        else:
+        if image_1.shape[1] == 1:
+            image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
+        if image_2.shape[1] == 1:
             image_2 = einops.repeat(image_2, 'b 1 h w -> b 3 h w')
+        if gt_1.shape[1] == 1:
+            gt_1 = einops.repeat(gt_1, 'b 1 h w -> b 3 h w')
         
         
         bsz = image_1.shape[0]
 
-        gt_1 = self.sample[gt_key+"_1"] if self.use_image1 else self.sample[gt_key+"_2"]
-        # gt_2 = self.sample[gt_key+"_2"] 
         image_1 = image_1.clip(-1, 1)
         image_2 = image_2.clip(-1, 1)
         gt_1 = gt_1.clip(-1, 1)
         # gt_2 = gt_2.clip(-1, 1)
-        if gt_1.shape[1] == 1:
-            gt_1 = einops.repeat(gt_1, 'b 1 h w -> b 3 h w')
  
-        gt_ram = self.model_vlm_transforms(gt_1*0.5+0.5)
+        gt_ram = self.model_vlm_transforms(image_1*0.5+0.5)
         caption = inference(gt_ram.to(dtype=torch.float16), self.model_vlm)
         prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
         neg_prompt_embeds = encode_prompt([self.neg_caption]*bsz, self.tokenizer, self.text_encoder)
@@ -84,7 +87,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
 
         latents = self.vae.encode(vae_input).latent_dist.sample() * self.vae.config.scaling_factor
         if self.use_adapter:
-            down_block_additional_residuals = self.t2iadapter(preprocess_adapter_input(image_2))
+            down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(image_2 if self.use_image1 else image_1))
         else:
             down_block_additional_residuals = None
 
@@ -114,6 +117,8 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             self.unet,
             noise_scheduler_tmp,
             adapter=self.t2iadapter if self.use_adapter else None,
+            adapter_preprocess=self.adapter_preprocess,
+            concatenate_images=self.concatenate_images
         )
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 
@@ -125,8 +130,8 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
             idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
-            # if idx >= 1:
-            #     break
+            if idx >= self.max_val_steps:
+                break
 
         for model in self.models:
             model.train()
@@ -140,9 +145,9 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             for _ in self.setup_patches():    
                 image_1 = self.sample[lq_key+"_1"]
                 image_2 = self.sample[lq_key+"_2"]
-                if image_2.shape[1] == 3:
-                    image_2 = image_2[:, 1:2]
-                if not self.use_image1 and not self.concatenate_images:
+                if image_1.shape[1] == 1:
+                    image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
+                if image_2.shape[1] == 1:
                     image_2 = einops.repeat(image_2, 'b 1 h w -> b 3 h w')
                 bsz = image_1.shape[0]  
                 lq_ram = self.model_vlm_transforms(image_1*0.5+0.5)
@@ -150,7 +155,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
                 prompt_embeds = encode_prompt(caption, self.tokenizer, self.text_encoder)
                 out = self.pipeline(
                     image_1 if self.use_image1 else image_2,
-                    image_2 if self.concatenate_images else None,
+                    image_2 if self.use_image1 else image_1,
                     prompt_embeds=prompt_embeds[:bsz],
                     # added_cond_kwargs={k: v[:bsz] for k, v in self.unet_added_conditions.items()},
                     timesteps=[self.opt.train.timestep],
@@ -164,16 +169,19 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
                 out.append(merged[..., :h, :w])
             lq1 = self.sample[lq_key+'_1_original']
             lq2 = self.sample[lq_key+'_2_original']
-            gt = self.sample[gt_key+'_1_original'] if self.use_image1 else self.sample[gt_key+'_2_original']
+            gt1 = self.sample[gt_key+'_1_original']
+            gt2 = self.sample[gt_key+'_2_original']
             out = torch.stack(out)
         else: 
             lq1 = self.sample[lq_key+"_1"]
             lq2 = self.sample[lq_key+"_2"]
-            if lq2.shape[1] == 3:
-                lq2 = lq2[:, 1:2]
-            if not self.use_image1 and not self.concatenate_images:
+            
+            if lq1.shape[1] == 1:
+                lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
+            if lq2.shape[1] == 1:
                 lq2 = einops.repeat(lq2, 'b 1 h w -> b 3 h w')
-            gt = self.sample[gt_key+"_1"] if self.use_image1 else self.sample[gt_key+"_2"]
+            gt1 = self.sample[gt_key+"_1"]
+            gt2 = self.sample[gt_key+"_2"]
             bsz = lq1.shape[0]  
             lq_ram = self.model_vlm_transforms(lq1*0.5+0.5)
             caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
@@ -181,24 +189,26 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         
             output = self.pipeline(
                 lq1 if self.use_image1 else lq2,
-                lq2 if self.concatenate_images else None,
+                lq2 if self.use_image1 else lq1,
                 prompt_embeds=prompt_embeds[:bsz],
                 # added_cond_kwargs={"text_embeds": prompt_embeds[:bsz], "time_ids": torch.tensor([self.timesteps]*bsz).to(prompt_embeds.device)},
                 timesteps=[self.opt.train.timestep],
             )
             out = output.images
-        adapter_input = preprocess_adapter_input(lq2).cpu().numpy()*0.5+0.5
-        adapter_input = einops.repeat(adapter_input, 'n 1 h w -> n 3 h w')
+        adapter_input = None
+        if self.use_adapter:
+            adapter_input = self.adapter_preprocess(lq2 if self.use_image1 else lq1).cpu().numpy()*0.5+0.5
+            if adapter_input.shape[1] == 1:
+                adapter_input = einops.repeat(adapter_input, 'n 1 h w -> n 3 h w')
+            
         lq1 = lq1.cpu().numpy()*0.5+0.5
         lq2 = lq2.cpu().numpy()*0.5+0.5
-        gt = gt.cpu().numpy()*0.5+0.5
+        gt1 = gt1.cpu().numpy()*0.5+0.5
+        gt2 = gt2.cpu().numpy()*0.5+0.5
         out = out.cpu().numpy()*0.5+0.5
-        for i in range(len(gt)):
+        for i in range(len(gt1)):
             idx += 1
-            if self.concatenate_images:
-                image1 = [lq1[i], lq2[i], gt[i], out[i]]
-            else:
-                image1 = [lq1[i] if self.use_image1 else lq2[i], gt[i], out[i]]
+            image1 = [lq1[i], lq2[i], gt1[i], gt2[i], out[i]]
             for j in range(len(image1)):
                 if image1[j].shape[0] == 1:
                     image1[j] = einops.repeat(image1[j], '1 h w -> 3 h w')
@@ -206,7 +216,8 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             image1 = np.clip(image1, 0, 1)
             log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)  # image format (N,C,H,W)
             log_image(self.opt, self.accelerator, np.clip(out[i:i+1], 0, 1), f'out_{idx:04d}', self.global_step)
-            log_image(self.opt, self.accelerator, np.clip(adapter_input[i:i+1], 0, 1), f'adapter_input_{idx:04d}', self.global_step)
-            log_metrics(gt[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
+            if adapter_input is not None:
+                log_image(self.opt, self.accelerator, np.clip(adapter_input[i:i+1], 0, 1), f'adapter_input_{idx:04d}', self.global_step)
+            log_metrics(gt1[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
         return idx
     

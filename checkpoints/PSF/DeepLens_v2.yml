@@ -52,13 +52,18 @@ network:
   middle_blk_num: 1
   dec_blk_nums: [1, 1, 1, 1]
   t_dim: 4
+
+network_c:
+  type: Coord_Transform
+  in_channel: 64
+  out_channel: 512
   
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/PSF/DeepLens_PSF_interpolation 2025 11 06 22.07.22/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/PSF/DeepLens_PSF_interpolation 2025 11 06 22.07.22/
+  resume_from_checkpoint: ~ #latest
 
 # training settings
 train:
@@ -84,7 +89,7 @@ train:
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 16
+  batch_size: 64
 
   max_train_steps: 100000
   validation_steps: 1000

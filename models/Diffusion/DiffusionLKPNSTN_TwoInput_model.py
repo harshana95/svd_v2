@@ -247,8 +247,8 @@ class DiffusionLKPNSTN_TwoInput_model(DiffusionLKPN_TwoInput_model):
         self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
             idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
-            # if idx >= 1:
-            #     break
+            if idx > self.max_val_steps:
+                break
 
         for model in self.models:
             model.train()

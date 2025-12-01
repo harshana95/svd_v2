@@ -71,7 +71,7 @@ class BaseModel():
     """Base model."""
 
     def __init__(self, opt, logger=None):
-        self.experiment_name = opt.experiment_key+f" {datetime.now().strftime('%Y %m %d %H.%M.%S')}"
+        self.experiment_name = opt.experiment_key +f"{opt.comment} {datetime.now().strftime('%Y %m %d %H.%M.%S')}"
         self.accelerator = initialize(opt, logger, self.experiment_name)
         logger.info(opt)
         self.opt = opt
@@ -86,7 +86,7 @@ class BaseModel():
         self.models = []
         self.overrode_max_train_steps = False
         self.global_step = 0
-        self.max_val_steps = opt.val.get('max_val_steps', 1000)
+        self.max_val_steps = opt.val.get('max_val_steps', 10)
 
         # enable disable dataset caching
         if opt.dataset_caching or opt.dataset_caching is None:

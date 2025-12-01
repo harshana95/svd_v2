@@ -56,8 +56,6 @@ datasets:
         angle: -90
       rescale:
         factor: 0.25
-      select_channels:
-       channels: [False, True, False]
       # poisson_noise:
       #   keys: [lq_key]
       #   peak: 1000
@@ -136,9 +134,9 @@ train:
   num_train_epochs: 10
   batch_size: 16
 
-  max_train_steps: 50000
-  validation_steps: 1000
-  checkpointing_steps: 1000
+  max_train_steps: 500000
+  validation_steps: 10000
+  checkpointing_steps: 10000
   checkpoints_total_limit: 2
 
   patched: false

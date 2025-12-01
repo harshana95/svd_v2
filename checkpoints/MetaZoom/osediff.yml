@@ -216,9 +216,11 @@ train:
   use_hf_loss: true
   use_adapter: true
   adapter_in_channels: 1
+  hpf_adapter_input: true
 
   timestep: 999
 
+  lambda_kl: 1.0
   lambda_l2: 1.0
   lambda_lpips: 2.0
   cfg_vsd: 7.5

@@ -9,6 +9,7 @@ mixed_precision: !!str no
 allow_tf32: false
 # pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
 pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1
+# pretrained_model_name_or_path: Manojb/stable-diffusion-2-1-base
 vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
 dape_path: ~ #/depot/chan129/users/harshana/svd_v2/DAPE.pth
 revision: ~
@@ -184,15 +185,15 @@ datasets:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_hfloss 2025 10 29 20.34.07/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_hfloss 2025 10 29 20.34.07/
+  resume_from_checkpoint: ~ #latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 10e-5
+    learning_rate: !!float 1e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -216,9 +217,11 @@ train:
   use_hf_loss: true
   use_adapter: true
   adapter_in_channels: 1
+  hpf_adapter_input: true
 
   timestep: 999
 
+  lambda_kl: 1.0
   lambda_l2: 1.0
   lambda_lpips: 2.0
   cfg_vsd: 7.5

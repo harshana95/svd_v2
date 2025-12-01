@@ -54,8 +54,8 @@ network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/PSF/DeepLens_PSF_GeoLens 2025 11 04 14.52.49/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/PSF/DeepLens_PSF_GeoLens 2025 11 04 14.52.49/
+  resume_from_checkpoint: ~ #latest
 
 # training settings
 train:
