@@ -136,8 +136,8 @@ def find_attr(modules, attr):
         cls_ = getattr(module, attr, None)
         if cls_ is not None:
             break
-    if cls_ is None:
-        raise ValueError(f'{attr} is not found.')
+    # if cls_ is None:
+    #     raise ValueError(f'{attr} is not found.')
     return cls_
 
 class DictAsMember(dict):

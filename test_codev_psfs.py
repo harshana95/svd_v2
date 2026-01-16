@@ -25,3 +25,16 @@ plt.imsave("stacked.png", stacked)
 plt.imshow(stacked)
 plt.show()
 
+loc="/depot/chan129/users/harshana/OpticsExpress_2026/MetaTele/"
+
+all_arr = {}
+for folder in os.listdir(loc):
+    all_arr[folder] = []
+    for file in sorted(os.listdir(os.path.join(loc, folder))):
+        filename = os.path.join(loc, folder, file)
+        with open(filename) as f:
+            psf = extract_psf_from_content(f.read())
+        all_arr[folder].append(psf)
+
+    plt.imsave(f"{folder}.png", np.vstack(all_arr[folder]))
+    

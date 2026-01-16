@@ -71,7 +71,11 @@ class BaseModel():
     """Base model."""
 
     def __init__(self, opt, logger=None):
-        self.experiment_name = opt.experiment_key +f"{opt.comment} {datetime.now().strftime('%Y %m %d %H.%M.%S')}"
+        self.is_train = opt['is_train']
+        if not self.is_train:
+            opt['name'] = 'infer'
+            opt['tracker_project_name'] = 'infer'
+        self.experiment_name = opt.experiment_key + f"{opt.comment} {datetime.now().strftime('%Y %m %d %H.%M.%S')}"
         self.accelerator = initialize(opt, logger, self.experiment_name)
         logger.info(opt)
         self.opt = opt
@@ -80,13 +84,14 @@ class BaseModel():
         self.save_handle = self.accelerator.register_save_state_pre_hook(save_model_hook)
         self.load_handle = self.accelerator.register_load_state_pre_hook(load_model_hook)
         self.device = torch.device('cuda' if opt['num_gpu'] != 0 else 'cpu')
-        self.is_train = opt['is_train']
         self.schedulers = []
         self.optimizers = []
         self.models = []
         self.overrode_max_train_steps = False
         self.global_step = 0
         self.max_val_steps = opt.val.get('max_val_steps', 10)
+        if not self.is_train:
+            self.max_val_steps = 1e6
 
         # enable disable dataset caching
         if opt.dataset_caching or opt.dataset_caching is None:
@@ -125,6 +130,11 @@ class BaseModel():
                     tracker.writer.set_name(self.experiment_name)
                     tracker.writer.log_parameters(self.opt)
                     tracker.writer.log_asset(self.opt.opt_path, file_name="config.yml", overwrite=True)
+                    tracker.writer.log_code(
+                        folder=".", 
+                        pattern="*.py", 
+                        folder_name='source-code',
+                        overwrite=True)
                 except:
                     pass
         self.trackers_initialized = True

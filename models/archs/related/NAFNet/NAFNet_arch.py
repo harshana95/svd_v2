@@ -196,7 +196,7 @@ class NAFNet_arch(PreTrainedModel):
         self.model = NAFNet(**config.to_dict())
         self.init_weights()
 
-    def forward(self, x, *args):
+    def forward(self, x, *args, **kwargs):
         if len(args) > 0:
             x = torch.cat([x, *args], dim=1)
         return self.model(x)

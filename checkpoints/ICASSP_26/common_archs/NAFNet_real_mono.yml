@@ -1,4 +1,4 @@
-name: SVD_Real
+name: MetaZoom24
 model_type: Simple_model
 is_train: true
 report_to: comet_ml
@@ -7,7 +7,7 @@ num_gpu: 8
 seed: 10
 mixed_precision: !!str no
 allow_tf32: false
-tracker_project_name: SVD_real
+tracker_project_name: MetaZoom24
 experiment_key: NAFNetRealMono
 dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file

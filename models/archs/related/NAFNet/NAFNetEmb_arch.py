@@ -279,7 +279,7 @@ class NAFNet(nn.Module):
         return x
 
 class NAFNetEmb_config(PretrainedConfig):
-    model_type = "NAFNet_arch"
+    model_type = "NAFNetEmb_arch"
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 

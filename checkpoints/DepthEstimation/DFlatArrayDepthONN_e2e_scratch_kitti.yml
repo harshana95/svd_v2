@@ -60,9 +60,10 @@ datasets:
       resize:
         h: 192
         w: 640
-      normalize:
-        mean: [0.45, 0.45, 0.45]
-        std: [0.225, 0.225, 0.225]
+      normalize--2:
+        keys: [depth]
+        mean: [0]
+        std: [80]
 
   val:
     type: HuggingFaceDataset
@@ -80,9 +81,10 @@ datasets:
       resize:
         h: 192
         w: 640
-      normalize:
-        mean: [0.45, 0.45, 0.45]
-        std: [0.225, 0.225, 0.225]
+      normalize--2:
+        keys: [depth]
+        mean: [0]
+        std: [80]
 
 
 # no training network structure
@@ -100,8 +102,8 @@ depth_network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~
-  resume_from_checkpoint: ~
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaDepth/MSArrayDepthONN_E2E_Scratch 2025 12 30 13.31.50/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
@@ -128,7 +130,7 @@ train:
   num_train_epochs: 10
   batch_size: 1
 
-  max_train_steps: 500
+  max_train_steps: 50000
   validation_steps: 50
   checkpointing_steps: 50
   checkpoints_total_limit: 2

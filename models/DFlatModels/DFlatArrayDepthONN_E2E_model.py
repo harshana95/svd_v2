@@ -22,7 +22,7 @@ from utils import log_image, log_metrics
 class DFlatArrayDepthONN_E2E_model(DFlatArrayDepthONN_model):
     def __init__(self, opt, logger):
         super().__init__(opt, logger)
-        self.kernel_rescale_factor = 1
+        self.kernel_rescale_factor = 1e6
 
     def feed_data(self, data, is_train=True):
         assert not self.opt.train.patched
@@ -84,7 +84,7 @@ class DFlatArrayDepthONN_E2E_model(DFlatArrayDepthONN_model):
         all_psfs = self.all_psf_intensity
 
         image = self.sample[gt_key]
-        print(image.min(), image.max())
+        # print(image.min(), image.max())
 
         # predict using frozen model
         with torch.no_grad():
@@ -95,7 +95,9 @@ class DFlatArrayDepthONN_E2E_model(DFlatArrayDepthONN_model):
         all_psfs = einops.rearrange(torch.stack(all_psfs), '(pn N c) 1 1 1 1 h w -> pn N c h w', pn=2, N=64, c=3)  # hard coded
         kernels = crop_arr(all_psfs, 7, 7)  # hard coded
         kernels = kernels[0] - kernels[1]  # kernels are soo small, the gradients barely update
+        
         kernels *= self.kernel_rescale_factor
+        # print(kernels.sum((-1,-2)).mean())
 
         # todo denormalize kernels
 
@@ -106,14 +108,14 @@ class DFlatArrayDepthONN_E2E_model(DFlatArrayDepthONN_model):
         onn_pred = self.decoder(self.encoder(image, kernels))[("disp", 0)]
         
         # calculate loss
-        total_loss = F.mse_loss(model_pred, onn_pred)*1e6
+        total_loss = F.mse_loss(model_pred, onn_pred)#*(1e6/self.kernel_rescale_factor)
 
         self.accelerator.backward(total_loss)
 
         for i in range(len(self.optimizers)):
             self.optimizers[i].step()
 
-        print(self.p_norm[0])
+        # print(self.p_norm[0])
         return {"all": total_loss}
 
     def validate_step(self, batch, idx, lq_key, gt_key):

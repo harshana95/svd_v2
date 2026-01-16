@@ -24,8 +24,8 @@ def extract_psf_from_content(file_content):
     cols = int(grd_match.group(2))
     total_elements = rows * cols
     
-    print(f"Found grid dimensions: {rows}x{cols}")
-    print(f"Expecting {total_elements} data points.")
+    # print(f"Found grid dimensions: {rows}x{cols}")
+    # print(f"Expecting {total_elements} data points.")
 
     # 2. Find the start of the numerical data
     # The data starts on the lines immediately following the 'GRD' line.

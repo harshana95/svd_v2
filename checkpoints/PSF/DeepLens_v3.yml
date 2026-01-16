@@ -1,5 +1,5 @@
 name: PSF
-model_type: PSF_Emb_model
+model_type: PSF_Emb_Noise_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -8,7 +8,7 @@ seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 tracker_project_name: PSF
-experiment_key: DeepLens_PSF_interpolation
+experiment_key: DeepLens_Noise2PSF_interpolation
 
 deeplens:
   lens_file: "/depot/chan129/users/harshana/svd_v2/lenses/thorlabs/acl12708u.json"
@@ -45,10 +45,6 @@ network:
   dec_blk_nums: [1, 1, 1, 1]
   t_dim: 4
 
-network_c:
-  type: Coord_Transform
-  in_channel: 64
-  out_channel: 512
   
 # path
 path:

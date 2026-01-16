@@ -88,7 +88,7 @@ def load_model_hook(models, input_dir):
         
         # load diffusers style into model
         model.load_state_dict(torch.load(os.path.join(input_dir, f"{class_name}_{saved[class_name]}")))
-        del load_model
+        
 
 class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
     def __init__(self, opt, logger):
@@ -98,7 +98,7 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
         self.save_handle = self.accelerator.register_save_state_pre_hook(save_model_hook)
         self.load_handle = self.accelerator.register_load_state_pre_hook(load_model_hook)
 
-        self.kernel_rescale_factor = 1
+        self.kernel_rescale_factor = 1e6
         depth_network_opt = opt.get('depth_network', None)
 
         if depth_network_opt.type == "monodepth2":
@@ -110,13 +110,13 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
 
             encoder = ResnetEncoder(18, False)  # ResNet-18
             # remove irrelevant keys
-            filtered_dict_enc = {k: v for k, v in loaded_dict_enc.items() if k in encoder.state_dict()}
-            encoder.load_state_dict(filtered_dict_enc)
+            # filtered_dict_enc = {k: v for k, v in loaded_dict_enc.items() if k in encoder.state_dict()}
+            # encoder.load_state_dict(filtered_dict_enc)
             encoder.eval()
             
             # Load decoder
             depth_decoder = DepthDecoder(num_ch_enc=encoder.num_ch_enc, scales=range(4))
-            depth_decoder.load_state_dict(loaded_dict_dec)
+            # depth_decoder.load_state_dict(loaded_dict_dec)
             depth_decoder.eval()
             
             encoder.requires_grad_(True)
@@ -201,6 +201,10 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
         image = self.sample[gt_key]
         depth = self.sample[lq_key]
 
+        # predict using frozen model
+        with torch.no_grad():
+            model_pred = self.depth_model(image)[("disp", 0)]
+
         # predict using ms weights
         all_psfs = self.all_psf_intensity
         all_psfs = einops.rearrange(torch.stack(all_psfs), '(pn N c) 1 1 1 1 h w -> pn N c h w', pn=2, N=64, c=3)  # hard coded
@@ -214,7 +218,7 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
         onn_pred = self.decoder(self.encoder(image, kernels))[("disp", 0)]
         
         # calculate loss
-        total_loss = F.mse_loss(depth, onn_pred)*1e6
+        total_loss = F.mse_loss(model_pred, onn_pred)#*(1e6/self.kernel_rescale_factor)
 
         self.accelerator.backward(total_loss)
 
@@ -263,9 +267,14 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
         kernels = kernels[0] - kernels[1]  # out_c in_c 7 7
         kernels *= self.kernel_rescale_factor
 
+        # predict using frozen model
+        with torch.no_grad():
+            model_pred = self.depth_model(image)[("disp", 0)]
+
         # predict using updated kernels
         onn_pred = self.decoder(self.encoder(image, kernels))[("disp", 0)]
         
+        model_pred = model_pred.cpu().numpy()
         onn_pred = onn_pred.cpu().numpy()
         depth = depth.cpu().numpy()
         image = image.cpu().numpy()
@@ -281,7 +290,7 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
             # depth_i = np.clip(np.stack([depth[i]]), 0, 1)
             # log_image(self.opt, self.accelerator, depth_i, f'depth_{idx:04d}', self.global_step)
             
-            image1 = [image[i], onn_pred[i], depth[i]]
+            image1 = [image[i], model_pred[i], onn_pred[i], depth[i]]
             for j in range(len(image1)):
                 if image1[j].shape[0] == 1:
                     image1[j] = einops.repeat(image1[j], '1 h w -> c h w', c=3)
@@ -289,8 +298,8 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
             image1 = np.clip(image1, 0, 1)
             log_image(self.opt, self.accelerator, image1, f'{idx:04d}', self.global_step)
             
-            log_metrics(depth[i], onn_pred[i], self.opt.val.metrics, self.accelerator, self.global_step)
-            ret = depth_metrics_torch(depth[i], onn_pred[i])
+            log_metrics(model_pred[i], onn_pred[i], self.opt.val.metrics, self.accelerator, self.global_step)
+            ret = depth_metrics_torch(torch.tensor(model_pred[i]), torch.tensor(onn_pred[i]))
             for tracker in self.accelerator.trackers:
                 if tracker.name == "comet_ml":
                     tracker.writer.log_metrics(ret, step=self.global_step)

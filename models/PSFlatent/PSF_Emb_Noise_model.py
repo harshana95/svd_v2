@@ -10,14 +10,10 @@ from utils import log_image
 from utils.misc import log_metric
 
 
-class PSF_Emb_model(PSF_model):
+class PSF_Emb_Noise_model(PSF_model):
     def __init__(self, opt, logger):
-        super(PSF_Emb_model, self).__init__(opt, logger)
-        self.coord_model = define_network(opt.network_c)
-        self.models.append(self.coord_model)
-
-        self.noise_as_input = False
-
+        super(PSF_Emb_Noise_model, self).__init__(opt, logger)
+        
     def setup_optimizers(self):
         opt = self.opt.train.optim
 
@@ -26,18 +22,6 @@ class PSF_Emb_model(PSF_model):
         self.gen_params = [p for p in self.net_g.parameters() if p.requires_grad]
         optimizer = optimizer_class(
             self.gen_params,
-            lr=opt.learning_rate,
-            betas=(opt.adam_beta1, opt.adam_beta2),
-            weight_decay=opt.adam_weight_decay,
-            eps=opt.adam_epsilon,
-            )
-        self.optimizers.append(optimizer)
-
-        # Optimizer for the Coordinate model
-        optimizer_class = torch.optim.AdamW
-        self.coord_params = [p for p in self.coord_model.parameters() if p.requires_grad]
-        optimizer = optimizer_class(
-            self.coord_params,
             lr=opt.learning_rate,
             betas=(opt.adam_beta1, opt.adam_beta2),
             weight_decay=opt.adam_weight_decay,
@@ -118,11 +102,8 @@ class PSF_Emb_model(PSF_model):
         N = batch_size // 3
 
         # psf generator model optimization
-        if self.noise_as_input:
-            gen_inp = torch.randn_like(psf)
-        else:
-            gen_inp = psf
-
+        gen_inp = torch.randn_like(psf)
+        
         emb_inp = self.sample['inp']
         pred_psf, latent_psf = self.net_g(gen_inp, emb_inp)
         pred_psf /= self.psf_rescale_factor
@@ -139,22 +120,12 @@ class PSF_Emb_model(PSF_model):
         loss_psf3['all'] = loss_psf3['all']*1e3 
         loss_latent['all'] = loss_latent['all']*1e5  # should this weight increased from 0 after some epochs?
         
-        loss = loss_psf['all'] + loss_psf3['all'] # + loss_latent['all'] 
+        loss = loss_psf['all'] + loss_psf3['all'] #+ loss_latent['all'] 
 
         # rescale loss because the loss is too small??
         self.accelerator.backward(loss)
         torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.01)
         self.optimizers[0].step()
-
-        # coord -> latent model optimization
-        latent_psf = latent_psf.detach()
-        latent_psf_from_c = self.coord_model(emb_inp)
-        loss_kl = self.criterion(latent_psf, latent_psf_from_c)
-        loss_kl['all'] = loss_kl['all']*1e3
-
-        self.accelerator.backward(loss_kl['all'])
-        torch.nn.utils.clip_grad_norm_(self.coord_model.parameters(), 0.01)
-        self.optimizers[1].step()
 
         log_metric(self.accelerator, {'parameter mean': next(self.net_g.parameters()).mean().item()}, self.global_step)
         # breakpoint()
@@ -162,7 +133,6 @@ class PSF_Emb_model(PSF_model):
                 'psf': loss_psf['all'],
                 'psf3': loss_psf3['all'],
                 'latent': loss_latent['all'],
-                'kl': loss_kl['all']
                 }
 
     def validate_step(self, batch, idx,lq_key,gt_key):
@@ -172,10 +142,10 @@ class PSF_Emb_model(PSF_model):
         batch_size = len(coords)
         N = batch_size // 3
 
+        gen_inp = torch.randn_like(psf[:2*N])
+
         emb_inp = coords[:2*N]
-        latents = self.coord_model(emb_inp)
-        pred_psf = self.net_g.decode(self.net_g.sample(latents), self.net_g.get_embedding(emb_inp, latents.dtype))
-        # pred_psf, latents = self.net_g(gen_inp, emb_inp)
+        pred_psf, latents = self.net_g(gen_inp, emb_inp)
         pred_psf = pred_psf.cpu().numpy()/self.psf_rescale_factor
         real_psf = psf[:2*N].cpu().numpy()
 

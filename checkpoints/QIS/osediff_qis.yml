@@ -23,7 +23,7 @@ network:
 datasets:
   train:
     type: QIS_image_dataset
-    data_path:  /depot/chan129/users/pchennur/datasets/train_all_lolblur/train/high_sharp_original/
+    data_path:  /scratch/gilbreth/wweligam/dataset/train_all_lolblur/train/high_sharp_original/
     split: [0, 0.995]
     split_type: train
     patch_size: 1024
@@ -49,7 +49,7 @@ datasets:
  
   val:
     type: QIS_image_dataset
-    data_path: /depot/chan129/users/pchennur/datasets/test_lolblur/high_sharp_original/
+    data_path: /scratch/gilbreth/wweligam/dataset/test_lolblur/high_sharp_original/
     split: [0.995, 1.0]
     split_type: val
     patch_size: 1024

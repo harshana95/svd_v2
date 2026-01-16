@@ -110,13 +110,13 @@ depth_network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~
-  resume_from_checkpoint: ~
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaDepth/MSArrayDepthONN_E2E 2026 01 02 13.55.55/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
   optimize_shape_param: true  # optimize MS shape parameters?
-  check_speed: true
+  check_speed: false
   optim:
     scale_lr: false
     use_8bit_adam: false
@@ -138,7 +138,7 @@ train:
   num_train_epochs: 10
   batch_size: 1
 
-  max_train_steps: 500
+  max_train_steps: 50000
   validation_steps: 50
   checkpointing_steps: 50
   checkpoints_total_limit: 2

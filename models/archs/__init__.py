@@ -11,8 +11,12 @@ _arch_modules = [importlib.import_module(f'models.archs.{file_name}') for file_n
 
 def define_network(opt):
     network_type = opt.pop('type')
-    # initialize the config class
-    config = find_attr(_arch_modules, network_type+'_config')(**opt.__dict__)
-    # initialize the network class
-    net = find_attr(_arch_modules, network_type+'_arch')(config)
+    config_class = find_attr(_arch_modules, network_type+'_config')
+    net_class = find_attr(_arch_modules, network_type+'_arch')
+
+    if config_class is not None:
+        config = config_class(**opt.__dict__)
+        net = net_class(config)
+    else:
+        net = net_class(**opt.__dict__)
     return net

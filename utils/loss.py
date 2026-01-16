@@ -163,6 +163,17 @@ class Perceptual_loss(_Loss):
         return loss
 
 
+class LPIPS_loss(_Loss):
+    def __init__(self, **kwargs):
+        super(LPIPS_loss, self).__init__()
+        import lpips
+        self.net_lpips = lpips.LPIPS(net='vgg').cuda()
+        self.net_lpips.requires_grad_(False)
+
+    def forward(self, x, y):
+        return self.net_lpips(x, y).mean()
+
+
 class Weighted_MSE_loss(_Loss):
     def __init__(self, **kwargs):
         super().__init__()

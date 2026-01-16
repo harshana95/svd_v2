@@ -1,3 +1,7 @@
+"""
+Todo:
+    Enable adapter for pixel space models
+"""
 import functools
 import gc
 import glob
@@ -15,6 +19,7 @@ from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, EMAMod
 from peft import LoraConfig
 from torchvision import transforms
 from pipelines.OSEDiffPipeline import OSEDiffPipeline, hpf_adapter_input
+from models.archs import define_network
 from ram import inference_ram as inference
 
 from torch.utils.data import DataLoader, Subset
@@ -32,13 +37,6 @@ def load_model_hook(models, input_dir):
         class_name = model._get_name()
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
         print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
-        # try:
-        #     c = find_attr(_arch_modules, class_name)
-        #     assert c is not None
-        # except ValueError as e:  # class is not written by us. Try to load from diffusers
-        #     print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
-        #     m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
-        #     c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
         
         # load diffusers style into model
         folder = os.path.join(input_dir, f"{class_name}_{saved[class_name]}")
@@ -51,10 +49,6 @@ def load_model_hook(models, input_dir):
             model.load_state_dict(combined_state_dict)
         except Exception as e:
             print(f"{'='*50} Failed to load {class_name} {'='*50} {model} {e}")
-        
-        # load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
-        # model.load_state_dict(load_model.state_dict())
-        # del load_model
         
 def initialize_unet(unet):
     l_target_modules_encoder, l_target_modules_decoder, l_modules_others = [], [], []
@@ -136,11 +130,12 @@ def encode_prompt(prompt_batch, tokenizer, text_encoder):
     prompt_embeds = torch.concat(prompt_embeds_list, dim=0)
     return prompt_embeds
 
-class OSEDiff_onedataset_model(BaseModel):
+class PixelSpace_onedataset_model(BaseModel):
     def __init__(self, opt, logger):
-        super(OSEDiff_onedataset_model, self).__init__(opt, logger)
+        super(PixelSpace_onedataset_model, self).__init__(opt, logger)
         self.load_handle.remove()
         self.load_handle = self.accelerator.register_load_state_pre_hook(load_model_hook)
+        
         weight_dtype = torch.float32
         if self.accelerator.mixed_precision == "fp16":
             weight_dtype = torch.float16
@@ -148,10 +143,13 @@ class OSEDiff_onedataset_model(BaseModel):
             weight_dtype = torch.bfloat16
         self.weight_dtype = weight_dtype
 
-        self.concatenate_images = self.opt.train.get('concatenate_images', False)
-        self.use_image1 = self.opt.train.get('use_image1', True)
         self.use_hf_loss = self.opt.train.get('use_hf_loss', False)
         self.use_adapter = self.opt.train.get('use_adapter', False)
+
+        self.lambda_l2 = self.opt.train.lambda_l2
+        self.lambda_lpips = self.opt.train.lambda_lpips
+        self.lambda_kl = self.opt.train.get('lambda_kl', 1.0)
+        self.cfg_vsd = self.opt.train.cfg_vsd
 
         if self.use_hf_loss:
             self.MASK_CLIP = 5e-1
@@ -175,11 +173,6 @@ class OSEDiff_onedataset_model(BaseModel):
         revision = self.opt.revision
         variant = self.opt.variant
 
-        self.lambda_l2 = self.opt.train.lambda_l2
-        self.lambda_lpips = self.opt.train.lambda_lpips
-        self.lambda_kl = self.opt.train.get('lambda_kl', 1.0)
-        self.cfg_vsd = self.opt.train.cfg_vsd
-
         self.net_lpips = lpips.LPIPS(net='vgg').cuda()
         self.net_lpips.requires_grad_(False)
 
@@ -190,22 +183,16 @@ class OSEDiff_onedataset_model(BaseModel):
 
         self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, subfolder="tokenizer")
         self.text_encoder = CLIPTextModel.from_pretrained(pretrained_model_name_or_path, subfolder="text_encoder").cuda()
-        self.noise_scheduler = DDPMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
-        self.noise_scheduler.set_timesteps(timesteps=[self.opt.train.timestep], device="cuda")
-        self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.cuda()
-        # one step prediction. choose t=T
-        self.timesteps = self.noise_scheduler.timesteps
-        print(f"Timesteps : {self.timesteps}")
         
-        self.vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae", revision=revision, variant=variant)
-        self.unet = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant)
-        self.unet.train()
-
+        # generator model 
+        self.net_g = define_network(opt.network)
+        self.models.append(self.net_g)
+        
         # use adapter for high-frequency injection
         if self.use_adapter:
             self.t2iadapter = T2IAdapter(
                 in_channels=opt.train.adapter_in_channels,
-                channels=(320, 640, 1280, 1280),
+                channels=(320, 640, 1280, 1280), # these values should change with model
                 num_res_blocks=2,
                 downscale_factor=8,
                 adapter_type="full_adapter",
@@ -214,6 +201,7 @@ class OSEDiff_onedataset_model(BaseModel):
 
 
         # for VSD loss
+        self.vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae", revision=revision, variant=variant)
         self.noise_scheduler_reg = DDPMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
         self.unet_fix = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant)
         self.unet_update = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant)
@@ -221,47 +209,21 @@ class OSEDiff_onedataset_model(BaseModel):
         
         self.unet_fix.requires_grad_(False)
         self.text_encoder.requires_grad_(False)
-
-        # Create EMA for the unet.
-        if opt.use_ema:
-            #self.ema_unet = EMAModel(self.unet.parameters(), model_cls=UNet2DConditionModel, model_config=self.unet.config)
-            print(f"{'='*50} NO EMA")
+        self.vae.requires_grad_(False)
+        self.models.append(self.vae)
 
         if opt.train.lora_finetune:
-            self.unet.requires_grad_(False)
             self.unet_update.requires_grad_(False)
-            self.vae.requires_grad_(False)
 
-            self.unet = initialize_unet(self.unet)
             self.unet_update = initialize_unet(self.unet_update)
-            self.vae = initialize_vae(self.vae)
-            
-            self.vae.set_adapter(['default_encoder'])
-            self.unet.set_adapter(['default_encoder', 'default_decoder', 'default_others'])
             self.unet_update.set_adapter(['default_encoder', 'default_decoder', 'default_others'])
 
-            for n, _p in self.vae.named_parameters():
-                if "lora" in n:
-                    _p.requires_grad = True
-            self.unet.conv_in.requires_grad_(True)
-            for n, _p in self.unet.named_parameters():
-                if "lora" in n:
-                    _p.requires_grad = True
             for n, _p in self.unet_update.named_parameters():
                 if "lora" in n:
                     _p.requires_grad = True
         else:
-            self.vae.requires_grad_(True)
-            self.unet.requires_grad_(True)
             self.unet_update.requires_grad_(True)
-        
-        if self.concatenate_images:
-            self.vae.encoder.conv_in = torch.nn.Conv2d(6, 128, kernel_size=3, stride=1, padding=1)
-            self.vae.encoder.conv_in.requires_grad = True
-
             
-        self.models.append(self.vae)
-        self.models.append(self.unet)
         self.models.append(self.unet_update)
 
         # get captioning model
@@ -273,6 +235,7 @@ class OSEDiff_onedataset_model(BaseModel):
         self.model_vlm.to(self.accelerator.device, dtype=torch.float16)
         self.unet_fix.to(self.accelerator.device, dtype=torch.float16)
         
+        # print number of trainable parameters
         for m in self.models:
             print(m.__class__.__name__)
             all_param = 0
@@ -281,7 +244,6 @@ class OSEDiff_onedataset_model(BaseModel):
                 all_param += param.numel()
                 if param.requires_grad:
                     trainable_params += param.numel()
-                    # print(name)
             print(
                 f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
             )
@@ -291,8 +253,7 @@ class OSEDiff_onedataset_model(BaseModel):
 
         # Optimizer creation for generator
         optimizer_class = torch.optim.AdamW
-        self.gen_params = [p for p in self.unet.parameters() if p.requires_grad]
-        self.gen_params += [p for p in self.vae.parameters() if p.requires_grad]
+        self.gen_params = [p for p in self.net_g.parameters() if p.requires_grad]
         if self.use_adapter:
             self.gen_params += [p for p in self.t2iadapter.parameters() if p.requires_grad]
         optimizer = optimizer_class(
@@ -322,40 +283,24 @@ class OSEDiff_onedataset_model(BaseModel):
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
         
-        # # make SR for testing
-        # gt_1 = self.sample[gt_key+"_1"]
-        # image_1 = F.interpolate(gt_1, size=(128,128), mode='bicubic')
-        # image_1 = F.interpolate(image_1, size=(512,512), mode='bicubic')
-        # self.sample[lq_key+"_1"] = image_1
-
         if self.opt.train.patched:
             self.grids(keys=[lq_key, gt_key], 
                        opt=self.opt.train if is_train else self.opt.val)
     
-    def _optimize_parameters(self, denoised_latents, gt_1, prompt_embeds, neg_prompt_embeds):
-        bsz = denoised_latents.shape[0]
-        output_image = (self.vae.decode(denoised_latents / self.vae.config.scaling_factor).sample).clamp(-1, 1)
+    def _optimize_parameters(self, output_image, gt, output_latents, prompt_embeds, neg_prompt_embeds):
+        bsz = output_image.shape[0]
+        device = output_image.device
 
         # loss data
-        loss_l2 = F.mse_loss(output_image.float(), gt_1.float(), reduction="mean") * self.lambda_l2
-        loss_lpips = self.net_lpips(output_image.float(), gt_1.float()).mean() * self.lambda_lpips
+        loss_l2 = F.mse_loss(output_image.float(), gt.float(), reduction="mean") * self.lambda_l2
+        loss_lpips = self.net_lpips(output_image.float(), gt.float()).mean() * self.lambda_lpips
         loss_data = self.lambda_l2*loss_l2 + self.lambda_lpips * loss_lpips
 
-        if self.lambda_kl == 0.0:
-            self.accelerator.backward(loss_data)
-            if self.accelerator.sync_gradients:
-                self.accelerator.clip_grad_norm_(self.gen_params, 1.0)
-            self.optimizers[0].step()
-            self.optimizers[0].zero_grad()
-            return {'all': loss_data, 
-                'l2': loss_l2, 
-                'lpips': loss_lpips, 
-            }
         
         # loss distribution KL
-        timesteps = torch.randint(20, 980, (bsz,), device=denoised_latents.device).long()
-        noise = torch.randn_like(denoised_latents)
-        noisy_latents = self.noise_scheduler_reg.add_noise(denoised_latents, noise, timesteps)
+        timesteps = torch.randint(20, 980, (bsz,), device=device).long()
+        noise = torch.randn_like(output_latents)
+        noisy_latents = self.noise_scheduler_reg.add_noise(output_latents, noise, timesteps)
         with torch.no_grad():
             noise_pred_update = self.unet_update(
                 noisy_latents,
@@ -381,23 +326,23 @@ class OSEDiff_onedataset_model(BaseModel):
 
             x0_pred_fix = eps_to_mu(self.noise_scheduler_reg, noise_pred_fix, noisy_latents, timesteps)
 
-            # update_err = F.mse_loss(denoised_latents, x0_pred_update).mean()
-            # fix_err = F.mse_loss(denoised_latents, x0_pred_fix).mean()
+            # update_err = F.mse_loss(output_latents, x0_pred_update).mean()
+            # fix_err = F.mse_loss(output_latents, x0_pred_fix).mean()
 
-        weighting_factor = torch.abs(denoised_latents - x0_pred_fix).mean(dim=[1, 2, 3], keepdim=True)
+        weighting_factor = torch.abs(output_latents - x0_pred_fix).mean(dim=[1, 2, 3], keepdim=True)
         grad = -(x0_pred_update - x0_pred_fix) / (weighting_factor + 1e-7) 
 
         # mask HF in the loss
         if self.use_hf_loss:  
             with torch.no_grad():
-                zt_ft = torch.fft.fftshift(torch.fft.fft2(denoised_latents), dim=(-2,-1))
+                zt_ft = torch.fft.fftshift(torch.fft.fft2(output_latents), dim=(-2,-1))
                 zt_ft = zt_ft * self.HPF # remove low frequencies
-                zt_hp = torch.real(torch.fft.ifft2(torch.fft.ifftshift(zt_ft))).to(denoised_latents.dtype)
+                zt_hp = torch.real(torch.fft.ifft2(torch.fft.ifftshift(zt_ft))).to(output_latents.dtype)
                 mask = zt_hp
                 mask = abs(mask).clip(0,self.MASK_CLIP)/self.MASK_CLIP
                 grad = grad * mask
 
-        loss_kl = F.mse_loss(denoised_latents, (denoised_latents - grad).detach())
+        loss_kl = F.mse_loss(output_latents, (output_latents - grad).detach())
 
         # calculate total gen loss and update parameters
         loss_gen = loss_data + self.lambda_kl*loss_kl
@@ -409,10 +354,10 @@ class OSEDiff_onedataset_model(BaseModel):
         self.optimizers[0].zero_grad()
         
         # loss diff for vsd unet update
-        denoised_latents, prompt_embeds = denoised_latents.detach(), prompt_embeds.detach()
-        noise = torch.randn_like(denoised_latents)
-        timesteps = torch.randint(0, self.noise_scheduler_reg.config.num_train_timesteps, (bsz,), device=denoised_latents.device).long()
-        noisy_latents = self.noise_scheduler_reg.add_noise(denoised_latents, noise, timesteps)
+        output_latents, prompt_embeds = output_latents.detach(), prompt_embeds.detach()
+        noise = torch.randn_like(output_latents)
+        timesteps = torch.randint(0, self.noise_scheduler_reg.config.num_train_timesteps, (bsz,), device=device).long()
+        noisy_latents = self.noise_scheduler_reg.add_noise(output_latents, noise, timesteps)
 
         noise_pred = self.unet_update(
             noisy_latents,
@@ -442,46 +387,37 @@ class OSEDiff_onedataset_model(BaseModel):
         gt_key = self.dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key
 
-        image_1 = self.sample[lq_key]
-        gt_1 = self.sample[gt_key]
+        lq = self.sample[lq_key]
+        gt = self.sample[gt_key]
         
-        bsz = image_1.shape[0]
+        bsz = lq.shape[0]
 
-        image_1 = image_1.clip(-1, 1)
-        gt_1 = gt_1.clip(-1, 1)
+        lq = lq.clip(-1, 1)
+        gt = gt.clip(-1, 1)
 
-        if image_1.shape[1] == 1:
-            image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
-        if gt_1.shape[1] == 1:
-            gt_1 = einops.repeat(gt_1, 'b 1 h w -> b 3 h w')
+        if lq.shape[1] == 1:
+            lq = einops.repeat(lq, 'b 1 h w -> b 3 h w')
+        if gt.shape[1] == 1:
+            gt = einops.repeat(gt, 'b 1 h w -> b 3 h w')
  
-        gt_ram = self.model_vlm_transforms(image_1*0.5+0.5)
+        gt_ram = self.model_vlm_transforms(lq*0.5+0.5)
         caption = inference(gt_ram.to(dtype=torch.float16), self.model_vlm)
         prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
         neg_prompt_embeds = encode_prompt([self.neg_caption]*bsz, self.tokenizer, self.text_encoder)
-        
-        vae_input = image_1
-
-        latents = self.vae.encode(vae_input).latent_dist.sample() * self.vae.config.scaling_factor
         if self.use_adapter:
-            down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(image_1))
+            down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(lq))
         else:
             down_block_additional_residuals = None
-            
-        # Predict the noise residual
-        model_pred = self.unet(latents, 
-                                self.timesteps, 
-                                encoder_hidden_states=prompt_embeds, 
-                                down_block_additional_residuals=down_block_additional_residuals, 
-                                return_dict=False)[0]
 
-        # Denoise the latents
-        denoised_latents = self.noise_scheduler.step(model_pred, self.timesteps[0], latents, return_dict=True).prev_sample
+        # Predict the clean image in pixel space
+        model_pred = self.net_g(lq, 
+                                down_block_additional_residuals=down_block_additional_residuals, # this is ignored 
+                                )
 
-
-        return self._optimize_parameters(denoised_latents, gt_1, prompt_embeds, neg_prompt_embeds)
-
+        output_latents = self.vae.encode(model_pred).latent_dist.sample() * self.vae.config.scaling_factor
         
+        return self._optimize_parameters(model_pred, gt, output_latents, prompt_embeds, neg_prompt_embeds)
+
     
     @torch.no_grad()
     def validation(self):
@@ -490,14 +426,7 @@ class OSEDiff_onedataset_model(BaseModel):
         idx = 0
         for model in self.models:
             model.eval()
-        noise_scheduler_tmp = DDPMScheduler.from_pretrained(self.opt.pretrained_model_name_or_path, subfolder="scheduler")
-        noise_scheduler_tmp.set_timesteps(timesteps=[self.opt.train.timestep], device='cuda')
-        self.pipeline = OSEDiffPipeline(
-            self.vae,
-            self.unet,
-            noise_scheduler_tmp,
-            concatenate_images=False
-        )
+        
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 
                                 batch_size=1)
@@ -524,52 +453,39 @@ class OSEDiff_onedataset_model(BaseModel):
                 image_1 = self.sample[lq_key]
                 if image_1.shape[1] == 1:
                     image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
-                bsz = image_1.shape[0]  
-                lq_ram = self.model_vlm_transforms(image_1*0.5+0.5)
-                caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-                prompt_embeds = encode_prompt(caption, self.tokenizer, self.text_encoder)
-                out = self.pipeline(
-                    image_1,
-                    None,
-                    prompt_embeds=prompt_embeds[:bsz],
-                    # added_cond_kwargs={k: v[:bsz] for k, v in self.unet_added_conditions.items()},
-                    timesteps=[self.opt.train.timestep],
-                )
-                pred.append(out.images)
+                if self.use_adapter:
+                    down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(image_1))
+                else:
+                    down_block_additional_residuals = None
+                out = self.net_g(image_1, down_block_additional_residuals=down_block_additional_residuals)
+                pred.append(out)
             pred = torch.cat(pred, dim=0)
             pred = einops.rearrange(pred, '(b n) c h w -> b n c h w', b=b)
             out = []
             for i in range(len(pred)):
                 merged = merge_patches(pred[i], self.sample[lq_key+'_patched_pos'])
                 out.append(merged[..., :h, :w])
-            lq1 = self.sample[lq_key+'_original']
+            lq = self.sample[lq_key+'_original']
             gt = self.sample[gt_key+'_original']
             out = torch.stack(out)
         else: 
-            lq1 = self.sample[lq_key]
+            lq = self.sample[lq_key]
             gt = self.sample[gt_key]
-            bsz = lq1.shape[0]  
-            if lq1.shape[1] == 1:
-                lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
-            lq_ram = self.model_vlm_transforms(lq1*0.5+0.5)
-            caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-            prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
-        
-            output = self.pipeline(
-                lq1,
-                None,
-                prompt_embeds=prompt_embeds[:bsz],
-                # added_cond_kwargs={"text_embeds": prompt_embeds[:bsz], "time_ids": torch.tensor([self.timesteps]*bsz).to(prompt_embeds.device)},
-                timesteps=[self.opt.train.timestep],
-            )
-            out = output.images
+            bsz = lq.shape[0]  
+            if lq.shape[1] == 1:
+                lq = einops.repeat(lq, 'b 1 h w -> b 3 h w')
+            if self.use_adapter:
+                down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(lq))
+            else:
+                down_block_additional_residuals = None
+            out = self.net_g(lq, down_block_additional_residuals=down_block_additional_residuals)
 
-        lq1 = lq1.cpu().numpy()*0.5+0.5
+        lq = lq.cpu().numpy()*0.5+0.5
         gt = gt.cpu().numpy()*0.5+0.5
         out = out.cpu().numpy()*0.5+0.5
         for i in range(len(gt)):
             idx += 1
-            image1 = [lq1[i], gt[i], out[i]]
+            image1 = [lq[i], gt[i], out[i]]
             for j in range(len(image1)):
                 if image1[j].shape[0] == 1:
                     image1[j] = einops.repeat(image1[j], '1 h w -> 3 h w')

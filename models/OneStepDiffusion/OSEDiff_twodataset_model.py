@@ -10,12 +10,14 @@ import torch
 import lpips
 from tqdm import tqdm
 import torch.nn.functional as F
+import kornia.augmentation as K
 from transformers import AutoTokenizer, CLIPTextModel
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, EMAModel, T2IAdapter
 from peft import LoraConfig
 from torchvision import transforms
+import torchvision.transforms.functional as TF
 from models.OneStepDiffusion.OSEDiff_onedataset_model import OSEDiff_onedataset_model, encode_prompt, eps_to_mu
-from pipelines.OSEDiffPipeline import OSEDiffPipeline, hpf_adapter_input
+from pipelines.OSEDiffPipeline import OSEDiffPipeline
 from ram import inference_ram as inference
 
 from torch.utils.data import DataLoader, Subset
@@ -29,16 +31,44 @@ from safetensors.torch import load_file
 class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
     def __init__(self, opt, logger):
         super(OSEDiff_twodataset_model, self).__init__(opt, logger)
-        if self.use_adapter and opt.train.hpf_adapter_input:
-            self.adapter_preprocess = hpf_adapter_input
-        else:
-            self.adapter_preprocess = lambda x: x
         
     def feed_data(self, data, is_train=True):
         self.sample = data
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
         
+        if not is_train:
+            permute_channels = self.opt.val.get("permute_channels", None)
+            saturation_factor = self.opt.val.get("saturation_factor", 1.0)
+            hue_factor = self.opt.val.get("hue_factor", 0.0)
+            pixelate_factor = self.opt.val.get("pixelate_factor", 1.0)
+            gaussian_blur_pixels = self.opt.val.get("gaussian_blur_pixels", 0.0)
+
+            lq1 = self.sample[lq_key+"_1"]
+            lq2 = self.sample[lq_key+"_2"]
+            if saturation_factor != 1.0:
+                # 0 = Grayscale, 1 = Original, >1 = More saturated
+                lq1 = TF.adjust_saturation(lq1*0.5+0.5, saturation_factor=saturation_factor)*2-1
+            if hue_factor != 0.0:
+                # Range is [-0.5, 0.5]. 
+                # 0 = Original, 0.5/-0.5 = Complementary colors (180 degree shift)
+                lq1 = TF.adjust_hue(lq1*0.5+0.5, hue_factor=hue_factor)*2-1
+            if permute_channels:
+                lq1 = lq1[:, permute_channels, :, :]
+            self.sample[lq_key+"_1"] = lq1
+
+            if self.opt.val.get("random_elastic_transform", False):
+                aug = K.RandomElasticTransform(alpha=(2.0, 2.0), sigma=(10.0, 10.0), p=1.0)
+                lq2 = aug(lq2)
+            if pixelate_factor != 1.0:
+                # Pixelation (Downsample -> Upsample)
+                h, w = lq2.shape[-2:]
+                small = F.interpolate(lq2, scale_factor=1/pixelate_factor, mode='nearest')
+                lq2 = F.interpolate(small, size=(h, w), mode='nearest')
+            if gaussian_blur_pixels != 0.0:
+                lq2 = TF.gaussian_blur(lq2, kernel_size=[gaussian_blur_pixels, gaussian_blur_pixels])
+            self.sample[lq_key+"_2"] = lq2
+            
         # # make SR for testing
         # gt_1 = self.sample[gt_key+"_1"]
         # image_1 = F.interpolate(gt_1, size=(128,128), mode='bicubic')
@@ -219,5 +249,10 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             if adapter_input is not None:
                 log_image(self.opt, self.accelerator, np.clip(adapter_input[i:i+1], 0, 1), f'adapter_input_{idx:04d}', self.global_step)
             log_metrics(gt1[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
+
+            if not self.is_train:
+                log_image(self.opt, self.accelerator, np.clip(lq1[i:i+1],0,1),f'lq1_{idx:04d}', self.global_step)
+                log_image(self.opt, self.accelerator, np.clip(lq2[i:i+1],0,1),f'lq2_{idx:04d}', self.global_step)
+                log_image(self.opt, self.accelerator, np.clip(gt1[i:i+1],0,1),f'gt_{idx:04d}', self.global_step)
         return idx
     
