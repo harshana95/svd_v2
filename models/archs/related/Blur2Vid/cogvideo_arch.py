@@ -25,7 +25,7 @@ from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.attention import Attention, FeedForward
 from diffusers.models.attention_processor import AttentionProcessor, CogVideoXAttnProcessor2_0, FusedCogVideoXAttnProcessor2_0
 #from diffusers.models.embeddings import CogVideoXPatchEmbed, TimestepEmbedding, Timesteps
-from models.archs.related.Blur2Vid.cogvideo_embeddings import CogVideoXPatchEmbed, TimestepEmbedding, Timesteps
+from models.archs.related.Blur2Vid.cogvideo_embeddings import CogVideoXPatchEmbedWBlur, TimestepEmbedding, Timesteps
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
@@ -155,7 +155,7 @@ class CogVideoXBlock(nn.Module):
         return hidden_states, encoder_hidden_states
 
 
-class CogVideoXTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
+class CogVideoXTransformer3D_arch(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
     A Transformer model for video-like data in [CogVideoX](https://github.com/THUDM/CogVideo).
 

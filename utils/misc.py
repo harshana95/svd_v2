@@ -11,6 +11,7 @@ import os
 import diffusers
 import torch
 import transformers
+from diffusers.utils import export_to_video
 
 from skimage.metrics import structural_similarity as ssim
 from accelerate import Accelerator
@@ -300,6 +301,23 @@ def log_image(args, accelerator, formatted_images, name, step):
             tracker.writer.log_image(np.hstack(formatted_images), name=name, step=step, image_channels="first")
         else:
             raise Exception(f"image logging not implemented for {tracker.name}")
+
+def log_video(args, accelerator, video, name, step, fps=20):
+    os.makedirs(os.path.join(args.path.experiments_root, 'videos'), exist_ok=True)
+    filename = os.path.join(args.path.experiments_root, 'videos' , f"{name}_{step//1000:04d}k.mp4")
+    export_to_video(video, filename, fps=fps)
+
+    # name += '.mp4'
+    for tracker in accelerator.trackers:
+        if tracker.name == "tensorboard":
+            pass
+        elif tracker.name == "wandb":
+            pass
+        elif tracker.name == "comet_ml":
+            tracker.writer.log_video(file=filename, name=name, format="mp4", step=step)
+        else:
+            raise Exception(f"video logging not implemented for {tracker.name}")
+
 def log_metric(accelerator, data, step):
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":

@@ -18,5 +18,8 @@ def define_network(opt):
         config = config_class(**opt.__dict__)
         net = net_class(config)
     else:
-        net = net_class(**opt.__dict__)
+        if isinstance(opt, dict):
+            net = net_class(**opt)
+        else:
+            net = net_class(**opt.__dict__)
     return net
