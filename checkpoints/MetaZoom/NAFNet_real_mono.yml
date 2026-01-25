@@ -35,7 +35,7 @@ datasets:
       crop:
         h: 2160
         w: 2160
-      rescale:
+      resize:
         factor: 0.25
       select_channels:
         channels: [False, True, False]
@@ -70,7 +70,7 @@ datasets:
       crop:
         h: 2160
         w: 2160
-      rescale:
+      resize:
         factor: 0.25
       select_channels:
        keys: [gt]

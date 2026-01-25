@@ -1,5 +1,5 @@
-name: Blur2Vid
-model_type: Blur2Vid_model
+name: Blur2VidOF
+model_type: Blur2Vid_OF_model
 is_train: true
 report_to: comet_ml
 push_to_hub: false
@@ -9,7 +9,7 @@ mixed_precision: bf16
 allow_tf32: false
 
 tracker_project_name: Blur2Vid
-experiment_key: Blur2Vid_cycle
+experiment_key: Blur2Vid_opticalflow_half_res
 
 args:
   pretrained_model_name_or_path: THUDM/CogVideoX-2b
@@ -30,11 +30,12 @@ args:
   special_info: "just_one"
 
 
+
 datasets:
   train:
     type: FullMotionBlurDataset
     data_dir: /scratch/gilbreth/wweligam/experiments/blur2vid/datasets/FullDataset/
-    image_size: [352, 640]
+    image_size: [352, 640] #[720, 1280] # [352, 640]
     split: [0.02, 1.0]
     num_proc: 2
     
@@ -44,7 +45,7 @@ datasets:
   val:
     type: FullMotionBlurDataset
     data_dir: /scratch/gilbreth/wweligam/experiments/blur2vid/datasets/FullDataset/
-    image_size: [352, 640]
+    image_size: [352, 640] #[720, 1280] #[352, 640]
     split: [0.0, 0.02]
     num_proc: 2
 
@@ -54,15 +55,15 @@ datasets:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~
-  resume_from_checkpoint: ~
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Blur2VidOF/Blur2Vid_opticalflow_half_res_2026_01_24_22_56_21/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 1e-4
+    learning_rate: !!float 2e-5
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_weight_decay: 0.0001
@@ -78,7 +79,7 @@ train:
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 1
+  batch_size: 4
 
 
   max_train_steps: 20000

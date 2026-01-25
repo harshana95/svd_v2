@@ -1,13 +1,18 @@
+import glob
 import cv2
 import einops
 from huggingface_hub import hf_hub_download
 import numpy as np
+import peft
 import torch
 import os
 from typing import List, Optional, Union, Tuple
+import torchvision
 from tqdm import tqdm
 from PIL import Image
 from safetensors.torch import load_file
+import ptlflow
+from ptlflow.utils import flow_utils
 
 from transformers import T5EncoderModel, T5Tokenizer
 from transformers import AutoTokenizer, T5EncoderModel
@@ -20,7 +25,7 @@ from diffusers.training_utils import (
 )
 from diffusers.utils import export_to_video
 
-from models.MotionBlur2Video.helpers import random_insert_latent_frame, transform_intervals
+from models.MotionBlur2Video.helpers import random_insert_latent_frame, transform_intervals, apply_lora_to_model, warp_tensor
 from models.archs import define_network
 from models.archs.related.Blur2Vid.cogvideo_arch import CogVideoXTransformer3D_arch
 from models.base_model import BaseModel
@@ -155,13 +160,50 @@ def compute_prompt_embeddings(
     return prompt_embeds
 
 
+def load_model_hook(models, input_dir):
+    saved = {}
+    while len(models) > 0:
+        # pop models so that they are not loaded again
+        model = models.pop()
+        class_name = model._get_name()
+        saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
+        print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
+        # try:
+        #     c = find_attr(_arch_modules, class_name)
+        #     assert c is not None
+        # except ValueError as e:  # class is not written by us. Try to load from diffusers
+        #     print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
+        #     m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
+        #     c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
+        
+        # load diffusers style into model
+        folder = os.path.join(input_dir, f"{class_name}_{saved[class_name]}")
+        combined_state_dict = {}
+        # breakpoint()
+        if "PeftModel" in class_name:
+            model = peft.PeftModel.from_pretrained(model.base_model.model, folder, is_trainable=True)
+            
+        else:
+            for file_path in glob.glob(os.path.join(folder, "*.safetensors")):
+                state_dict_part = load_file(file_path)
+                combined_state_dict.update(state_dict_part)
+            try:
+                model.load_state_dict(combined_state_dict)
+            except Exception as e:
+                print(f"{'='*50} Failed to load {class_name} {'='*50} {model} {e}")
+        
+        # load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
+        # model.load_state_dict(load_model.state_dict())
+        # del load_model
+        
 
-
-class Blur2Vid_model(BaseModel):
+class Blur2Vid_OF_model(BaseModel):
     """Generate video from motion blurred image"""
 
     def __init__(self, opt, logger):
-        super(Blur2Vid_model, self).__init__(opt, logger)
+        super(Blur2Vid_OF_model, self).__init__(opt, logger)
+        self.load_handle.remove()
+        self.load_handle = self.accelerator.register_load_state_pre_hook(load_model_hook)
         args = self.opt['args']
         self.args = args
 
@@ -196,12 +238,16 @@ class Blur2Vid_model(BaseModel):
             filename="cogvideox-outsidephotos/checkpoint/model.safetensors"
         )
         transformer.load_state_dict(load_file(weight_path))
-        
+        # transformer = transformer.to(torch.float32)
+                
         vae = AutoencoderKLCogVideoX.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
         )
 
         scheduler = CogVideoXDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+
+        opt_flow_model = ptlflow.get_model('sea_raft_l', ckpt_path='things')
+        opt_flow_model.eval()
 
         if args.enable_slicing:
             vae.enable_slicing()
@@ -211,6 +257,7 @@ class Blur2Vid_model(BaseModel):
         # We only train the additional adapter controlnet layers
         text_encoder.requires_grad_(False)
         vae.requires_grad_(False)
+        opt_flow_model.requires_grad_(False)
         
         self.vae_scale_factor_spatial = 2 ** (len(vae.config.block_out_channels) - 1)
         self.model_config = transformer.module.config if hasattr(transformer, "module") else transformer.config
@@ -220,6 +267,7 @@ class Blur2Vid_model(BaseModel):
         self.vae = vae
         self.scheduler = scheduler
         self.tokenizer = tokenizer
+        self.opt_flow_model = opt_flow_model
 	
         # This drastically reduces VRAM usage by trading a small amount of compute.
         # It re-calculates activations during the backward pass instead of storing them.
@@ -228,9 +276,22 @@ class Blur2Vid_model(BaseModel):
         # Enable gradient checkpointing for VAE to reduce memory during decode
         # This is especially useful when backpropagating through VAE decode for cycle loss
         self.vae.enable_gradient_checkpointing()
-        
         if self.is_train:
-            self.transformer.requires_grad_(True)
+            self.transformer.requires_grad_(False)
+            lora_r = args.get("lora_r", 16)
+            lora_alpha = args.get("lora_alpha", 32)
+            lora_dropout = args.get("lora_dropout", 0.1)
+            lora_target_modules = args.get("lora_target_modules", ["to_q", "to_k", "to_v"])
+            
+            print(f"Applying LoRA to generator model (r={lora_r}, alpha={lora_alpha})")
+            self.transformer = apply_lora_to_model(
+                self.transformer,
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                target_modules=lora_target_modules,
+            )
+            
             self.init_training_settings()
 
         self.models.append(self.transformer)
@@ -255,9 +316,11 @@ class Blur2Vid_model(BaseModel):
                 weight_dtype = torch.bfloat16
         self.weight_dtype = weight_dtype
 
+        # move frozen module to save VRAM
         self.text_encoder.to(self.accelerator.device, dtype=weight_dtype)
-        self.transformer.to(self.accelerator.device, dtype=weight_dtype)
         self.vae.to(self.accelerator.device, dtype=weight_dtype)
+        self.opt_flow_model.to(self.accelerator.device, dtype=torch.float32)
+        # self.transformer.to(self.accelerator.device, dtype=weight_dtype)
 
     def init_training_settings(self):
         self.transformer.train()
@@ -301,20 +364,36 @@ class Blur2Vid_model(BaseModel):
         #     eps=train_opt.optim.adam_epsilon,
         # )
         # self.optimizers.append(self.optimizer_d)
+    def calculate_optical_flow_from_video(self, video):
+        flows = []
+        for i in range(video.shape[1]-1):
+            gt_flows = self.opt_flow_model({'images': video[:, i:i+2].to(self.opt_flow_model.dtype)})
+            flows.append(gt_flows['flows'][:, 0])
+        flows =  torch.stack([torch.zeros_like(flows[0])] + flows, dim=1)#.to(dtype=self.weight_dtype)
+        return flows
+
+    def convert_flow_to_video(self, flows):
+        gt_flow_video = []
+        for i in range(flows.shape[1]):
+            gt_flow_video.append(flow_utils.flow_to_rgb(flows[:, i].to(torch.float32)).to(self.opt_flow_model.dtype))
+        gt_flow_video =  torch.stack(gt_flow_video, dim=1)#.to(dtype=self.weight_dtype)
+        return gt_flow_video
 
     def optimize_parameters(self):
         DEBUG = True
         for optimizer in self.optimizers:
             optimizer.zero_grad()
         with torch.no_grad():
-            model_input = encode_video(self.sample["video"].to(memory_format=torch.contiguous_format).float(), self.accelerator, self.vae).to(dtype=self.weight_dtype)  # [B, F, C, H, W]
-            image_latent = encode_video(self.sample["blur_img"].to(memory_format=torch.contiguous_format).float(), self.accelerator, self.vae).to(dtype=self.weight_dtype)  # [B, F, C, H, W]
+            gt_video = self.sample["video"].to(memory_format=torch.contiguous_format).float()
+            blurred = self.sample["blur_img"].to(memory_format=torch.contiguous_format).float()
+            
+            model_input = encode_video(gt_video, self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)  # [B, F, C, H, W]
+            image_latent = encode_video(blurred, self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)  # [B, F, C, H, W]
             prompts = self.sample["caption"]
             input_intervals = self.sample["input_interval"].to(memory_format=torch.contiguous_format).float()
             output_intervals = self.sample["output_interval"] .to(memory_format=torch.contiguous_format).float()
 
             batch_size = len(prompts)
-            # print(f"Batch size {batch_size}")
             
             # True = use real prompt (conditional); False = drop to empty (unconditional)
             guidance_mask = torch.rand(batch_size, device=self.accelerator.device) >= 0.2  
@@ -342,6 +421,14 @@ class Blur2Vid_model(BaseModel):
         # Sample noise that will be added to the latents
         noise = torch.randn_like(model_input)
         batch_size, num_frames, num_channels, height, width = model_input.shape
+        
+        # breakpoint()
+        
+        # calculate oracle optical flow
+        flows = self.calculate_optical_flow_from_video(gt_video)
+        # warp noise
+        noise = warp_tensor(noise, flows)
+                
 
         # Sample a random timestep for each image
         timesteps = torch.randint(
@@ -420,50 +507,58 @@ class Blur2Vid_model(BaseModel):
         # condition_mask [4, 6]
         if DEBUG:
             assert torch.isfinite(loss).all()
-        dec = self.vae.decode(velocity[~condition_mask].view(batch_size, -1, num_channels, height, width).permute(0,2,1,3,4).to(self.weight_dtype) / self.vae.config.scaling_factor).sample
+        # dec = self.vae.decode(velocity[~condition_mask].view(batch_size, -1, num_channels, height, width).permute(0,2,1,3,4).to(self.weight_dtype) / self.vae.config.scaling_factor).sample
         
-        # # Decode in chunks to reduce memory usage during backprop
-        # velocity_latents = velocity[~condition_mask].view(batch_size, -1, num_channels, height, width).permute(0,2,1,3,4).to(torch.bfloat16) / self.vae.config.scaling_factor
-        # num_frames_to_decode = velocity_latents.shape[2]
-        # chunk_size = 2  # Decode 2 frames at a time to reduce memory
+        # # # Decode in chunks to reduce memory usage during backprop
+        # # velocity_latents = velocity[~condition_mask].view(batch_size, -1, num_channels, height, width).permute(0,2,1,3,4).to(torch.bfloat16) / self.vae.config.scaling_factor
+        # # num_frames_to_decode = velocity_latents.shape[2]
+        # # chunk_size = 2  # Decode 2 frames at a time to reduce memory
         
-        # dec_chunks = []
-        # for i in range(0, num_frames_to_decode, chunk_size):
-        #     chunk_end = min(i + chunk_size, num_frames_to_decode)
-        #     chunk_latents = velocity_latents[:, :, i:chunk_end]
-        #     chunk_dec = self.vae.decode(chunk_latents).sample
-        #     dec_chunks.append(chunk_dec)
-        # dec = torch.cat(dec_chunks, dim=2)
+        # # dec_chunks = []
+        # # for i in range(0, num_frames_to_decode, chunk_size):
+        # #     chunk_end = min(i + chunk_size, num_frames_to_decode)
+        # #     chunk_latents = velocity_latents[:, :, i:chunk_end]
+        # #     chunk_dec = self.vae.decode(chunk_latents).sample
+        # #     dec_chunks.append(chunk_dec)
+        # # dec = torch.cat(dec_chunks, dim=2)
         
-        dec = dec.permute(0,2,1,3,4)
-        # [4, 6, 16, 90, 160] -> [4, 17, 3, 720, 1280]  range[-1,1]
-        dec = dec*0.5+0.5 # [-1,-1] -> [0,1]
-        dec = torch.clamp(dec, min=0.0, max=1.0)
+        # dec = dec.permute(0,2,1,3,4)
+        # # [4, 6, 16, 90, 160] -> [4, 17, 3, 720, 1280]  range[-1,1]
+        # dec = dec*0.5+0.5 # [-1,-1] -> [0,1]
+        # dec = torch.clamp(dec, min=0.0, max=1.0)
         
-        # averaging the frames in linear space
-        gamma = 2.2
-        dec_lin = torch.pow(dec, gamma)
-        dec_avg_lin = torch.mean(dec_lin, dim=1, keepdim=True)
-        # gamma-encode back to sRGB domain
-        reblurred = torch.pow(dec_avg_lin, 1.0 / gamma)*2-1
+        # # averaging the frames in linear space
+        # gamma = 2.2
+        # dec_lin = torch.pow(dec, gamma)
+        # dec_avg_lin = torch.mean(dec_lin, dim=1, keepdim=True)
+        # # gamma-encode back to sRGB domain
+        # reblurred = torch.pow(dec_avg_lin, 1.0 / gamma)*2-1
 
         if DEBUG:
-            assert torch.isfinite(dec).all()
-            assert torch.isfinite(reblurred).all()
-            if self.global_step % 10 == 0 or self.global_step == 0:
+            # assert torch.isfinite(dec).all()
+            # assert torch.isfinite(reblurred).all()
+            gt_flow_video = self.convert_flow_to_video(flows)
+            if self.global_step % 100 == 0 or self.global_step <= 1:
                 for i in range(batch_size):
-                    log_video(self.opt, self.accelerator, dec[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_dec_{i}', self.global_step)
-                log_image(self.opt, self.accelerator, np.clip(reblurred.detach().cpu().to(torch.float32).numpy()*0.5+0.5, 0,1)[:,0], f'reblur_{i}', self.global_step)
+                    # breakpoint()
+                    log_video(self.opt, self.accelerator, noise[i,:,:3].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_warped_{i}', self.global_step)
+                    
+                    log_video(self.opt, self.accelerator, gt_flow_video[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_gtflow_{i}', self.global_step)
+                    log_video(self.opt, self.accelerator, gt_video[i].detach().cpu().float().numpy().transpose((0,2,3,1))*0.5+0.5, f'train_gt_{i}', self.global_step)
+                    # log_video(self.opt, self.accelerator, dec[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_dec_{i}', self.global_step)
+                    # log_image(self.opt, self.accelerator, np.clip(reblurred.detach().cpu().to(torch.float32).numpy()*0.5+0.5, 0,1)[i:i+1,0], f'reblur_{i}', self.global_step)
+                    log_image(self.opt, self.accelerator, np.clip(blurred.detach().cpu().to(torch.float32).numpy()*0.5+0.5, 0,1)[i:i+1,0], f'train_blur_{i}', self.global_step)
             
         
-        # breakpoint()
-        # calculate cycle loss
-        loss_cycle = torch.mean((reblurred - self.sample["blur_img"])**2)
-            
-        # loss_cycle = loss
-        loss_all = 0.1*loss_cycle + loss
+        # # breakpoint()
+        # # calculate cycle loss
+        # loss_cycle = torch.mean((reblurred - self.sample["blur_img"])**2)
+        # assert torch.isfinite(loss_cycle).all()
+
+        # # loss_cycle = loss
+        # loss_all = 0.1*loss_cycle + loss
         
-        # breakpoint()
+        loss_all = loss
         self.accelerator.backward(loss_all)
 
         # Prevent parameter blow-ups (NaNs in model_output on next step usually come from inf/NaN grads here)
@@ -471,22 +566,24 @@ class Blur2Vid_model(BaseModel):
             self.accelerator.clip_grad_norm_(self.transformer.parameters(), 0.1)
             self.accelerator.clip_grad_norm_(self.vae.parameters(), 0.1)
 
-        # Hard stop if anything went non-finite during backward (prevents corrupting optimizer state/weights).
-        # This also helps pinpoint whether NaNs originate from forward vs backward.
-        if DEBUG:
-            assert torch.isfinite(loss_cycle).all()
-            # bad_grad = None
-            # for n, p in self.transformer.named_parameters():
-            #     if p.grad is not None and not torch.isfinite(p.grad).all():
-            #         bad_grad = n
-            #         # self.logger.error(f"Non-finite grad detected in transformer param: {bad_grad}") 
-            #         break # all NaN
-            # if bad_grad is not None:
-        if not torch.isfinite(self.transformer.patch_embed.blur_condition.grad).all():
-            self.logger.error(f"Non-finite grad detected at step {self.global_step}. Skipping optimizer step.")
-            for opt in self.optimizers:
-                opt.zero_grad(set_to_none=True)
-            return {"all": loss_all.detach(), "diff": loss.detach(), "cycle": loss_cycle.detach()}
+        # # Hard stop if anything went non-finite during backward (prevents corrupting optimizer state/weights).
+        # # This also helps pinpoint whether NaNs originate from forward vs backward.
+        # if DEBUG:
+            
+        #     bad_grad = None
+        #     for n, p in self.transformer.named_parameters():
+        #         if p.grad is not None and not torch.isfinite(p.grad).all():
+        #             bad_grad = n
+        #             # self.logger.error(f"Non-finite grad detected in transformer param: {bad_grad}") 
+        #             break # all NaN
+        #     if bad_grad is not None:
+        # # if not torch.isfinite(self.transformer.patch_embed.blur_condition.grad).all():
+        #         self.logger.error(f"Non-finite grad detected at step {self.global_step}. Skipping optimizer step.")
+        #         for opt in self.optimizers:
+        #             opt.zero_grad(set_to_none=True)
+        #         return {"all": loss_all.detach(), "diff": loss.detach(), 
+        #         # "cycle": loss_cycle.detach()
+        #         }
 
         
         # update weights
@@ -495,7 +592,7 @@ class Blur2Vid_model(BaseModel):
         return {
             'all': loss_all,
             'diff': loss,
-            'cycle': loss_cycle
+            # 'cycle': loss_cycle
         }
     def reblur_video(self, video):
         b, f, c, h, w = video.shape
@@ -526,13 +623,45 @@ class Blur2Vid_model(BaseModel):
     def validate_step(self, _batch, idx):
         self.feed_data(_batch, is_train=False)
         output_dir = os.path.join(self.opt.path.experiments_root, 'outputs')
+        frame = ((self.sample["blur_img"][:, 0].permute(0,2,3,1).cpu().numpy() + 1)*127.5).astype(np.uint8)
+        
+        assert len(self.sample['file_name']) == 1
+        filename = self.sample['file_name'][0]
+        name = os.path.basename(os.path.dirname(os.path.splitext(filename)[0]))
+        num_frames = self.sample["num_frames"][0]
 
-        frame = ((self.sample["blur_img"][0].permute(0,2,3,1).cpu().numpy() + 1)*127.5).astype(np.uint8)
-        # breakpoint()
+        #save the gt_video output
+        gt_video = self.sample["video"][0].permute(0,2,3,1).cpu().numpy()
+        gt_video = ((gt_video + 1) * 127.5)/255
+        gt_video = gt_video[0:num_frames]
+        # save_frames_as_pngs((gt_video*255).astype(np.uint8), os.path.join(output_dir, "gt_frames", name))
+        log_video(self.opt, self.accelerator, gt_video, f'gt_{name}', self.global_step)
+
+        #save the blurred image
+        log_image(self.opt, self.accelerator, np.clip(frame.astype(np.float32)/255, 0,1).transpose(0,3,1,2), f'blur_{name}', self.global_step)
+
+        # calculate flow
+        video_latent = encode_video(self.sample["video"], self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)
+        # shape = (
+        #     frame.shape[0],
+        #     (num_frames - 1) // self.pipeline.vae_scale_factor_temporal + 1,
+        #     16,
+        #     self.args.height // self.pipeline.vae_scale_factor_spatial,
+        #     self.args.width // self.pipeline.vae_scale_factor_spatial,
+        # )
+        flow = self.calculate_optical_flow_from_video(self.sample["video"])
+        warped = warp_tensor(torch.randn_like(video_latent), flow)
+        gt_flow_video = self.convert_flow_to_video(flow)
+        for i in range(flow.shape[0]):
+            log_video(self.opt, self.accelerator, gt_flow_video[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'val_gtflow_{name}', self.global_step)
+            log_video(self.opt, self.accelerator, warped[i].detach().cpu().float().numpy()[:,:3].transpose((0,2,3,1)), f'val_warped_{name}', self.global_step)
+        del video_latent
+
         pipeline_args = {
                             "prompt": "",
                             "negative_prompt": "",
                             "image": frame,
+                            "latents": warped,
                             "input_intervals": self.sample["input_interval"][0:1],
                             "output_intervals": self.sample["output_interval"][0:1],
                             "guidance_scale": self.args.guidance_scale,
@@ -542,21 +671,8 @@ class Blur2Vid_model(BaseModel):
                             "num_frames": self.args.max_num_frames,
                             "num_inference_steps": self.args.num_inference_steps,
                         }
-        assert len(self.sample['file_name']) == 1
-        filename = self.sample['file_name'][0]
-        name = os.path.basename(os.path.dirname(os.path.splitext(filename)[0]))
-
-        num_frames = self.sample["num_frames"][0]        
-
-        #save the gt_video output
-        gt_video = self.sample["video"][0].permute(0,2,3,1).cpu().numpy()
-        gt_video = ((gt_video + 1) * 127.5)/255
-        gt_video = gt_video[0:num_frames]
-        save_frames_as_pngs((gt_video*255).astype(np.uint8), os.path.join(output_dir, "gt_frames", name))
-        log_video(self.opt, self.accelerator, gt_video, f'gt_{name}', self.global_step)
-
-        #save the blurred image
-        log_image(self.opt, self.accelerator, np.clip(frame.astype(np.float32)/255, 0,1).transpose(0,3,1,2), f'blur_{name}', self.global_step)
+        
+        
 
         videos = log_validation(
             pipe=self.pipeline,

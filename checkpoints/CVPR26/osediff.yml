@@ -36,7 +36,7 @@ datasets:
     common_transforms_keys: [hr, lr]
     transforms:
       to_tensor:
-      rescale:
+      resize:
         keys: [lq_key]
         factor: 4
 
@@ -60,7 +60,7 @@ datasets:
     common_transforms_keys: [hr, lr]
     transforms:
       to_tensor:
-      rescale:
+      resize:
         keys: [lq_key]
         factor: 4
       normalize:

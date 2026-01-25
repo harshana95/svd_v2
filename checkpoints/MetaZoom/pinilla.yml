@@ -8,9 +8,8 @@ seed: 10
 mixed_precision: !!str no
 allow_tf32: false
 tracker_project_name: MetaZoom
-experiment_key: NAFNetRealColorMetaZoom
-dataset_1_name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
-dataset_2_name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/5x/
+experiment_key: Pinilla
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 
 datasets:
   train:
@@ -19,12 +18,12 @@ datasets:
     split: train
     num_proc: 4
     map_batch_size: 16
+    skip_cache: false
 
     use_shuffle: true
     num_worker_per_gpu: 4
     gt_key: gt
     lq_key: blur
-    rf_key: refined
 
     common_transforms_keys: [gt, blur]
     transforms:
@@ -33,25 +32,47 @@ datasets:
       #   keys: [lq_key]
       #   M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
-        h: 2160
-        w: 2160
+        h: 1024
+        w: 1024
       resize:
-        factor: 0.25
-      # select_channels:
-      #   channels: [True, True, True]
-      # rotate:
-      #   angle: -90
+        factor: 0.5
+      select_channels:
+        channels: [True, True, True]
+      rotate:
+        angle: -90
+      sv_convolution:
+        keys: [gt_key]
+        keys_new: [lq_key]
+        basis_psfs: "/depot/chan129/users/harshana/svd_v2/checkpoints/MetaZoom/pinilla_psf.npy"
+        basis_coef: "/depot/chan129/users/harshana/svd_v2/checkpoints/MetaZoom/pinilla_coeff.npy"
+        constant_values_psfs: 0
+        constant_values_coef: 1
+        h: 512
+        w: 512
+      rescale:
+        keys: [lq_key]
+        factor: 3
+      poisson_noise:
+        keys: [lq_key]
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        keys: [lq_key]
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
 
   val:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
     split: validation
-    num_proc: 4
+    num_proc: 1
+    skip_cache: false
 
     use_shuffle: false
+    num_worker_per_gpu: 4
     gt_key: gt
     lq_key: blur
-    rf_key: refined
     
     common_transforms_keys: [gt, blur]
     transforms:
@@ -60,40 +81,54 @@ datasets:
       #   keys: [lq_key]
       #   M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
       crop:
-        h: 2160
-        w: 2160
+        h: 1024
+        w: 1024
       resize:
-        factor: 0.25
-      # select_channels:
-      #  channels: [True, True, True]
-      # rotate:
-      #   angle: -90
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
-      # apply_model:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
-      #   model_name: Restormer_arch
-      #   model_path: /scratch/gilbreth/wweligam/experiments/SVD/RestormerRealColor 2025 03 03 12.48.38/Restormer_arch_1/
-
+        factor: 0.5
+      select_channels:
+       keys: [gt]
+       channels: [True, True, True]
+      rotate:
+        angle: -90
+      sv_convolution:
+        keys: [gt_key]
+        keys_new: [lq_key]
+        basis_psfs: "/depot/chan129/users/harshana/svd_v2/checkpoints/MetaZoom/pinilla_psf.npy"
+        basis_coef: "/depot/chan129/users/harshana/svd_v2/checkpoints/MetaZoom/pinilla_coeff.npy"
+        constant_values_psfs: 0
+        constant_values_coef: 1
+        h: 512
+        w: 512
+      rescale:
+        keys: [lq_key]
+        factor: 3
+      poisson_noise:
+        keys: [lq_key]
+        peak: 1000
+        peak_dc: 50
+      gaussian_noise:
+        keys: [lq_key]
+        max_sigma: 0.02
+        sigma_dc: 0.005
+        mu: 0
+      
 # network structures
 network:
-  type: NAFNet
+  type: PinillaUnet
   in_channels: 3
   out_channels: 3
-  width: 32
-  enc_blk_nums: [1, 1, 1, 28]
-  middle_blk_num: 1
-  dec_blk_nums: [1, 1, 1, 1]
+
+discriminator:
+  type: PinillaDiscriminator
+  in_channels: 6
 
 
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~
-  resume_from_checkpoint: ~
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/MetaZoom/Pinilla_2026_01_24_00_58_35/
+  resume_from_checkpoint: ~ #latest
 
 # training settings
 train:
@@ -108,18 +143,18 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
+    type: constant
     lr_warmup_steps: 500
     lr_num_cycles: 3
     lr_power: 1.0
 
-  loss: 1*MSE
+  loss: 1*MSE #|0.6*Perceptual_loss
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 6
+  batch_size: 32
 
   max_train_steps: 50000
-  validation_steps: 500
+  validation_steps: 100
   checkpointing_steps: 1000
   checkpoints_total_limit: 2
 

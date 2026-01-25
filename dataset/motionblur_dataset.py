@@ -10,16 +10,10 @@ from torch.utils.data.dataset import Dataset
 import torch.nn.functional as F
 
 class BaseClass(Dataset):
-    def __init__(
-            self, 
-            data_dir,
-            image_size=(320, 512), 
-            *args,
-            **kwargs
-        ):
-        self.height, self.width = image_size
-        self.data_dir = data_dir
-        self.image_size = image_size
+    def __init__(self, opt):
+        self.height, self.width = opt.image_size
+        self.data_dir = opt.data_dir
+        self.image_size = opt.image_size
         self.length = 0
         
     def __len__(self):
@@ -69,10 +63,10 @@ class FullMotionBlurDataset(BaseClass):
     """
     A dataset that randomly selects among 1x, 2x, or large-blur modes per sample.
     """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, opt):
+        super().__init__(opt)
         self.seq_dirs = []
-
+        
         # TRAIN/VAL: build seq_dirs from each category's list or fallback
         for category in sorted(os.listdir(self.data_dir)):  # each dataset
             cat_dir = os.path.join(self.data_dir, category)
@@ -87,8 +81,9 @@ class FullMotionBlurDataset(BaseClass):
                         self.seq_dirs.append(seq_path)
 
         L = len(self.seq_dirs)
-        self.seq_dirs = self.seq_dirs[int(args.split[0]*L):int(args.split[1]*L)]
+        self.seq_dirs = self.seq_dirs[int(opt.split[0]*L):int(opt.split[1]*L)]
         assert self.seq_dirs, f"No sequences found  in {self.data_dir}"
+        print(f"Initialized dataset with {len(self.seq_dirs)} sequences")
 
     def __len__(self):
         return len(self.seq_dirs)
@@ -98,7 +93,7 @@ class FullMotionBlurDataset(BaseClass):
         seq_dir = self.seq_dirs[idx]
         frame_paths = sorted(glob.glob(os.path.join(seq_dir, '*.png')))
         mode = random.choice(['1x', '2x', 'large_blur'])
-
+        # breakpoint()
         if mode == '1x' or len(frame_paths) < 50:
             base_rate = random.choice([1, 2])
             blur_img, seq_frames, inp_int, out_int, _ = generate_1x_sequence(

@@ -56,7 +56,7 @@ datasets:
     common_transforms_keys: [image]
     transforms:
       to_tensor:
-      rescale:
+      resize:
         factor: 4
       # select_channels:
       #  channels: [False, True, False]
@@ -82,7 +82,7 @@ datasets:
     common_transforms_keys: [image]
     transforms:
       to_tensor:
-      rescale:
+      resize:
         factor: 4
       # select_channels:
       #  channels: [False, True, False]

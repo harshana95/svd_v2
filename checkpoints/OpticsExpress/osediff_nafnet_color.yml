@@ -45,7 +45,7 @@ datasets:
       crop:
         h: 1024
         w: 1024
-      rescale:
+      resize:
         factor: 0.5
       rotate:
         angle: -90
@@ -77,7 +77,7 @@ datasets:
       crop:
         h: 1024
         w: 1024
-      rescale:
+      resize:
         factor: 0.5
       rotate:
         angle: -90

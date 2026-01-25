@@ -25,6 +25,6 @@ dataset:
       keys: [gt_key]
       keys_new: [lq_key]
 
-    rescale:
+    resize:
       keys: [gt_key]
       factor: 1

@@ -27,6 +27,6 @@ dataset:
       h: 1024
       w: 1024
 
-    rescale:
+    resize:
       keys: [gt_key]
       factor: 1

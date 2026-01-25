@@ -48,7 +48,7 @@ datasets:
       crop:
         h: 1024
         w: 1024
-      rescale:
+      resize:
         factor: 0.5
       select_channels:
         channels: [True, True, True]
@@ -80,7 +80,7 @@ datasets:
       crop:
         h: 1024
         w: 1024
-      rescale:
+      resize:
         factor: 0.5
       select_channels:
        channels: [True, True, True]

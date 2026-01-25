@@ -67,7 +67,7 @@ datasets:
       crop:
         h: 128
         w: 128
-      rescale:
+      resize:
         factor: 4
       poisson_noise:
         peak: 1000
@@ -97,7 +97,7 @@ datasets:
       crop:
         h: 128
         w: 128
-      rescale:
+      resize:
         factor: 4
       poisson_noise:
         peak: 1000
@@ -126,7 +126,7 @@ datasets:
       crop:
         h: 128
         w: 128
-      rescale:
+      resize:
         factor: 4
       poisson_noise:
         peak: 1000
@@ -155,7 +155,7 @@ datasets:
       crop:
         h: 128
         w: 128
-      rescale:
+      resize:
         factor: 4
       poisson_noise:
         peak: 1000

@@ -390,13 +390,20 @@ class OSEDiff_onedataset_model(BaseModel):
         # mask HF in the loss
         if self.use_hf_loss:  
             with torch.no_grad():
-                zt_ft = torch.fft.fftshift(torch.fft.fft2(denoised_latents), dim=(-2,-1))
-                zt_ft = zt_ft * self.HPF # remove low frequencies
-                zt_hp = torch.real(torch.fft.ifft2(torch.fft.ifftshift(zt_ft))).to(denoised_latents.dtype)
-                mask = zt_hp
-                mask = abs(mask).clip(0,self.MASK_CLIP)/self.MASK_CLIP
-                grad = grad * mask
+                # zt_ft = torch.fft.fftshift(torch.fft.fft2(denoised_latents), dim=(-2,-1))
+                # zt_ft = zt_ft * self.HPF # remove low frequencies
+                # zt_hp = torch.real(torch.fft.ifft2(torch.fft.ifftshift(zt_ft))).to(denoised_latents.dtype)
+                # mask = zt_hp
+                # mask = abs(mask).clip(0,self.MASK_CLIP)/self.MASK_CLIP
+                # grad = grad * mask  # this should be convolution, not .*
 
+                grad_ft = torch.fft.fftshift(torch.fft.fft2(grad), dim=(-2,-1))
+                grad_ft = grad_ft * self.HPF # remove low frequencies
+                grad_hp = torch.real(torch.fft.ifft2(torch.fft.ifftshift(grad_ft))).to(denoised_latents.dtype)
+                grad = grad_hp
+
+        # we use this method to calculate loss because grad is computed inside torch.no_grad to save memory. 
+        # if not we have to compute the gradients of unet_fix and unet_update
         loss_kl = F.mse_loss(denoised_latents, (denoised_latents - grad).detach())
 
         # calculate total gen loss and update parameters

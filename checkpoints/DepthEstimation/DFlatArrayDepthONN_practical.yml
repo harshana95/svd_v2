@@ -89,7 +89,7 @@ network: ~
 depth_network: 
   type: file
   path: /depot/chan129/users/harshana/svd_v2/checkpoints/DepthEstimation/kernels.pt
-  rescale: 1
+  resize: 1
 
 
 

@@ -75,7 +75,7 @@ class BaseModel():
         if not self.is_train:
             opt['name'] = 'infer'
             opt['tracker_project_name'] = 'infer'
-        self.experiment_name = opt.experiment_key + f"{opt.comment} {datetime.now().strftime('%Y %m %d %H.%M.%S')}"
+        self.experiment_name = opt.experiment_key + f"{opt.comment}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
         self.accelerator = initialize(opt, logger, self.experiment_name)
         logger.info(opt)
         self.opt = opt

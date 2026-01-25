@@ -54,7 +54,7 @@ datasets:
         w: 1024
       rotate:
         angle: -90
-      rescale:
+      resize:
         factor: 0.25
       # poisson_noise:
       #   keys: [lq_key]
@@ -89,7 +89,7 @@ datasets:
         w: 1024
       rotate:
         angle: -90
-      rescale:
+      resize:
         factor: 0.25
       # poisson_noise:
       #   keys: [lq_key]

@@ -69,6 +69,14 @@ class apply_function:
     
 class sv_convolution:
     def __init__(self, basis_psfs, basis_coef, **kwargs):
+        if type(basis_psfs) == str:
+            basis_psfs = np.load(basis_psfs)
+            basis_psfs = crop_arr(basis_psfs, kwargs.get('h'), kwargs.get('w'), mode='constant', constant_values=kwargs.get('constant_values_psfs', 0))
+            basis_psfs = torch.from_numpy(basis_psfs).to(torch.float32)
+        if type(basis_coef) == str:
+            basis_coef = np.load(basis_coef)
+            basis_coef = crop_arr(basis_coef, kwargs.get('h'), kwargs.get('w'), mode='constant', constant_values=kwargs.get('constant_values_coef', 1))
+            basis_coef = torch.from_numpy(basis_coef).to(torch.float32)
         self.basis_psfs = einops.rearrange(basis_psfs, 'c 1 n h w -> c n h w')
         self.basis_coef = einops.rearrange(basis_coef, 'c 1 n h w -> c n h w')
         assert self.basis_coef.shape[-2:] == self.basis_psfs.shape[-2:], f"Shape mismatch {self.basis_coef.shape} {self.basis_psfs.shape}"
@@ -108,9 +116,16 @@ class grayscale:
         B = x[..., 2:3, :, :]
         return 0.2126*R + 0.7152*G + 0.0722*B
     
-
 class rescale:
     def __init__(self, factor):
+        self.factor = factor
+    def __call__(self, x):
+        return x * self.factor
+
+class resize:
+    def __init__(self, h=None, w=None, factor=None):
+        self.h = h
+        self.w = w
         self.factor = factor
 
     def __call__(self, x):
@@ -119,22 +134,10 @@ class rescale:
             x = x[None]
             squeeze = True
         assert len(x.shape) == 4, x.shape
-        h, w = x.shape[-2] * self.factor, x.shape[-1] * self.factor
-        arr = torch.nn.functional.interpolate(x, (int(h), int(w)), mode='bicubic')
-        return arr[0] if squeeze else arr
-    
-class resize:
-    def __init__(self, h, w):
-        self.h = h
-        self.w = w
-
-    def __call__(self, x):
-        squeeze = False
-        if len(x.shape) == 3:
-            x = x[None]
-            squeeze = True
-        assert len(x.shape) == 4, x.shape
-        h, w = self.h, self.w
+        if self.factor is not None:
+            h, w = x.shape[-2] * self.factor, x.shape[-1] * self.factor
+        else:
+            h, w = self.h, self.w
         arr = torch.nn.functional.interpolate(x, (int(h), int(w)), mode='bicubic')
         return arr[0] if squeeze else arr
     
@@ -341,7 +344,7 @@ class translate_image:
         
 
 
-def crop_arr(arr, h, w, mode='constant'):  # todo: this is too slow
+def crop_arr(arr, h, w, mode='constant',constant_values=0):  # todo: this is too slow
     hw, ww = arr.shape[-2:]
     do_pad = False
     istorch = type(arr) == torch.Tensor or type(arr) == torch.nn.Parameter
@@ -373,10 +376,9 @@ def crop_arr(arr, h, w, mode='constant'):  # todo: this is too slow
             pad[-1] = [int(np.ceil((w - ww) / 2)), int(np.floor((w - ww) / 2))]
     if do_pad:
         if istorch:
-            arr = torch.nn.functional.pad(arr, pad, mode=mode)
+            arr = torch.nn.functional.pad(arr, pad, mode=mode, value=constant_values)
         else:
-            print(pad)
-            arr = np.pad(arr, pad, mode=mode)
+            arr = np.pad(arr, pad, mode=mode, constant_values=constant_values)
     return arr
 
 

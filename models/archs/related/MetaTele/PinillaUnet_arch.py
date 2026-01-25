@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from transformers import PreTrainedModel, PretrainedConfig
 
 class ResidualBlock(nn.Module):
     """
@@ -27,18 +28,29 @@ class ResidualBlock(nn.Module):
 
         # Apply shortcut if dimensions don't match
         out += self.shortcut(identity)
-        out = self.relu(out) # Final ReLU after adding the shortcut
+        # out = self.relu(out) # Final ReLU after adding the shortcut
         return out
 
-class UNetGenerator(nn.Module):
+class PinillaUnet_config(PretrainedConfig):
+    def __init__(self, in_channels=3, out_channels=3, **kwargs):
+        super().__init__(**kwargs)
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+
+class PinillaUnet_arch(PreTrainedModel):
     """
     A U-Net based generator architecture as described in Figure 8.
     It has seven scales with six consecutive downsampling and upsampling operations.
     The number of channels are 64, 128, 256, 512.
     Four successive residual blocks are adopted in downscaling and upscaling.
     """
-    def __init__(self, in_channels=3, out_channels=3):
-        super(UNetGenerator, self).__init__()
+    config_class = PinillaUnet_config
+    def __init__(self, config):
+        super(PinillaUnet_arch, self).__init__(config)
+        
+        in_channels = config.in_channels
+        out_channels = config.out_channels
 
         # Encoder path (Downscaling)
         # Scale 1
@@ -78,35 +90,43 @@ class UNetGenerator(nn.Module):
         )
 
         # Decoder path (Upscaling)
-        # Scale 3 (Upsampled from Scale 4 bottleneck)
-        self.dec3_tconv = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=False)
-        self.dec3_res_blocks = nn.Sequential(
+        # Scale 4 (Upsampled from Scale 4 bottleneck)
+        self.dec4_tconv = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec4_res_blocks = nn.Sequential(
             ResidualBlock(256 + 256, 256), # Concatenation + current features
             ResidualBlock(256, 256),
             ResidualBlock(256, 256),
             ResidualBlock(256, 256)
         )
 
-        # Scale 2
-        self.dec2_tconv = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
-        self.dec2_res_blocks = nn.Sequential(
+        # Scale 3
+        self.dec3_tconv = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec3_res_blocks = nn.Sequential(
             ResidualBlock(128 + 128, 128),
             ResidualBlock(128, 128),
             ResidualBlock(128, 128),
             ResidualBlock(128, 128)
         )
 
-        # Scale 1
-        self.dec1_tconv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
-        self.dec1_res_blocks = nn.Sequential(
+        # Scale 2
+        self.dec2_tconv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec2_res_blocks = nn.Sequential(
             ResidualBlock(64 + 64, 64),
             ResidualBlock(64, 64),
             ResidualBlock(64, 64),
             ResidualBlock(64, 64)
         )
 
+        self.dec1_tconv = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec1_res_blocks = nn.Sequential(
+            ResidualBlock(32, 32),
+            ResidualBlock(32, 32),
+            ResidualBlock(32, 32),
+            ResidualBlock(32, 32)
+        )
+
         # Final layer to map back to output channels
-        self.out_conv = nn.Conv2d(64, out_channels, kernel_size=1, bias=False) # Use 1x1 conv
+        self.out_conv = nn.Conv2d(32, out_channels, kernel_size=1, bias=False) # Use 1x1 conv
 
     def forward(self, x):
         # Encoder
@@ -127,33 +147,72 @@ class UNetGenerator(nn.Module):
         enc4 = self.enc4_res_blocks(enc4)
 
         # Decoder
-        # Scale 3
-        dec3 = self.dec3_tconv(enc4)
+        # Scale 4
+        dec4 = self.dec4_tconv(enc4)
         # Skip connection from Scale 3 encoder features
-        dec3 = torch.cat((dec3, enc3), dim=1)
+        dec4 = torch.cat((dec4, enc3), dim=1)
+        dec4 = self.dec4_res_blocks(dec4)
+
+        # Scale 3
+        dec3 = self.dec3_tconv(dec4)
+        # Skip connection from Scale 2 encoder features
+        dec3 = torch.cat((dec3, enc2), dim=1)
         dec3 = self.dec3_res_blocks(dec3)
 
         # Scale 2
         dec2 = self.dec2_tconv(dec3)
-        # Skip connection from Scale 2 encoder features
-        dec2 = torch.cat((dec2, enc2), dim=1)
+        # Skip connection from Scale 1 encoder features
+        dec2 = torch.cat((dec2, enc1), dim=1)
         dec2 = self.dec2_res_blocks(dec2)
 
         # Scale 1
         dec1 = self.dec1_tconv(dec2)
-        # Skip connection from Scale 1 encoder features
-        dec1 = torch.cat((dec1, enc1), dim=1)
         dec1 = self.dec1_res_blocks(dec1)
 
         # Output layer
         out = self.out_conv(dec1)
-
+        # breakpoint()
         # The paper suggests a specific output activation or no activation,
         # and then combined with the input noise.
         # For a generic reconstruction, sigmoid or tanh is common if target is normalized.
         # If reconstructing raw pixel values, linear might be appropriate.
         # Here, we'll output linear, and the loss function will handle range.
         return out
+
+# Initialize Discriminator (example GAN structure, needs to be implemented fully)
+# The paper mentions Disc and VGG16. VGG16 is used for perceptual loss.
+# Disc would be a typical patch-GAN or image-level discriminator.
+# For demonstration, let's create a placeholder Discriminator.
+class PinillaDiscriminator_config(PretrainedConfig):
+    def __init__(self, in_channels=3, **kwargs):
+        super().__init__(**kwargs)
+        self.in_channels = in_channels
+
+class PinillaDiscriminator_arch(PreTrainedModel):
+    config_class = PinillaDiscriminator_config
+    def __init__(self, config):
+        super(PinillaDiscriminator_arch, self).__init__(config)
+        in_channels = config.in_channels
+
+        # Simplified discriminator structure
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(256, 1, kernel_size=4, stride=1, padding=0), # Output a single value per patch
+            nn.Sigmoid() # Output probability
+        )
+
+    def forward(self, x):
+        # For a patch-GAN, the output shape would be (batch_size, 1, H'/W')
+        # Here we'll flatten it for BCE loss.
+        output = self.conv(x)
+        return output.view(output.size(0), -1) # Flatten to (batch_size, N)
 
 class PerceptualLoss(nn.Module):
     """
@@ -254,38 +313,13 @@ if __name__ == "__main__":
     num_scales = 7 # Implied by downscaling/upscaling stages
 
     # Initialize Generator
-    generator = UNetGenerator(in_channels=in_channels, out_channels=out_channels)
+    generator = PinillaUnet_arch(in_channels=in_channels, out_channels=out_channels)
     print("U-Net Generator Architecture:")
     # print(generator)
 
-    # Initialize Discriminator (example GAN structure, needs to be implemented fully)
-    # The paper mentions Disc and VGG16. VGG16 is used for perceptual loss.
-    # Disc would be a typical patch-GAN or image-level discriminator.
-    # For demonstration, let's create a placeholder Discriminator.
-    class Discriminator(nn.Module):
-        def __init__(self, in_channels):
-            super(Discriminator, self).__init__()
-            # Simplified discriminator structure
-            self.conv = nn.Sequential(
-                nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
-                nn.BatchNorm2d(128),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
-                nn.BatchNorm2d(256),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(256, 1, kernel_size=4, stride=1, padding=0), # Output a single value per patch
-                nn.Sigmoid() # Output probability
-            )
+    
 
-        def forward(self, x):
-            # For a patch-GAN, the output shape would be (batch_size, 1, H'/W')
-            # Here we'll flatten it for BCE loss.
-            output = self.conv(x)
-            return output.view(output.size(0), -1) # Flatten to (batch_size, N)
-
-    discriminator = Discriminator(in_channels=out_channels)
+    discriminator = PinillaDiscriminator_arch(in_channels=out_channels)
     print("\nPlaceholder Discriminator Architecture:")
     # print(discriminator)
 

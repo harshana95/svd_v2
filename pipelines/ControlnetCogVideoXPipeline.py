@@ -151,7 +151,7 @@ class ControlnetCogVideoXPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin):
         tokenizer: T5Tokenizer,
         text_encoder: T5EncoderModel,
         vae: AutoencoderKLCogVideoX,
-        transformer: CogVideoXTransformer3DModel,
+        transformer,
         scheduler: Union[CogVideoXDDIMScheduler, CogVideoXDPMScheduler],
     ):
         super().__init__()
@@ -364,6 +364,7 @@ class ControlnetCogVideoXPipeline(DiffusionPipeline, CogVideoXLoraLoaderMixin):
     #     return frames
 
     def decode_latents(self, latents: torch.Tensor) -> torch.Tensor:
+        latents = latents.to(self.vae.dtype)
         latents = latents.permute(0, 2, 1, 3, 4)  # [B, C, T, H, W]
         latents = 1 / self.vae.config.scaling_factor * latents
 

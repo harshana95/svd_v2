@@ -25,7 +25,7 @@ datasets:
       crop:
         h: 1024
         w: 1024
-      rescale:
+      resize:
         factor: 1
       poisson_noise:
         keys: [lq_key]
@@ -51,7 +51,7 @@ datasets:
       crop:
         h: 1024
         w: 1024
-      rescale:
+      resize:
         factor: 1
       poisson_noise:
         keys: [lq_key]

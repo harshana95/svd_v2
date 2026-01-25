@@ -29,7 +29,6 @@ from models.archs.related.Blur2Vid.cogvideo_embeddings import CogVideoXPatchEmbe
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNorm, CogVideoXLayerNormZero
-
 from transformers import PreTrainedModel, PretrainedConfig
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -328,8 +327,8 @@ class CogVideoXTransformer3D_arch(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         self.gradient_checkpointing = False
 
-    def _set_gradient_checkpointing(self, module, value=False):
-        self.gradient_checkpointing = value
+    # def _set_gradient_checkpointing(self, module, enable=False):
+    #     self.gradient_checkpointing = enable
 
     @property
     # Copied from diffusers.models.unets.unet_2d_condition.UNet2DConditionModel.attn_processors
@@ -443,6 +442,7 @@ class CogVideoXTransformer3D_arch(ModelMixin, ConfigMixin, PeftAdapterMixin):
         image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
+        **kwargs
     ):
         
         if attention_kwargs is not None:
