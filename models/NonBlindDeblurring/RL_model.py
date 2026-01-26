@@ -24,13 +24,13 @@ class RL_model(BaseModel):
         self.grid_size = self.opt.get('grid', 1)
         self.ks = self.opt.get('ks', 65)
         assert self.ks % 2 == 1
-        if self.spatially_varying:
-            pad_1  = (self.ks - 1) // 2
-            pad_2 = self.ks // 2
-            patch_size = self.sensor_size // self.grid_size + pad_1 + pad_2
-            self.total_pad = pad_1 + pad_2
-            self.patch_size = patch_size
-            self.stride = self.sensor_size // self.grid_size
+        
+        pad_1  = (self.ks - 1) // 2
+        pad_2 = self.ks // 2
+        patch_size = self.sensor_size // self.grid_size + pad_1 + pad_2
+        self.total_pad = pad_1 + pad_2
+        self.patch_size = patch_size
+        self.stride = self.sensor_size // self.grid_size
 
     def setup_dataloaders(self):
         # create train and validation dataloaders
@@ -49,7 +49,7 @@ class RL_model(BaseModel):
             num_workers=0,
         )
 
-    def deblur(self, blurred_image, psf, iterations):
+    def deblur(self, blurred_image, psf):
         """
         Performs spatially-invariant Richardson-Lucy deconvolution using a single PSF.
 
@@ -80,7 +80,7 @@ class RL_model(BaseModel):
         padding_h = (hk - 1) // 2 #+ 1
         padding_w = (wk - 1) // 2 #+ 1
 
-        for i in range(iterations):
+        for i in range(self.iterations):
             # Reshape latent_est for grouped convolution: (B, C, H, W) -> (1, B*C, H, W)
             latent_est_reshaped = latent_est.view(1, b * c, h, w)
             
@@ -101,7 +101,7 @@ class RL_model(BaseModel):
 
         return latent_est
 
-    def deblur_sv_patchwise(self, blurred_image, psfs_patches, iterations, patch_size, stride):
+    def deblur_sv_patchwise(self, blurred_image, psfs_patches, patch_size, stride):
         """
         Performs spatially-varying Richardson-Lucy deconvolution using a patch-wise approach.
 
@@ -122,7 +122,7 @@ class RL_model(BaseModel):
         
         # 1. Unfold the blurred image into patches
         patches = F.unfold(blurred_image, kernel_size=patch_size, stride=stride, padding=self.total_pad//2)
-        pos = torch.stack(torch.meshgrid(torch.arange(0, H+self.total_pad-patch_size+1, stride+1), torch.arange(0, W+self.total_pad-patch_size+1, stride+1)))
+        pos = torch.stack(torch.meshgrid(torch.arange(0, H+self.total_pad-patch_size+1, stride), torch.arange(0, W+self.total_pad-patch_size+1, stride)))
         pos = pos.view(pos.shape[0], -1).permute(1,0)[None] 
         pos = pos.repeat(B, 1, 1)
         
@@ -136,7 +136,7 @@ class RL_model(BaseModel):
         psfs_patches = psfs_patches.view(B * num_patches, -1, kH, kW)
 
         # 2. Deblur the batch of patches using the spatially-invariant RL method
-        deblurred_patches = self.deblur(patches, psfs_patches, iterations)
+        deblurred_patches = self.deblur(patches, psfs_patches)
         
         # 3. Fold the deblurred patches back into an image
         # Reshape deblurred_patches back to (B, C*patch_size*patch_size, num_patches)
@@ -177,9 +177,9 @@ class RL_model(BaseModel):
         self.feed_data(batch, is_train=False)
         
         if self.spatially_varying:
-            deblurred_image = self.deblur_sv_patchwise(self.blurred, self.psf, self.iterations, self.patch_size, self.stride)
+            deblurred_image = self.deblur_sv_patchwise(self.blurred, self.psf, self.patch_size, self.stride)
         else:
-            deblurred_image = self.deblur(self.blurred, self.psf, self.iterations)
+            deblurred_image = self.deblur(self.blurred, self.psf)
             
         psf_pos_top_left = (self.psf_centers*0.5+0.5)*self.sensor_size-self.psf.shape[-1]//2 # x, y (x-y coordinate)
         psf_pos_top_left[..., 1] = self.sensor_size - psf_pos_top_left[..., 1] # j, i
