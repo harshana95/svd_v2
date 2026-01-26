@@ -135,7 +135,7 @@ train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 2e-4
+    learning_rate: !!float 2e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -151,10 +151,10 @@ train:
   loss: 1*MSE #|0.6*Perceptual_loss
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 32
+  batch_size: 8
 
   max_train_steps: 50000
-  validation_steps: 100
+  validation_steps: 1000
   checkpointing_steps: 1000
   checkpoints_total_limit: 2
 

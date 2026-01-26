@@ -407,13 +407,13 @@ def merge_patches(patches, pos):
     """
     n, c, ph, pw = patches.shape
     window = torch.tensor(bartlett(ph, pw, color=c == 3), device=patches.device)
-
+    
     # find the image size
-    h, w = pos[:, 0].max() + ph, pos[:, 1].max() + pw
+    h, w = int(pos[:, 0].max().item() + ph), int(pos[:, 1].max().item() + pw)
     out = torch.zeros((c, h, w), device=patches.device)
     out_weights = torch.zeros_like(out, device=patches.device)
     for patch, p in zip(patches, pos):
-        i, j = p
+        i, j = int(p[0]), int(p[1])
         out[:, i:i + ph, j:j + pw] += patch * window
         out_weights[:, i:i + ph, j:j + pw] += window
     out /= (out_weights + 1e-6)

@@ -105,11 +105,12 @@ class BaseModel():
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
         if opt.allow_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
-
-        if opt.train.optim.scale_lr:  # TODO: Check setting opt values works properly
-            opt.train.optim.learning_rate = (
-                    opt.train.optim.learning_rate * opt.train.gradient_accumulation_steps * opt.train.batch_size * self.accelerator.num_processes
-            )
+        
+        if self.is_train:
+            if opt.train.optim.scale_lr:  # TODO: Check setting opt values works properly
+                opt.train.optim.learning_rate = (
+                        opt.train.optim.learning_rate * opt.train.gradient_accumulation_steps * opt.train.batch_size * self.accelerator.num_processes
+                )
         self.trackers_initialized = False
 
     def prepare_trackers(self):
@@ -239,44 +240,46 @@ class BaseModel():
             train_set,
             shuffle=self.opt.datasets.train.use_shuffle,
             batch_size=self.opt.train.batch_size,
-            num_workers=self.opt.datasets.train.get('num_worker_per_gpu', 1),
+            num_workers=self.opt.datasets.train.get('num_worker_per_gpu', 0),
         )
         val_set = create_dataset(self.opt.datasets.val)
         self.test_dataloader = DataLoader(
             val_set,
             shuffle=self.opt.datasets.val.use_shuffle,
             batch_size=self.opt.val.batch_size,
-            num_workers=self.opt.datasets.val.get('num_worker_per_gpu', 1),
+            num_workers=self.opt.datasets.val.get('num_worker_per_gpu', 0),
         )
 
     def prepare(self):
         if not self.trackers_initialized:
             self.prepare_trackers()
-            
-        # Scheduler and math around the number of training steps.
-        num_update_steps_per_epoch = math.ceil(len(self.dataloader) / self.opt.train.gradient_accumulation_steps)
-        if self.opt.train.max_train_steps is None:
-            self.opt.train.max_train_steps = self.opt.train.num_train_epochs * num_update_steps_per_epoch
-            self.overrode_max_train_steps = True
+        if self.is_train:
+            # Scheduler and math around the number of training steps.
+            num_update_steps_per_epoch = math.ceil(len(self.dataloader) / self.opt.train.gradient_accumulation_steps)
+            if self.opt.train.max_train_steps is None:
+                self.opt.train.max_train_steps = self.opt.train.num_train_epochs * num_update_steps_per_epoch
+                self.overrode_max_train_steps = True
 
-        self.setup_optimizers()
-        self.setup_schedulers()
+            self.setup_optimizers()
+            self.setup_schedulers()
+
+        # prepare models, datasets, and optimizers
         for i in range(len(self.models)):
             self.models[i] = self.accelerator.prepare(self.models[i])
         for i in range(len(self.optimizers)):
             self.optimizers[i] = self.accelerator.prepare(self.optimizers[i])
             self.schedulers[i] = self.accelerator.prepare(self.schedulers[i])
-        
         self.dataloader = self.accelerator.prepare(self.dataloader)
         self.test_dataloader = self.accelerator.prepare(self.test_dataloader)
 
-        # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-        num_update_steps_per_epoch = math.ceil(len(self.dataloader) / self.opt.train.gradient_accumulation_steps)
-        if self.overrode_max_train_steps:
-            self.opt.train.max_train_steps = self.opt.train.num_train_epochs * num_update_steps_per_epoch
-        # Afterwards we recalculate our number of training epochs
-        self.opt.train.num_train_epochs = math.ceil(self.opt.train.max_train_steps / num_update_steps_per_epoch)
-        self.num_update_steps_per_epoch = num_update_steps_per_epoch
+        if self.is_train:
+            # We need to recalculate our total training steps as the size of the training dataloader may have changed.
+            num_update_steps_per_epoch = math.ceil(len(self.dataloader) / self.opt.train.gradient_accumulation_steps)
+            if self.overrode_max_train_steps:
+                self.opt.train.max_train_steps = self.opt.train.num_train_epochs * num_update_steps_per_epoch
+            # Afterwards we recalculate our number of training epochs
+            self.opt.train.num_train_epochs = math.ceil(self.opt.train.max_train_steps / num_update_steps_per_epoch)
+            self.num_update_steps_per_epoch = num_update_steps_per_epoch
 
     def setup_optimizers(self):
         # Optimizer creation

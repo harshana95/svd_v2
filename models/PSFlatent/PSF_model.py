@@ -23,7 +23,6 @@ from deeplens.geolens import GeoLens
 from deeplens.optics.psf import conv_psf
 from deeplens.optics.loss import PSFLoss
 from deeplens.optics.diffractive_surface import Binary2, Pixel2D, Fresnel, Zernike
-from deeplens import PSFNet
 
 from utils.misc import log_metric
 

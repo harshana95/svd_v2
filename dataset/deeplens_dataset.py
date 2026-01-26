@@ -22,6 +22,7 @@ from utils.dataset_utils import DictWrapper, crop_arr
 from utils.misc import DictAsMember
 
 from deeplens import GeoLens
+from deeplens.optics.psf import conv_psf_map
 
 class DeepLensDataset(data.Dataset):
     def __init__(self, opt):
@@ -29,8 +30,15 @@ class DeepLensDataset(data.Dataset):
         self.gt_key = opt.gt_key
         self.lq_key = opt.lq_key
         self.data_percent = opt.get('data_percent', [0,100])
-        self.render_method = opt.get('render_method', 'raytracing')
+        self.render_method = opt.get('render_method', 'psf_map')
         self.num_proc = opt.get('num_proc', 1)
+        self.return_psfs = opt.get('return_psfs', False)
+
+        self.grid = opt.get('grid', 10)
+        self.ks = opt.get('ks', 64)
+        if self.return_psfs:
+            print("Returning PSFs")
+            assert self.render_method == 'psf_map', "If you want to return psfs, render_method must be psf_map"
 
         # load gt image filenames
         self.dataset = load_dataset(opt.gt_dataset_path, drop_labels=True, split=f'train')
@@ -41,7 +49,6 @@ class DeepLensDataset(data.Dataset):
         # setup simulator
         self.lens = GeoLens(filename=opt["lens_path"], device=None)
         self.lens.set_sensor(sensor_res=opt["sensor_res"], sensor_size=self.lens.sensor_size)
-                
         # setup transformations
         self.dataset = self.setup_dataset(self.dataset, opt)
 
@@ -59,7 +66,16 @@ class DeepLensDataset(data.Dataset):
         if img.shape[0] == 1:
             img = img.repeat(3,1,1)
             is_single_channel = True
-        item[self.lq_key] = self.lens.render(img[None].to(self.lens.device), method=self.render_method)[0].cpu()
+        if self.return_psfs:
+            depth = -20000
+            psf_map = self.lens.psf_map_rgb(grid=self.grid, ks=self.ks, depth=depth)
+            img_render = conv_psf_map(img[None].to(self.lens.device), psf_map)
+            point_sources = self.lens.point_source_grid(depth=depth, grid=(self.grid,self.grid), center=True, normalized=True)
+            item[self.lq_key] = img_render[0].cpu() 
+            item['psfs'] = psf_map
+            item['psf_centers'] = point_sources[:,:,:2]
+        else:     
+            item[self.lq_key] = self.lens.render(img[None].to(self.lens.device), method=self.render_method)[0].cpu()
         if is_single_channel:
             item[self.lq_key] = item[self.lq_key][1:2] # select green channel only
         return item
@@ -93,7 +109,7 @@ class DeepLensDataset(data.Dataset):
         def apply_transforms(batch):
             return all_transforms(batch)
         
-        dataset = dataset.map(apply_transforms, num_proc=self.num_proc, batched=True, batch_size=4, load_from_cache_file=False if opt.skip_cache else True, keep_in_memory=False)
+        dataset = dataset.map(apply_transforms, num_proc=self.num_proc, batched=True, batch_size=16, load_from_cache_file=False if opt.skip_cache else True, keep_in_memory=False)
         dataset.set_format('pt')
         return dataset
 
@@ -118,7 +134,7 @@ if __name__ == "__main__":
     
     for i in range(3):
         batch = dataset[i]
-        print(batch['gt'].shape, batch['blur'].shape)
+        print(batch['gt'].shape, batch['blur'].shape, batch['psfs'].shape, batch['psf_centers'].shape)
         plt.imsave(f'gt_{i}.png', einops.rearrange(batch['gt'], 'c h w -> h w c').numpy())
         plt.imsave(f'lq_{i}.png', einops.rearrange(batch['blur'], 'c h w -> h w c').numpy())
 
