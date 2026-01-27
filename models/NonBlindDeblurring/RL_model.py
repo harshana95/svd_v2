@@ -122,7 +122,8 @@ class RL_model(BaseModel):
         
         # 1. Unfold the blurred image into patches
         patches = F.unfold(blurred_image, kernel_size=patch_size, stride=stride, padding=self.total_pad//2)
-        pos = torch.stack(torch.meshgrid(torch.arange(0, H+self.total_pad-patch_size+1, stride), torch.arange(0, W+self.total_pad-patch_size+1, stride)))
+        pos = torch.stack(torch.meshgrid(torch.arange(0, H+self.total_pad-patch_size+1, stride), 
+                                         torch.arange(0, W+self.total_pad-patch_size+1, stride), indexing='ij'))
         pos = pos.view(pos.shape[0], -1).permute(1,0)[None] 
         pos = pos.repeat(B, 1, 1)
         

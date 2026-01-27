@@ -12,7 +12,7 @@ dataset:
   lq_key: blur
   data_percent: [0,100]
   num_proc: 1
-  render_method: 'psf_patch'
+  render_method: 'psf_map'
   lens_path: /depot/chan129/users/harshana/svd_v2/lenses/camera/rf50mm_f1.8.json
   sensor_res: [1024, 1024]
   num_frames: 5

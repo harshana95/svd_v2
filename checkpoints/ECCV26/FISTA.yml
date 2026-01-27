@@ -1,0 +1,92 @@
+name: ECCV26
+model_type: FISTA_model
+is_train: false
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+tracker_project_name: ECCV26
+experiment_key: FISTA
+
+iterations: 50
+lambda_val: 0.01
+momentum: 0.1
+spatially_varying: True
+grid: 10
+ks: 65
+sensor_size: 1024
+lens_path: /depot/chan129/users/harshana/svd_v2/lenses/cooke40_inferior2.json
+
+datasets:
+  train:
+    type: DeepLensDataset
+    gt_dataset_path: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    gt_dataset_file_pattern: !!str \*
+    gt_key: gt
+    lq_key: blur
+    data_percent: [0,1]
+    num_proc: 1
+    render_method: psf_map
+    grid: ${grid}
+    ks: ${ks}
+    return_psfs: True
+    lens_path: ${lens_path}
+    sensor_res: [1024, 1024]
+
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+  val:
+    type: DeepLensDataset
+    gt_dataset_path: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    gt_dataset_file_pattern: !!str \*
+    gt_key: gt
+    lq_key: blur
+    data_percent: [99,100]
+    num_proc: 1
+    render_method: psf_map
+    grid: ${grid}
+    ks: ${ks}
+    return_psfs: True
+    lens_path: ${lens_path}
+    sensor_res: [1024, 1024]
+
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+
+train:
+  gradient_accumulation_steps: 1
+
+# validation settings
+val:
+  save_images: true
+  batch_size: 1
+  num_inference_steps: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

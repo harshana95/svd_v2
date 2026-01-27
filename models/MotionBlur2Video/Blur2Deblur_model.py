@@ -383,14 +383,22 @@ class Blur2Deblur_model(BaseModel):
         for optimizer in self.optimizers:
             optimizer.zero_grad()
         with torch.no_grad():
-            gt_video = self.sample["video"].to(memory_format=torch.contiguous_format).float()
-            blurred = self.sample["blur_img"].to(memory_format=torch.contiguous_format).float()
+            # breakpoint()
+            gt_key = self.dataloader.dataset.gt_key
+            lq_key = self.dataloader.dataset.lq_key
+            
+            gt_video = self.sample[lq_key].to(memory_format=torch.contiguous_format).float()
+            blurred = gt_video[:, -2:-1]
             
             model_input = encode_video(gt_video, self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)  # [B, F, C, H, W]
             image_latent = encode_video(blurred, self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)  # [B, F, C, H, W]
-            prompts = self.sample["caption"]
-            input_intervals = self.sample["input_interval"].to(memory_format=torch.contiguous_format).float()
-            output_intervals = self.sample["output_interval"] .to(memory_format=torch.contiguous_format).float()
+            
+            prompts = ["" for _ in range(batch_size)]
+            input_intervals = torch.tensor([[-0.5, 0.5]], dtype=torch.float).to(memory_format=torch.contiguous_format).float()
+            input_intervals = einops.repeat(input_intervals, 'N L -> B N L', B=batch_size)
+            W = gt_video.shape[1]
+            output_intervals = torch.tensor([[-0.5 + i * (1/W), -0.5 + (i + 1) * (1/W)] for i in range(W)]).to(memory_format=torch.contiguous_format).float()
+            output_intervals = einops.repeat(output_intervals, 'N L -> B N L', B=batch_size)
 
             batch_size = len(prompts)
             
@@ -414,19 +422,15 @@ class Blur2Deblur_model(BaseModel):
                 self.weight_dtype,
                 requires_grad=False,
             )
-        if DEBUG:
-            assert torch.isfinite(model_input).all()
-
+        
         # Sample noise that will be added to the latents
         noise = torch.randn_like(model_input)
         batch_size, num_frames, num_channels, height, width = model_input.shape
         
-        # breakpoint()
-        
-        # calculate oracle optical flow
-        flows = self.calculate_optical_flow_from_video(gt_video)
-        # warp noise
-        noise = warp_tensor(noise, flows)
+        # # calculate oracle optical flow
+        # flows = self.calculate_optical_flow_from_video(gt_video)
+        # # warp noise
+        # noise = warp_tensor(noise, flows)
                 
 
         # Sample a random timestep for each image
@@ -473,14 +477,11 @@ class Blur2Deblur_model(BaseModel):
             image_rotary_emb=image_rotary_emb,
             return_dict=False,
         )[0]
-        if DEBUG:
-            assert torch.isfinite(model_output).all()
-
+        
         #this line below is also scaling the input which is bad - so the model is also learning to scale this input latent somehow
         #thus, we need to replace the first frame with the original frame later
         velocity = self.scheduler.get_velocity(model_output, noisy_model_input, timesteps)  # scheduler prediction_type is v_prediction
-        assert torch.isfinite(velocity).all()
-
+        
         # NOTE: Numerically stabilize the weighting. When alpha_cumprod ~ 1 (early timesteps),
         # (1 - alpha_cumprod) can be ~0 which explodes weights and can lead to inf/NaN gradients.
         alphas_cumprod = self.scheduler.alphas_cumprod[timesteps].to(dtype=torch.float32)
@@ -494,32 +495,23 @@ class Blur2Deblur_model(BaseModel):
         vel_err = (velocity[~condition_mask].float() - target[~condition_mask].float())
         loss = torch.mean((weights.float() * (vel_err**2)).reshape(batch_size, -1), dim=1)
         loss = loss.mean()
-        # regularization
-        # calculate cycle concistency loss in the latent space?
-
-        # VAE compression = 4x 8x 8x for frame, height, width channels increase 3->16. Overall ~48x compression
-        # thus, we need to upsample the velocity to the original resolution
-        #                          B   F  C   H    W    ->               B  F  C   H    W
-        # self.sample["blur_img"] [4,  1, 3, 720, 1280] -> image_latent [4, 1, 16, 90, 160]
-        # self.sample["video"]    [4, 17, 3, 720, 1280] -> model_input  [4, 5, 16, 90, 160]
-        # noisy_model_input, target, model_output, velocity             [4, 6, 16, 90, 160]
-        # condition_mask [4, 6]
-        if DEBUG:
-            assert torch.isfinite(loss).all()
+ 
+        # # regularization
+        # # calculate cycle concistency loss in the latent space?
+        # # VAE compression = 4x 8x 8x for frame, height, width channels increase 3->16. Overall ~48x compression
+        # # thus, we need to upsample the velocity to the original resolution
+        # #                          B   F  C   H    W    ->               B  F  C   H    W
+        # # self.sample["blur_img"] [4,  1, 3, 720, 1280] -> image_latent [4, 1, 16, 90, 160]
+        # # self.sample["video"]    [4, 17, 3, 720, 1280] -> model_input  [4, 5, 16, 90, 160]
+        # # noisy_model_input, target, model_output, velocity             [4, 6, 16, 90, 160]
+        # # condition_mask [4, 6]
+        
         # dec = self.vae.decode(velocity[~condition_mask].view(batch_size, -1, num_channels, height, width).permute(0,2,1,3,4).to(self.weight_dtype) / self.vae.config.scaling_factor).sample
         
         # # # Decode in chunks to reduce memory usage during backprop
         # # velocity_latents = velocity[~condition_mask].view(batch_size, -1, num_channels, height, width).permute(0,2,1,3,4).to(torch.bfloat16) / self.vae.config.scaling_factor
         # # num_frames_to_decode = velocity_latents.shape[2]
         # # chunk_size = 2  # Decode 2 frames at a time to reduce memory
-        
-        # # dec_chunks = []
-        # # for i in range(0, num_frames_to_decode, chunk_size):
-        # #     chunk_end = min(i + chunk_size, num_frames_to_decode)
-        # #     chunk_latents = velocity_latents[:, :, i:chunk_end]
-        # #     chunk_dec = self.vae.decode(chunk_latents).sample
-        # #     dec_chunks.append(chunk_dec)
-        # # dec = torch.cat(dec_chunks, dim=2)
         
         # dec = dec.permute(0,2,1,3,4)
         # # [4, 6, 16, 90, 160] -> [4, 17, 3, 720, 1280]  range[-1,1]
@@ -536,13 +528,13 @@ class Blur2Deblur_model(BaseModel):
         if DEBUG:
             # assert torch.isfinite(dec).all()
             # assert torch.isfinite(reblurred).all()
-            gt_flow_video = self.convert_flow_to_video(flows)
+            # gt_flow_video = self.convert_flow_to_video(flows)
             if self.global_step % 100 == 0 or self.global_step <= 1:
                 for i in range(batch_size):
                     # breakpoint()
                     log_video(self.opt, self.accelerator, noise[i,:,:3].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_warped_{i}', self.global_step)
                     
-                    log_video(self.opt, self.accelerator, gt_flow_video[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_gtflow_{i}', self.global_step)
+                    # log_video(self.opt, self.accelerator, gt_flow_video[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_gtflow_{i}', self.global_step)
                     log_video(self.opt, self.accelerator, gt_video[i].detach().cpu().float().numpy().transpose((0,2,3,1))*0.5+0.5, f'train_gt_{i}', self.global_step)
                     # log_video(self.opt, self.accelerator, dec[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'train_dec_{i}', self.global_step)
                     # log_image(self.opt, self.accelerator, np.clip(reblurred.detach().cpu().to(torch.float32).numpy()*0.5+0.5, 0,1)[i:i+1,0], f'reblur_{i}', self.global_step)
@@ -563,7 +555,6 @@ class Blur2Deblur_model(BaseModel):
         # Prevent parameter blow-ups (NaNs in model_output on next step usually come from inf/NaN grads here)
         if self.accelerator.sync_gradients:
             self.accelerator.clip_grad_norm_(self.transformer.parameters(), 0.1)
-            self.accelerator.clip_grad_norm_(self.vae.parameters(), 0.1)
 
         # # Hard stop if anything went non-finite during backward (prevents corrupting optimizer state/weights).
         # # This also helps pinpoint whether NaNs originate from forward vs backward.
@@ -593,8 +584,6 @@ class Blur2Deblur_model(BaseModel):
             'diff': loss,
             # 'cycle': loss_cycle
         }
-    def reblur_video(self, video):
-        b, f, c, h, w = video.shape
 
     @torch.no_grad()
     def validation(self):
@@ -621,18 +610,14 @@ class Blur2Deblur_model(BaseModel):
 
     def validate_step(self, _batch, idx):
         self.feed_data(_batch, is_train=False)
+        lq_key = self.dataloader.dataset.lq_key
         output_dir = os.path.join(self.opt.path.experiments_root, 'outputs')
-        frame = ((self.sample["blur_img"][:, 0].permute(0,2,3,1).cpu().numpy() + 1)*127.5).astype(np.uint8)
-        
-        assert len(self.sample['file_name']) == 1
-        filename = self.sample['file_name'][0]
-        name = os.path.basename(os.path.dirname(os.path.splitext(filename)[0]))
-        num_frames = self.sample["num_frames"][0]
+        frame = ((self.sample[lq_key][:, -2:-1][:, 0].permute(0,2,3,1).cpu().numpy() + 1)*127.5).astype(np.uint8)
+        name = f"{idx:05d}"
 
         #save the gt_video output
-        gt_video = self.sample["video"][0].permute(0,2,3,1).cpu().numpy()
+        gt_video = self.sample[lq_key][0].permute(0,2,3,1).cpu().numpy()
         gt_video = ((gt_video + 1) * 127.5)/255
-        gt_video = gt_video[0:num_frames]
         # save_frames_as_pngs((gt_video*255).astype(np.uint8), os.path.join(output_dir, "gt_frames", name))
         log_video(self.opt, self.accelerator, gt_video, f'gt_{name}', self.global_step)
 
@@ -640,7 +625,7 @@ class Blur2Deblur_model(BaseModel):
         log_image(self.opt, self.accelerator, np.clip(frame.astype(np.float32)/255, 0,1).transpose(0,3,1,2), f'blur_{name}', self.global_step)
 
         # calculate flow
-        video_latent = encode_video(self.sample["video"], self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)
+        # video_latent = encode_video(self.sample["video"], self.accelerator, self.vae).float()#.to(dtype=self.weight_dtype)
         # shape = (
         #     frame.shape[0],
         #     (num_frames - 1) // self.pipeline.vae_scale_factor_temporal + 1,
@@ -648,21 +633,28 @@ class Blur2Deblur_model(BaseModel):
         #     self.args.height // self.pipeline.vae_scale_factor_spatial,
         #     self.args.width // self.pipeline.vae_scale_factor_spatial,
         # )
-        flow = self.calculate_optical_flow_from_video(self.sample["video"])
-        warped = warp_tensor(torch.randn_like(video_latent), flow)
-        gt_flow_video = self.convert_flow_to_video(flow)
-        for i in range(flow.shape[0]):
-            log_video(self.opt, self.accelerator, gt_flow_video[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'val_gtflow_{name}', self.global_step)
-            log_video(self.opt, self.accelerator, warped[i].detach().cpu().float().numpy()[:,:3].transpose((0,2,3,1)), f'val_warped_{name}', self.global_step)
-        del video_latent
 
+        # flow = self.calculate_optical_flow_from_video(self.sample["video"])
+        # warped = warp_tensor(torch.randn_like(video_latent), flow)
+        # gt_flow_video = self.convert_flow_to_video(flow)
+        # for i in range(flow.shape[0]):
+        #     log_video(self.opt, self.accelerator, gt_flow_video[i].detach().cpu().float().numpy().transpose((0,2,3,1)), f'val_gtflow_{name}', self.global_step)
+        #     log_video(self.opt, self.accelerator, warped[i].detach().cpu().float().numpy()[:,:3].transpose((0,2,3,1)), f'val_warped_{name}', self.global_step)
+        # del video_latent
+        warped = None
+        
+        input_intervals = torch.tensor([[-0.5, 0.5]], dtype=torch.float).to(memory_format=torch.contiguous_format).float()
+        input_intervals = einops.repeat(input_intervals, 'N L -> B N L', B=1)
+        W = gt_video.shape[1]
+        output_intervals = torch.tensor([[-0.5 + i * (1/W), -0.5 + (i + 1) * (1/W)] for i in range(W)]).to(memory_format=torch.contiguous_format).float()
+        output_intervals = einops.repeat(output_intervals, 'N L -> B N L', B=1)
         pipeline_args = {
                             "prompt": "",
                             "negative_prompt": "",
                             "image": frame,
                             "latents": warped,
-                            "input_intervals": self.sample["input_interval"][0:1],
-                            "output_intervals": self.sample["output_interval"][0:1],
+                            "input_intervals": input_intervals,
+                            "output_intervals": output_intervals,
                             "guidance_scale": self.args.guidance_scale,
                             "use_dynamic_cfg": self.args.use_dynamic_cfg,
                             "height": self.args.height,
@@ -681,7 +673,7 @@ class Blur2Deblur_model(BaseModel):
         )
 
         #save the output video frames as pngs (uncompressed results) and mp4 (compressed results easily viewable)
-        video = videos[0][0:num_frames]
+        video = videos[0]
         save_frames_as_pngs((video*255).astype(np.uint8), os.path.join(output_dir, "deblur_frames", name))
         log_video(self.opt, self.accelerator, video, f'deblur_{name}', self.global_step)
         
