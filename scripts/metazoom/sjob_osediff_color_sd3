@@ -1,0 +1,14 @@
+#!/bin/sh -l
+
+#SBATCH -p a100-80gb
+#SBATCH --mem 64G
+#SBATCH -n32
+#SBATCH -A stanchan
+#SBATCH --nodes=1 --gpus-per-node=1 
+#SBATCH --time=2-00:00:00
+#SBATCH --job-name color_sd3
+
+
+cd ../..
+conda activate /home/wweligam/home_env
+accelerate launch trainer.py -opt ./checkpoints/MetaZoom/osediff_olddata_color_sd3.yml

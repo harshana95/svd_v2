@@ -37,20 +37,39 @@ class GANLoss(nn.Module):
             raise ValueError('Unexpected gan_mode {}'.format(gan_mode))
 
     def get_target_tensor(self, input, target_is_real):
+        # Important: allocate target tensors on the same device/dtype as `input`.
+        # The previous implementation used `.cuda()` unconditionally, which breaks
+        # under CPU runs and can be incorrect with multi-GPU / accelerator devices.
         if target_is_real:
-            if self.real_label_tensor is None:
-                self.real_label_tensor = self.Tensor(1).fill_(self.real_label).cuda()
+            if (
+                self.real_label_tensor is None
+                or self.real_label_tensor.device != input.device
+                or self.real_label_tensor.dtype != input.dtype
+            ):
+                self.real_label_tensor = torch.tensor(
+                    [self.real_label], device=input.device, dtype=input.dtype
+                )
                 self.real_label_tensor.requires_grad_(False)
             return self.real_label_tensor.expand_as(input)
         else:
-            if self.fake_label_tensor is None:
-                self.fake_label_tensor = self.Tensor(1).fill_(self.fake_label).cuda()
+            if (
+                self.fake_label_tensor is None
+                or self.fake_label_tensor.device != input.device
+                or self.fake_label_tensor.dtype != input.dtype
+            ):
+                self.fake_label_tensor = torch.tensor(
+                    [self.fake_label], device=input.device, dtype=input.dtype
+                )
                 self.fake_label_tensor.requires_grad_(False)
             return self.fake_label_tensor.expand_as(input)
 
     def get_zero_tensor(self, input):
-        if self.zero_tensor is None:
-            self.zero_tensor = self.Tensor(1).fill_(0).cuda()
+        if (
+            self.zero_tensor is None
+            or self.zero_tensor.device != input.device
+            or self.zero_tensor.dtype != input.dtype
+        ):
+            self.zero_tensor = torch.tensor([0.0], device=input.device, dtype=input.dtype)
             self.zero_tensor.requires_grad_(False)
         return self.zero_tensor.expand_as(input)
 

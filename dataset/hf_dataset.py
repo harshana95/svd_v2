@@ -16,6 +16,8 @@ class HuggingFaceDataset(data.Dataset):
         self.gt_key = opt.gt_key
         self.lq_key = opt.lq_key
         self.dataset = load_dataset(dataset_name, split=split, trust_remote_code=opt.get('trust_remote_code', None))
+        if opt.split_range is not None:
+            self.dataset = self.dataset.select(range(int(opt.split_range[0]/100*len(self.dataset)), int(opt.split_range[1]/100*len(self.dataset))))
         self.dataset = self.setup_dataset(self.dataset, opt)
 
     def __len__(self):
@@ -28,6 +30,9 @@ class HuggingFaceDataset(data.Dataset):
     def setup_dataset(self, dataset, opt):
         all_transforms = []
         gt_key, lq_key = self.gt_key, self.lq_key
+        if opt.get('transforms') is None:
+            return dataset
+            
         for transform_name in opt.get('transforms'):
             transform_opt = opt.transforms[transform_name]
             if transform_opt is None:

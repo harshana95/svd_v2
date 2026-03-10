@@ -1,22 +1,19 @@
-import importlib
-import os
 from matplotlib import pyplot as plt
 import numpy as np
 from omegaconf import OmegaConf
+from safetensors.torch import load_file
 import torch
 import yaml
 from dataset import create_dataset
-from utils.misc import DictAsMember, find_attr
-from models.archs import _arch_modules, define_network
+from utils.misc import DictAsMember
+from models.archs import find_network_class
 from torch.utils.data import DataLoader
-from accelerate import Accelerator
 
 
-model_name = "NAFNet_arch"
-model_path = "/scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealColor 2025 09 11 23.28.33/checkpoint-6000/NAFNet_arch_1/"
-dataset_1_name = "harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file"
+model_name = "DeMoE_arch" #"NAFNet_arch"
+model_path = "/depot/chan129/users/harshana/svd_v2/weights/DeMoE/" #"/scratch/gilbreth/wweligam/experiments/SVD_Real/NAFNetRealColor 2025 09 11 23.28.33/checkpoint-6000/NAFNet_arch_1/"
 
-with open("/depot/chan129/users/harshana/svd_v2/checkpoints/ICASSP_26/common_archs/NAFNet_real_color.yml", mode='r') as f:
+with open("/depot/chan129/users/harshana/svd_v2/checkpoints/ECCV26/motionNAFNet.yml", mode='r') as f:
     data = OmegaConf.load(f)
     data = OmegaConf.to_yaml(data, resolve=True)
     data = yaml.safe_load(data)
@@ -35,9 +32,12 @@ dataloader = DataLoader(
     num_workers=4,
 )
 
-c = find_attr(_arch_modules, model_name)
+print(f"Loading {model_name} model from {model_path}")
+c, _ = find_network_class(model_name)
+# m = c.from_config(model_path)
+# sd = load_file(model_path+"diffusion_pytorch_model.safetensors")
+print(c)
 model = c.from_pretrained(model_path)
-print(f"Loaded {model_name} model from {model_path}")
 
 model.eval()
 model = model.cuda()  # always run the model in GPU
@@ -45,7 +45,7 @@ model = model.cuda()  # always run the model in GPU
 with torch.no_grad():
     idx = 0
     for batch in dataloader:
-        img = batch['blur'].cuda()
+        img = batch['blur'].cuda()*0.5+0.5
         # img = torch.flip(img, dims=[1])  # rgb to bgr
         out = model(img)
         print(img.min(), img.max())

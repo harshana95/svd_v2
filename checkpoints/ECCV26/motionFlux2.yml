@@ -1,0 +1,154 @@
+# Flux 2 control training: blur (lq) as conditioning, sharp (gt) as target.
+# Uses Flux2DeblurCycle_model: Flux2Transformer2DModel + Flux2Pipeline text encoding.
+#
+# Run: python trainer.py -opt checkpoints/ECCV26/motionFlux2DeblurCycle.yml -comment my_run
+# Or:  accelerate launch trainer.py -opt checkpoints/ECCV26/motionFlux2DeblurCycle.yml -comment my_run
+#
+# Note: Flux 2 dev is ~32B parameters (vs Flux 1 ~12B), so memory requirements are higher.
+# Use val.use_cpu_offload: true and consider lower batch_size/resolution.
+#
+name: Motion
+model_type: Flux2DeblurCycle_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 10
+mixed_precision: bf16
+allow_tf32: true
+
+# Flux 2 pretrained (FLUX.2-dev; must have transformer, vae, scheduler, text encoders)
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-dev
+revision: ~
+variant: ~
+
+# Captioning for prompts (RAM)
+vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
+dape_path: ~
+
+# Flux 2 control options
+guidance_scale: 4.0  # Flux 2 default is 4.0 (vs Flux 1's 3.5)
+only_target_transformer_blocks: false
+weighting_scheme: none   # none | sigma_sqrt | logit_normal | mode | cosmap
+# logit_mean: 0.0
+# logit_std: 1.0
+# mode_scale: 1.29
+
+# Validation resolution (multiple of 8)
+resolution: 512
+
+tracker_project_name: Motion
+experiment_key: Flux2DeblurCycle
+
+datasets:
+  train:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [0, 99]
+    is_train: true
+    global_blur: true
+    return_meta: false
+    gt_key: image
+    lq_key: blur
+    num_proc: 8
+    num_worker_per_gpu: 4
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [1, 100]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+
+  val:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [99, 100]
+    is_train: false
+    global_blur: true
+    return_meta: false
+    gt_key: image
+    lq_key: blur
+    num_proc: 1
+    num_worker_per_gpu: 1
+    use_shuffle: false
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [0, 1]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 5e-6
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1  # Flux 2 is larger - may need smaller batch size
+
+  lora_finetune: false
+
+  max_train_steps: 50000
+  validation_steps: 500
+  checkpointing_steps: 1000
+  checkpoints_total_limit: 2
+
+  patched: true
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 2
+
+val:
+  save_images: true
+  # Flux 2 is ~32B params - CPU offload strongly recommended for 80GB A100
+  use_cpu_offload: true
+  num_inference_steps: 50
+  patched: true
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 3
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

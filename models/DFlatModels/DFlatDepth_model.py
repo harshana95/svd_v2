@@ -259,7 +259,7 @@ class DFlatDepth_model(BaseModel):
         data['mask_meas'] = mask_meas
         
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key, 'depth'], opt=self.opt.train if is_train else self.opt.val)
             
     def optimize_parameters(self):

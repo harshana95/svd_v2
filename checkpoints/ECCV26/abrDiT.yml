@@ -1,0 +1,143 @@
+name: Aberration
+model_type: Simple_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+
+tracker_project_name: Aberration
+experiment_key: DiT
+
+num_frames: 1
+
+# network structures
+network:
+
+  type: DiTTransformer2D
+  in_channels: 3 
+  out_channels: 3 
+  patch_size: 8
+
+
+# discriminator:
+#   type: PatchDiscriminator
+#   in_channels: 6
+
+datasets:
+  train:
+    type: DeepLensDeblurDataset
+    gt_dataset_path: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    gt_dataset_file_pattern: !!str \*
+    gt_key: gt
+    lq_key: blur
+    data_percent: [0,99]
+    num_proc: 1
+    return_psfs: true
+    render_method: 'psf_map'
+    lens_path: /depot/chan129/users/harshana/svd_v2/lenses/camera/rf50mm_f1.8.json
+    sensor_res: [1024, 1024]
+    num_frames: ${num_frames}
+    offset_power: 0.2
+    psf_pool_size: 10
+    psf_pool_update_rate: 256
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+
+  val:
+    type: DeepLensDeblurDataset
+    gt_dataset_path: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    gt_dataset_file_pattern: !!str \*
+    gt_key: gt
+    lq_key: blur
+    data_percent: [99, 99.1]
+    return_psfs: true
+    num_proc: 1
+    render_method: 'psf_map'
+    lens_path: /depot/chan129/users/harshana/svd_v2/lenses/camera/rf50mm_f1.8.json
+    sensor_res: [1024, 1024]
+    num_frames: ${num_frames}
+    offset_power: 0.2
+    psf_pool_size: 10
+    psf_pool_update_rate: 16
+
+    use_shuffle: false
+    
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Aberration/DiT_2026_02_09_00_36_42/
+  resume_from_checkpoint: latest
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 1e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_weight_decay: 0.0001
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 4
+
+
+  max_train_steps: 200000
+  validation_steps: 100
+  checkpointing_steps: 500
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+# validation settings
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 16
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

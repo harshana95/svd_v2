@@ -137,7 +137,7 @@ class Sparse_model(BaseModel):
         data['sparse_image'] = sparse_color(data['image'])
         data['sparse_depth'] = sparse_color(data['depth'])
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=["edges", "sparse_image", "sparse_depth"], opt=self.opt.train if is_train else self.opt.val)
 
     def optimize_parameters(self):
@@ -153,6 +153,9 @@ class Sparse_model(BaseModel):
             self.optimizers[i].step()
 
         return losses
+    
+    def forwardpass(self, edges, sparse_image, sparse_depth):
+        return self.net_g(torch.cat([edges, sparse_image, sparse_depth], dim=1))
 
     def validate_step(self, batch, idx, lq_key, gt_key):
         self.feed_data(batch, is_train=False)
@@ -160,8 +163,7 @@ class Sparse_model(BaseModel):
             b,c,h,w = self.original_size['image']
             pred = []
             for _ in self.setup_patches(): 
-                net_in = torch.cat([self.sample['edges'],self.sample['sparse_image'],self.sample['sparse_depth']], dim=1)
-                out = self.net_g(net_in)
+                out = self.forwardpass(self.sample['edges'], self.sample['sparse_image'], self.sample['sparse_depth'])
                 pred.append(out)
             pred = torch.cat(pred, dim=0)
             pred = einops.rearrange(pred, '(b n) c h w -> b n c h w', b=b)
@@ -178,8 +180,7 @@ class Sparse_model(BaseModel):
             depth = self.sample['depth']
             sparse_image = self.sample['sparse_image']
             sparse_depth = self.sample['sparse_depth']
-            net_in = torch.cat([self.sample['edges'],self.sample['sparse_image'],self.sample['sparse_depth']], dim=1)
-            out = self.net_g(net_in)
+            out = self.forwardpass(edges, sparse_image, sparse_depth)
 
         edges = edges.cpu().numpy()
         image = image.cpu().numpy()

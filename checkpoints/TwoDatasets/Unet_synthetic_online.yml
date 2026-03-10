@@ -19,7 +19,7 @@ datasets:
     gt_key: gt
     lq_key: blur
     data_percent: [0, 99]
-    num_proc: 4
+    num_proc: 1
     num_worker_per_gpu: 0
     lens_path: /depot/chan129/users/harshana/svd_v2/lenses/cooke40_inferior.json
     sensor_res: [1024, 1024]
@@ -45,7 +45,7 @@ datasets:
     gt_key: gt
     lq_key: blur
     data_percent: [0, 99]
-    num_proc: 4
+    num_proc: 1
     num_worker_per_gpu: 0
     lens_path: /depot/chan129/users/harshana/svd_v2/lenses/thorlabs/acl12708u.json
     sensor_res: [1024, 1024]
@@ -71,7 +71,7 @@ datasets:
     gt_key: gt
     lq_key: blur
     data_percent: [99, 99.2]
-    num_proc: 4
+    num_proc: 1
     num_worker_per_gpu: 0
     lens_path: /depot/chan129/users/harshana/svd_v2/lenses/cooke40_inferior.json
     sensor_res: [1024, 1024]
@@ -97,7 +97,7 @@ datasets:
     gt_key: gt
     lq_key: blur
     data_percent: [99, 99.2]
-    num_proc: 4
+    num_proc: 1
     num_worker_per_gpu: 0
     lens_path: /depot/chan129/users/harshana/svd_v2/lenses/thorlabs/acl12708u.json
     sensor_res: [1024, 1024]

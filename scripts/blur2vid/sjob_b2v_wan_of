@@ -1,0 +1,14 @@
+#!/bin/sh -l
+
+#SBATCH -p a100-80gb
+#SBATCH --mem 128G
+#SBATCH -n32
+#SBATCH -A stanchan
+#SBATCH --nodes=1 --gpus-per-node=1
+#SBATCH --time=4-00:00:00
+#SBATCH --job-name b2v
+
+
+cd ../..
+conda activate /home/wweligam/home_env
+accelerate launch trainer.py -opt ./checkpoints/ECCV26/blur2vid_wan_opticalflow.yml

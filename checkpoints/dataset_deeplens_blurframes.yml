@@ -18,6 +18,10 @@ dataset:
   num_frames: 5
   offset_power: 0.2
 
+  psf_pool_size: 10
+  psf_pool_update_rate: 16
+  
+
   transforms:
     to_tensor:
       keys: [gt_key]

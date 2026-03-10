@@ -81,12 +81,22 @@ def initialize(args, logger, experiment_name):
     accelerator_project_config = ProjectConfiguration(project_dir=args.path.experiments_root,
                                                       logging_dir=logging_dir)
 
+    # num_gpu from config: used for validation. Actual process count is set by the launcher
+    # (e.g. accelerate launch --num_processes N). Run with that many processes for multi-GPU.
+    num_gpu = getattr(args, 'num_gpu', 1)
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.train.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
     )
+
+    if accelerator.num_processes != num_gpu:
+        logger.warning(
+            f"Config num_gpu={num_gpu} but accelerator has num_processes={accelerator.num_processes}. "
+            f"For multi-GPU training run: accelerate launch --num_processes {num_gpu} trainer.py -opt <your_config.yml>"
+        )
 
     # Disable AMP for MPS.
     if torch.backends.mps.is_available():
@@ -298,7 +308,7 @@ def log_image(args, accelerator, formatted_images, name, step):
         elif tracker.name == "wandb":
             tracker.log({"validation": wandb.Image(formatted_images, caption=name)})
         elif tracker.name == "comet_ml":
-            tracker.writer.log_image(np.hstack(formatted_images), name=name, step=step, image_channels="first")
+            tracker.writer.log_image(einops.rearrange(formatted_images, 'n c h w -> c (n h) w'), name=name, step=step, image_channels="first")
         else:
             raise Exception(f"image logging not implemented for {tracker.name}")
 

@@ -22,8 +22,7 @@ from utils.dataset_utils import merge_patches
 from utils.loss import Loss
 from utils import log_image, log_metrics
 
-from models.archs import _arch_modules
-from utils.misc import find_attr
+from models.archs import find_network_class
 from safetensors.torch import load_file
 # one step prediction from t=T
 def load_model_hook(models, input_dir):
@@ -35,7 +34,7 @@ def load_model_hook(models, input_dir):
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
         print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
         try:
-            c = find_attr(_arch_modules, class_name)
+            c, _ = find_network_class(class_name)
             assert c is not None
         except ValueError as e:  # class is not written by us. Try to load from diffusers
             print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
@@ -133,7 +132,7 @@ class Ex5_model(DiffusionLKPN_TwoInput_model):
         self.sample = data
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2",], 
                        opt=self.opt.train if is_train else self.opt.val)
     

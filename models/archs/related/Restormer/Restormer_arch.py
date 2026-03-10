@@ -6,6 +6,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from pdb import set_trace as stx
 import numbers
 
@@ -193,7 +194,7 @@ class Upsample(nn.Module):
 ##---------- Restormer -----------------------
 class Restormer(nn.Module):
     def __init__(self, 
-        inp_channels=3, 
+        in_channels=3, 
         out_channels=3, 
         dim = 48,
         num_blocks = [4,6,6,8], 
@@ -203,12 +204,16 @@ class Restormer(nn.Module):
         bias = False,
         LayerNorm_type = 'WithBias',   ## Other option 'BiasFree'
         dual_pixel_task = False,        ## True for dual-pixel defocus deblurring only. Also set inp_channels=6
+        use_checkpoint = False,         ## Gradient checkpointing to save memory
+        return_features = False,
         **kwargs
     ):
 
         super(Restormer, self).__init__()
+        self.use_checkpoint = use_checkpoint
+        self.return_features = return_features
 
-        self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
+        self.patch_embed = OverlapPatchEmbed(in_channels, dim)
 
         self.encoder_level1 = nn.Sequential(*[TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])
         
@@ -244,35 +249,44 @@ class Restormer(nn.Module):
             
         self.output = nn.Conv2d(int(dim*2**1), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
+    def _forward_with_checkpoint(self, sequential, x):
+        """Run a sequence of TransformerBlocks with optional gradient checkpointing."""
+        for block in sequential:
+            if self.use_checkpoint and self.training:
+                x = checkpoint(block, x, use_reentrant=False)
+            else:
+                x = block(x)
+        return x
+
     def forward(self, inp_img):
 
         inp_enc_level1 = self.patch_embed(inp_img)
-        out_enc_level1 = self.encoder_level1(inp_enc_level1)
+        out_enc_level1 = self._forward_with_checkpoint(self.encoder_level1, inp_enc_level1)
         
         inp_enc_level2 = self.down1_2(out_enc_level1)
-        out_enc_level2 = self.encoder_level2(inp_enc_level2)
+        out_enc_level2 = self._forward_with_checkpoint(self.encoder_level2, inp_enc_level2)
 
         inp_enc_level3 = self.down2_3(out_enc_level2)
-        out_enc_level3 = self.encoder_level3(inp_enc_level3) 
+        out_enc_level3 = self._forward_with_checkpoint(self.encoder_level3, inp_enc_level3) 
 
         inp_enc_level4 = self.down3_4(out_enc_level3)        
-        latent = self.latent(inp_enc_level4) 
+        latent = self._forward_with_checkpoint(self.latent, inp_enc_level4) 
                         
         inp_dec_level3 = self.up4_3(latent)
         inp_dec_level3 = torch.cat([inp_dec_level3, out_enc_level3], 1)
         inp_dec_level3 = self.reduce_chan_level3(inp_dec_level3)
-        out_dec_level3 = self.decoder_level3(inp_dec_level3) 
+        out_dec_level3 = self._forward_with_checkpoint(self.decoder_level3, inp_dec_level3) 
 
         inp_dec_level2 = self.up3_2(out_dec_level3)
         inp_dec_level2 = torch.cat([inp_dec_level2, out_enc_level2], 1)
         inp_dec_level2 = self.reduce_chan_level2(inp_dec_level2)
-        out_dec_level2 = self.decoder_level2(inp_dec_level2) 
+        out_dec_level2 = self._forward_with_checkpoint(self.decoder_level2, inp_dec_level2) 
 
         inp_dec_level1 = self.up2_1(out_dec_level2)
         inp_dec_level1 = torch.cat([inp_dec_level1, out_enc_level1], 1)
-        out_dec_level1 = self.decoder_level1(inp_dec_level1)
+        out_dec_level1 = self._forward_with_checkpoint(self.decoder_level1, inp_dec_level1)
         
-        out_dec_level1 = self.refinement(out_dec_level1)
+        out_dec_level1 = self._forward_with_checkpoint(self.refinement, out_dec_level1)
 
         #### For Dual-Pixel Defocus Deblurring Task ####
         if self.dual_pixel_task:
@@ -282,7 +296,8 @@ class Restormer(nn.Module):
         else:
             out_dec_level1 = self.output(out_dec_level1) + inp_img
 
-
+        if self.return_features:
+            return out_dec_level1, [latent, out_dec_level3, out_dec_level2, out_enc_level1]
         return out_dec_level1
 
 

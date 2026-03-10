@@ -212,7 +212,7 @@ class DFlatArrayIR_model(BaseModel):
         all_meas = einops.rearrange(all_meas, "n b c h w -> b n c h w")
         data[lq_key] = all_meas
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key], opt=self.opt.train if is_train else self.opt.val)
             
     def optimize_parameters(self):

@@ -45,7 +45,7 @@ def center_kernel(kernel):
     mx, my = get_first_moments(kernel)
     shift_x, shift_y = N // 2 - np.int32(mx), N // 2 - np.int32(my)
     kernel = np.roll(kernel, (shift_x, shift_y), axis=[0, 1])
-    return kernel
+    return kernel, shift_x, shift_y
 
 
 def get_impulse(psf_size):
@@ -91,11 +91,18 @@ def trajectory2psfs(trajectory, pixel_support, fraction, calibration_params, psf
     # Determine the scale to be used by maximum pixel support allowed
     max_shift = np.max(np.abs(sample))
     scale = pixel_support / max_shift
-
+    
+    # Calculate Optical Flow Vector (End point - Start point)
+    # This represents the total displacement over the 'fraction' of time
+    flow_u = (sample[1:, 0] - sample[0:-1, 0]) * scale
+    flow_v = -(sample[1:, 1] - sample[0:-1, 1]) * scale
+    flow_vector = np.array([flow_u, flow_v])
+    Ms = []
     for idx in range(length):
         tx, ty = sample[idx, 0], sample[idx, 1]
 
         M = get_transformation_matrix(tx * scale, -ty * scale, calibration_params=calibration_params)
+        Ms.append(M)
         psf += cv2.warpPerspective(impulse, M, (psf_size, psf_size))
 
     psf = np.clip(psf, 0, np.inf)
@@ -104,9 +111,16 @@ def trajectory2psfs(trajectory, pixel_support, fraction, calibration_params, psf
     else:
         psf = np.asarray(impulse, dtype=np.float32)
     if center:
-        psf = center_kernel(psf)
+        psf, shift_x, shift_y = center_kernel(psf)
+        # shift Ms by shift_x, shift_y
+        for i in range(len(Ms)):
+            Ms[i][0, 2] -= shift_x
+            Ms[i][1, 2] -= shift_y
+        # shift flow_vector by shift_x, shift_y
+        flow_vector[0] -= shift_x
+        flow_vector[1] -= shift_y
 
-    return psf
+    return psf, flow_vector, Ms
 
 
 if __name__ == "__main__":

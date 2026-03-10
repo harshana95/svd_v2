@@ -188,17 +188,17 @@ class OSEDiff_onedataset_model(BaseModel):
         else:
             self.adapter_preprocess = lambda x: x
 
-        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, subfolder="tokenizer")
-        self.text_encoder = CLIPTextModel.from_pretrained(pretrained_model_name_or_path, subfolder="text_encoder").cuda()
-        self.noise_scheduler = DDPMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, subfolder="tokenizer", local_files_only=True)
+        self.text_encoder = CLIPTextModel.from_pretrained(pretrained_model_name_or_path, subfolder="text_encoder", local_files_only=True).cuda()
+        self.noise_scheduler = DDPMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
         self.noise_scheduler.set_timesteps(timesteps=[self.opt.train.timestep], device="cuda")
         self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.cuda()
         # one step prediction. choose t=T
         self.timesteps = self.noise_scheduler.timesteps
         print(f"Timesteps : {self.timesteps}")
         
-        self.vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae", revision=revision, variant=variant)
-        self.unet = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant)
+        self.vae = AutoencoderKL.from_pretrained(pretrained_model_name_or_path, subfolder="vae", revision=revision, variant=variant, local_files_only=True)
+        self.unet = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant, local_files_only=True)
         self.unet.train()
 
         # use adapter for high-frequency injection
@@ -214,9 +214,9 @@ class OSEDiff_onedataset_model(BaseModel):
 
 
         # for VSD loss
-        self.noise_scheduler_reg = DDPMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler")
-        self.unet_fix = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant)
-        self.unet_update = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant)
+        self.noise_scheduler_reg = DDPMScheduler.from_pretrained(pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
+        self.unet_fix = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant, local_files_only=True)
+        self.unet_update = UNet2DConditionModel.from_pretrained(pretrained_model_name_or_path, subfolder="unet", revision=revision, variant=variant, local_files_only=True)
         self.unet_update.train()
         
         self.unet_fix.requires_grad_(False)
@@ -273,18 +273,6 @@ class OSEDiff_onedataset_model(BaseModel):
         self.model_vlm.to(self.accelerator.device, dtype=torch.float16)
         self.unet_fix.to(self.accelerator.device, dtype=torch.float16)
         
-        for m in self.models:
-            print(m.__class__.__name__)
-            all_param = 0
-            trainable_params = 0
-            for name, param in m.named_parameters():
-                all_param += param.numel()
-                if param.requires_grad:
-                    trainable_params += param.numel()
-                    # print(name)
-            print(
-                f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
-            )
         
     def setup_optimizers(self):
         opt = self.opt.train.optim
@@ -328,7 +316,7 @@ class OSEDiff_onedataset_model(BaseModel):
         # image_1 = F.interpolate(image_1, size=(512,512), mode='bicubic')
         # self.sample[lq_key+"_1"] = image_1
 
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key], 
                        opt=self.opt.train if is_train else self.opt.val)
     
@@ -488,6 +476,22 @@ class OSEDiff_onedataset_model(BaseModel):
 
         return self._optimize_parameters(denoised_latents, gt_1, prompt_embeds, neg_prompt_embeds)
 
+    def forwardpass(self, lq1):
+        if lq1.shape[1] == 1:
+            lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
+
+        bsz = lq1.shape[0]
+        lq_ram = self.model_vlm_transforms(lq1 * 0.5 + 0.5)
+        caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
+        prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
+
+        output = self.pipeline(
+            lq1,
+            None,
+            prompt_embeds=prompt_embeds[:bsz],
+            timesteps=[self.opt.train.timestep],
+        )
+        return output.images
         
     
     @torch.no_grad()
@@ -523,26 +527,15 @@ class OSEDiff_onedataset_model(BaseModel):
             
     def validate_step(self, batch, idx,lq_key,gt_key):
         self.feed_data(batch, is_train=False)
+        self.calculate_flops(torch.randn(1, 3, 512, 512).to(self.device))
         
         if self.opt.val.patched:
             b,c,h,w = self.original_size[lq_key]
             pred = []
             for _ in self.setup_patches():    
                 image_1 = self.sample[lq_key]
-                if image_1.shape[1] == 1:
-                    image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
-                bsz = image_1.shape[0]  
-                lq_ram = self.model_vlm_transforms(image_1*0.5+0.5)
-                caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-                prompt_embeds = encode_prompt(caption, self.tokenizer, self.text_encoder)
-                out = self.pipeline(
-                    image_1,
-                    None,
-                    prompt_embeds=prompt_embeds[:bsz],
-                    # added_cond_kwargs={k: v[:bsz] for k, v in self.unet_added_conditions.items()},
-                    timesteps=[self.opt.train.timestep],
-                )
-                pred.append(out.images)
+                out = self.forwardpass(image_1)
+                pred.append(out)
             pred = torch.cat(pred, dim=0)
             pred = einops.rearrange(pred, '(b n) c h w -> b n c h w', b=b)
             out = []
@@ -555,21 +548,7 @@ class OSEDiff_onedataset_model(BaseModel):
         else: 
             lq1 = self.sample[lq_key]
             gt = self.sample[gt_key]
-            bsz = lq1.shape[0]  
-            if lq1.shape[1] == 1:
-                lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
-            lq_ram = self.model_vlm_transforms(lq1*0.5+0.5)
-            caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-            prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
-        
-            output = self.pipeline(
-                lq1,
-                None,
-                prompt_embeds=prompt_embeds[:bsz],
-                # added_cond_kwargs={"text_embeds": prompt_embeds[:bsz], "time_ids": torch.tensor([self.timesteps]*bsz).to(prompt_embeds.device)},
-                timesteps=[self.opt.train.timestep],
-            )
-            out = output.images
+            out = self.forwardpass(lq1)
 
         lq1 = lq1.cpu().numpy()*0.5+0.5
         gt = gt.cpu().numpy()*0.5+0.5

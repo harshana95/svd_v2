@@ -17,7 +17,7 @@ datasets:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
     split: train
-    num_proc: 4
+    num_proc: 1
     map_batch_size: 16
 
     use_shuffle: true
@@ -49,7 +49,7 @@ datasets:
     type: HuggingFaceDataset
     name: ${dataset_2_name}
     split: train
-    num_proc: 4
+    num_proc: 1
     map_batch_size: 16
 
     use_shuffle: true
@@ -81,7 +81,7 @@ datasets:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
     split: validation
-    num_proc: 4
+    num_proc: 1
 
     use_shuffle: false
     gt_key: gt
@@ -111,7 +111,7 @@ datasets:
     type: HuggingFaceDataset
     name: ${dataset_2_name}
     split: validation
-    num_proc: 4
+    num_proc: 1
 
     use_shuffle: false
     gt_key: gt

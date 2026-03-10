@@ -637,7 +637,7 @@ class DFlatAllFocus_model(BaseModel):
         data['psf_intensity'] = torch.cat(data['psf_intensity'], dim=0)
         data['ps_locs'] = torch.cat(data['ps_locs'], dim=0)
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key, 'depth'], opt=self.opt.train if is_train else self.opt.val)
     
 

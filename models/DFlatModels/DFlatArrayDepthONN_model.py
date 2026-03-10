@@ -189,7 +189,7 @@ class DFlatArrayDepthONN_model(DFlatArrayDepth_model):
         # data['depth'] = d  # depth map
         
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, 'depth'], opt=self.opt.train if is_train else self.opt.val)
         
     

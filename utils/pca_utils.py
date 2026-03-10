@@ -1,7 +1,8 @@
 import numpy as np
 from sklearn.decomposition import PCA
 from threadpoolctl import threadpool_limits
-
+import einops
+import torch
 
 def get_pca_components(psfs_all, pca_n=100):
     print("PCA: Starting", psfs_all.shape)
@@ -60,3 +61,25 @@ def get_pca_components(psfs_all, pca_n=100):
     print("PCA done")
 
     return basis_psfs, basis_coef, pca_components, pca_mean, pca_var
+
+def get_pca_components_torch(psfs_all, pca_n=100):
+    inc, outc, h, w, H, W = psfs_all.shape
+    A = einops.rearrange(psfs_all, 'a b h w H W -> (a b) (h w) (H W)')
+    center = A.mean((0, 1), keepdim=True) # 1 1 n
+    A -= center
+    basis_coef = torch.ones((A.shape[0], A.shape[1], pca_n+1), dtype=torch.float32, device=A.device)
+    basis_psfs = torch.zeros((A.shape[0], pca_n+1, A.shape[2]), dtype=torch.float32, device=A.device)
+    for i in range(len(A)):
+        U,S,V = torch.pca_lowrank(A[i], q=pca_n, niter=2, center=False)
+        #       A: mxn U: mxq S: q V: nxq
+        # Note: A    = U      S    (V^H) 
+        #       AV = US(V^H)V = US
+        basis_coef[i, :, :-1] = U
+        basis_psfs[i, :-1, :] = torch.matmul(S, V.H)
+    basis_psfs[:, -1, :] = center[0,0]
+    basis_coef = einops.rearrange(basis_coef, '(a b) (h w) q -> a b q h w', a=inc, b=outc, h=h, w=w)
+    basis_psfs = einops.rearrange(basis_psfs, '(a b) q (H W) -> a b q H W', a=inc, b=outc, H=H, W=W)
+    return basis_psfs, basis_coef
+
+
+

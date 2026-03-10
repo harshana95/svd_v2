@@ -112,7 +112,7 @@ class SimpleSynthetic_model(BaseModel):
         data[lq_key] = img_rendered*2-1
 
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key], opt=self.opt.train if is_train else self.opt.val)
 
     def optimize_parameters(self):

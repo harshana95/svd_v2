@@ -240,7 +240,7 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
         rf_key = self.dataloader.dataset.rf_key if is_train else self.test_dataloader.dataset.rf_key
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2", rf_key+"_1",rf_key+"_2",], 
                        opt=self.opt.train if is_train else self.opt.val)
     

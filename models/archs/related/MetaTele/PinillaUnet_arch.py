@@ -8,17 +8,17 @@ class ResidualBlock(nn.Module):
     A basic residual block with two convolutional layers and a skip connection.
     As described in the paper, it contains only one ReLU activation.
     """
-    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1):
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1, stride=1, bias=True):
         super(ResidualBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride, bias=False) # bias=False as per paper
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride, bias=bias) # bias=False as per paper
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride, bias=False) # bias=False as per paper
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=kernel_size, padding=padding, stride=stride, bias=bias) # bias=False as per paper
 
         # If input and output channels are different, or stride is not 1,
         # we need a projection shortcut to match dimensions.
         self.shortcut = nn.Sequential()
         if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False)
+            self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=bias)
 
     def forward(self, x):
         identity = x
@@ -28,7 +28,7 @@ class ResidualBlock(nn.Module):
 
         # Apply shortcut if dimensions don't match
         out += self.shortcut(identity)
-        # out = self.relu(out) # Final ReLU after adding the shortcut
+        out = self.relu(out) # Final ReLU after adding the shortcut
         return out
 
 class PinillaUnet_config(PretrainedConfig):
@@ -51,84 +51,85 @@ class PinillaUnet_arch(PreTrainedModel):
         
         in_channels = config.in_channels
         out_channels = config.out_channels
-
+        bias = False
         # Encoder path (Downscaling)
         # Scale 1
-        self.enc1_conv = nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1, bias=False) # Downsampling from (H, W) to (H/2, W/2)
+        self.enc1_conv = nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1, bias=bias) # Downsampling from (H, W) to (H/2, W/2)
         self.enc1_res_blocks = nn.Sequential(
-            ResidualBlock(64, 64),
-            ResidualBlock(64, 64),
-            ResidualBlock(64, 64),
-            ResidualBlock(64, 64)
+            ResidualBlock(64, 64, bias=bias),
+            ResidualBlock(64, 64, bias=bias),
+            ResidualBlock(64, 64, bias=bias),
+            ResidualBlock(64, 64, bias=bias)
         )
 
         # Scale 2
-        self.enc2_conv = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1, bias=False)
+        self.enc2_conv = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1, bias=bias)
         self.enc2_res_blocks = nn.Sequential(
-            ResidualBlock(128, 128),
-            ResidualBlock(128, 128),
-            ResidualBlock(128, 128),
-            ResidualBlock(128, 128)
+            ResidualBlock(128, 128, bias=bias),
+            ResidualBlock(128, 128, bias=bias),
+            ResidualBlock(128, 128, bias=bias),
+            ResidualBlock(128, 128, bias=bias)
         )
 
         # Scale 3
-        self.enc3_conv = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1, bias=False)
+        self.enc3_conv = nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1, bias=bias)
         self.enc3_res_blocks = nn.Sequential(
-            ResidualBlock(256, 256),
-            ResidualBlock(256, 256),
-            ResidualBlock(256, 256),
-            ResidualBlock(256, 256)
+            ResidualBlock(256, 256, bias=bias),
+            ResidualBlock(256, 256, bias=bias),
+            ResidualBlock(256, 256, bias=bias),
+            ResidualBlock(256, 256, bias=bias)
         )
 
         # Scale 4 (bottleneck)
-        self.enc4_conv = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1, bias=False)
+        self.enc4_conv = nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1, bias=bias)
         self.enc4_res_blocks = nn.Sequential(
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512),
-            ResidualBlock(512, 512)
+            ResidualBlock(512, 512, bias=bias),
+            ResidualBlock(512, 512, bias=bias),
+            ResidualBlock(512, 512, bias=bias),
+            ResidualBlock(512, 512, bias=bias)
         )
 
         # Decoder path (Upscaling)
         # Scale 4 (Upsampled from Scale 4 bottleneck)
-        self.dec4_tconv = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec4_tconv = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1, bias=bias)
         self.dec4_res_blocks = nn.Sequential(
-            ResidualBlock(256 + 256, 256), # Concatenation + current features
-            ResidualBlock(256, 256),
-            ResidualBlock(256, 256),
-            ResidualBlock(256, 256)
+            ResidualBlock(256 + 256, 256, bias=bias), # Concatenation + current features
+            ResidualBlock(256, 256, bias=bias),
+            ResidualBlock(256, 256, bias=bias),
+            ResidualBlock(256, 256, bias=bias)
         )
 
         # Scale 3
-        self.dec3_tconv = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec3_tconv = nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1, bias=bias)
         self.dec3_res_blocks = nn.Sequential(
-            ResidualBlock(128 + 128, 128),
-            ResidualBlock(128, 128),
-            ResidualBlock(128, 128),
-            ResidualBlock(128, 128)
+            ResidualBlock(128 + 128, 128, bias=bias),
+            ResidualBlock(128, 128, bias=bias),
+            ResidualBlock(128, 128, bias=bias),
+            ResidualBlock(128, 128, bias=bias)
         )
 
         # Scale 2
-        self.dec2_tconv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec2_tconv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1, bias=bias)
         self.dec2_res_blocks = nn.Sequential(
-            ResidualBlock(64 + 64, 64),
-            ResidualBlock(64, 64),
-            ResidualBlock(64, 64),
-            ResidualBlock(64, 64)
+            ResidualBlock(64 + 64, 64, bias=bias),
+            ResidualBlock(64, 64, bias=bias),
+            ResidualBlock(64, 64, bias=bias),
+            ResidualBlock(64, 64, bias=bias)
         )
 
-        self.dec1_tconv = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1, bias=False)
+        self.dec1_tconv = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1, bias=bias)
         self.dec1_res_blocks = nn.Sequential(
-            ResidualBlock(32, 32),
-            ResidualBlock(32, 32),
-            ResidualBlock(32, 32),
-            ResidualBlock(32, 32)
+            ResidualBlock(32, 32, bias=bias),
+            ResidualBlock(32, 32, bias=bias),
+            ResidualBlock(32, 32, bias=bias),
+            ResidualBlock(32, 32, bias=bias)
         )
 
         # Final layer to map back to output channels
-        self.out_conv = nn.Conv2d(32, out_channels, kernel_size=1, bias=False) # Use 1x1 conv
+        self.out_conv = nn.Conv2d(32, out_channels, kernel_size=1, bias=bias) # Use 1x1 conv
 
     def forward(self, x):
+        
         # Encoder
         # Scale 1
         enc1 = self.enc1_conv(x)
@@ -171,27 +172,21 @@ class PinillaUnet_arch(PreTrainedModel):
 
         # Output layer
         out = self.out_conv(dec1)
-        # breakpoint()
-        # The paper suggests a specific output activation or no activation,
-        # and then combined with the input noise.
-        # For a generic reconstruction, sigmoid or tanh is common if target is normalized.
-        # If reconstructing raw pixel values, linear might be appropriate.
-        # Here, we'll output linear, and the loss function will handle range.
+
         return out
 
-# Initialize Discriminator (example GAN structure, needs to be implemented fully)
+
 # The paper mentions Disc and VGG16. VGG16 is used for perceptual loss.
 # Disc would be a typical patch-GAN or image-level discriminator.
-# For demonstration, let's create a placeholder Discriminator.
-class PinillaDiscriminator_config(PretrainedConfig):
+class PatchDiscriminator_config(PretrainedConfig):
     def __init__(self, in_channels=3, **kwargs):
         super().__init__(**kwargs)
         self.in_channels = in_channels
 
-class PinillaDiscriminator_arch(PreTrainedModel):
-    config_class = PinillaDiscriminator_config
+class PatchDiscriminator_arch(PreTrainedModel):
+    config_class = PatchDiscriminator_config
     def __init__(self, config):
-        super(PinillaDiscriminator_arch, self).__init__(config)
+        super(PatchDiscriminator_arch, self).__init__(config)
         in_channels = config.in_channels
 
         # Simplified discriminator structure

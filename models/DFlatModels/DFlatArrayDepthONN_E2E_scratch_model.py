@@ -21,7 +21,6 @@ from utils.loss import Loss
 from utils import log_image, log_metrics
 from utils.misc import find_attr, scandir
 
-from models.archs import _arch_modules
 def depth_metrics_torch(pred, gt, mask=None, eps=1e-6):
     """
     PyTorch version for depth metrics.
@@ -79,7 +78,7 @@ def load_model_hook(models, input_dir):
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
         print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
         try:
-            c = find_attr(_arch_modules, class_name)
+            c, _ = find_network_class(class_name)
             assert c is not None
         except ValueError as e:  # class is not written by us. Try to load from diffusers
             print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
@@ -163,7 +162,7 @@ class DFlatArrayDepthONN_E2E_Scratch_model(DFlatArrayDepthONN_model):
             self.all_psf_intensity.append(psf_intensity)
 
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             raise Exception()
         
     def setup_optimizers(self):

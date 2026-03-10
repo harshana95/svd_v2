@@ -213,7 +213,7 @@ class DeepLensArrayE2E_model(DeepLensArray_model):
         data['mask'] = mask
         
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key, 'depth'], opt=self.opt.train if is_train else self.opt.val)
             
     def optimize_parameters(self):

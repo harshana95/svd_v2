@@ -1,29 +1,25 @@
 from datetime import datetime
 import gc
 import importlib
-import logging
 import math
 import os
 from pathlib import Path
-import sys
+import time
 import timeit
 import einops
 from matplotlib import pyplot as plt
 import numpy as np
 import torch
-from collections import OrderedDict
-from copy import deepcopy
 from torch.nn.parallel import DataParallel, DistributedDataParallel
-from huggingface_hub import create_repo, hf_hub_download, upload_folder, delete_repo, repo_exists, whoami
+from huggingface_hub import create_repo, upload_folder
 
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from diffusers import get_scheduler
 from tqdm import tqdm
-from utils import get_dataset_util, initialize, keep_last_checkpoints
-from utils.dataset_utils import DictWrapper,  patchify
-from utils.misc import find_attr, scandir
+from utils import initialize, keep_last_checkpoints
+from utils.dataset_utils import  patchify
 
-from models.archs import _arch_modules
+from models.archs import find_network_class
 from dataset import create_dataset
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -38,7 +34,19 @@ def save_model_hook(models, weights, output_dir):
 
         class_name = model._get_name()
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
-        model.save_pretrained(os.path.join(output_dir, f"{class_name}_{saved[class_name]}"))
+        save_dir = os.path.join(output_dir, f"{class_name}_{saved[class_name]}")
+        os.makedirs(save_dir, exist_ok=True)
+        # Prefer HuggingFace / diffusers style saving when available,
+        # but fall back to a plain state_dict checkpoint if that fails.
+        if hasattr(model, "save_pretrained"):
+            try:
+                model.save_pretrained(save_dir)
+            except Exception as e:
+                print(f"{'='*50} Failed to save {class_name} with save_pretrained, "
+                      f"falling back to torch.save. Error: {e}")
+                torch.save(model.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+        else:
+            torch.save(model.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
 
         i -= 1
 
@@ -51,14 +59,17 @@ def load_model_hook(models, input_dir):
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
         print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
         try:
-            c = find_attr(_arch_modules, class_name)
+            c, _ = find_network_class(class_name)
         except ValueError as e:  # class is not written by us. Try to load from diffusers
             print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
             m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
             c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
         
         assert c is not None
-        assert c.config_class is not None
+        if hasattr(c, 'config_class'):
+            assert c.config_class is not None
+        else:
+            print(f"Class {class_name} does not have a config_class") 
         # load diffusers style into model
         try:
             load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
@@ -69,6 +80,7 @@ def load_model_hook(models, input_dir):
 
 class BaseModel():
     """Base model."""
+    self.FLOPS_SAVED = False
 
     def __init__(self, opt, logger=None):
         self.is_train = opt['is_train']
@@ -272,6 +284,8 @@ class BaseModel():
         self.dataloader = self.accelerator.prepare(self.dataloader)
         self.test_dataloader = self.accelerator.prepare(self.test_dataloader)
 
+        self.print_model_memory()
+
         if self.is_train:
             # We need to recalculate our total training steps as the size of the training dataloader may have changed.
             num_update_steps_per_epoch = math.ceil(len(self.dataloader) / self.opt.train.gradient_accumulation_steps)
@@ -327,6 +341,9 @@ class BaseModel():
     def load_other_parameters(self, path):
         pass
 
+    def forwardpass(self, *args, **kwargs):
+        pass
+
     def grids(self, keys, opt):
         """
         Make the input images into grids for large image inference.
@@ -353,7 +370,7 @@ class BaseModel():
             self.sample[key+'_patched'] = patched
             self.sample[key+'_patched_pos'] = patched_pos
             self.sample[key] = None  # fill using patched with a minibatch size
-    
+            
     # @torch.no_grad()
     def setup_patches(self):
         """
@@ -364,12 +381,20 @@ class BaseModel():
         for key in keys:
             b = max(b,self.original_size[key][0])
             n = max(n, len(self.sample[key+'_patched_pos']))
-        for i in range(b):
-            for j in range(0, n, self.minibatch_size):
-                for key in keys:
-                    _i = i if i < self.original_size[key][0] else 0  # some data always have only 1 batch
-                    self.sample[key] = self.sample[key+'_patched'][_i, ..., j:j+self.minibatch_size,:,:,:]
-                yield
+        # for i in range(b):
+        #     for j in range(0, n, self.minibatch_size):
+        #         for key in keys:
+        #             _i = i if i < self.original_size[key][0] else 0  # some data always have only 1 batch
+        #             self.sample[key] = self.sample[key+'_patched'][_i, ..., j:j+self.minibatch_size,:,:,:]
+        #         yield
+        
+        
+        for j in range(0, n, self.minibatch_size):
+            for key in keys:
+                self.sample[key] = self.sample[key+'_patched'][:, ..., j:j+self.minibatch_size,:,:,:]
+                self.sample[key] = einops.rearrange(self.sample[key], "b ... mb c h w -> (b mb) ... c h w")
+            yield
+
 
     def train(self):
         total_batch_size = self.opt.train.batch_size * self.accelerator.num_processes * self.opt.train.gradient_accumulation_steps
@@ -415,15 +440,16 @@ class BaseModel():
             else:
                 self.accelerator.print(f"Resuming from checkpoint {path}")
                 load_path = os.path.join(self.opt.path.resume_from_path, path)
-                # try:
-                self.accelerator.load_state(load_path)
-                # except Exception as e:
-                #     print(f" {'='*50} Failed to load state {e}")
+                try:
+                    self.accelerator.load_state(load_path)
+                except Exception as e:
+                    self.accelerator.print(f" {'='*50} Failed to load state {e}")
                 self.load_other_parameters(load_path)
                 self.global_step = int(path.split("-")[1])
 
                 initial_global_step = self.global_step-1
-                first_epoch = self.global_step // self.num_update_steps_per_epoch
+                if self.is_train:
+                    first_epoch = self.global_step // self.num_update_steps_per_epoch
         else:
             initial_global_step = 0
 
@@ -536,32 +562,73 @@ class BaseModel():
         for model in self.models:
             model.train()
             
-    def get_bare_model(self, net):
-        """Get bare model, especially under wrapping with
-        DistributedDataParallel or DataParallel.
-        """
-        if isinstance(net, (DataParallel, DistributedDataParallel)):
-            net = net.module
-        return net
+    def print_model_memory(self):
+        """Print the memory usage of the models."""
+        # print number of trainable parameters
+        total_memory_usage = 0
+        total_trainable_params = 0
+        total_params = 0
+        for m in self.models:
+            all_param = 0
+            trainable_params = 0
+            memory_usage = 0
+            for name, param in m.named_parameters():
+                all_param += param.numel()
+                memory_usage += param.numel() * param.element_size() # bytes
+                if param.requires_grad:
+                    trainable_params += param.numel()
+            print(f"{m.__class__.__name__} trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param} || memory: {memory_usage / (1024 ** 2):.2f} MB")
+            total_memory_usage += memory_usage
+            total_trainable_params += trainable_params
+            total_params += all_param
+        self.logger.info(f"Total memory usage: {total_memory_usage / (1024 ** 2):.2f} MB || Total trainable params: {total_trainable_params} || Total params: {total_params}")
 
-    def print_network(self, net):
-        """Print the str and parameter number of a network.
+    @torch.no_grad()
+    def calculate_flops(self, *args, n=10, **kwargs):
+        """
+        Estimate FLOPs for a image input.
 
         Args:
-            net (nn.Module)
+            *args: arguments to the forward pass
         """
-        if isinstance(net, (DataParallel, DistributedDataParallel)):
-            net_cls_str = (f'{net.__class__.__name__} - '
-                           f'{net.module.__class__.__name__}')
-        else:
-            net_cls_str = f'{net.__class__.__name__}'
+        if self.FLOPS_SAVED:
+            return
 
-        net = self.get_bare_model(net)
-        net_str = str(net)
-        net_params = sum(map(lambda x: x.numel(), net.parameters()))
+        # calculate flops
+        try:
+            from torch.utils.flop_counter import FlopCounterMode
+        except ImportError:
+            self.logger.warning("torch.utils.flop_counter is not installed; cannot compute FLOPs.")
+            return
 
-        print(f'Network: {net_cls_str}, with parameters: {net_params:,d}')
-        print(net_str)
+        flop_counter = FlopCounterMode(display=False, depth=None)
+        
+        with flop_counter:
+            self.forwardpass(*args)
+            
+        total_flops = flop_counter.get_total_flops()
+        table = flop_counter.get_table()
 
-    
-    
+        # calculate time taken to forward pass
+        time_list = []
+        for _ in range(n):
+            start_time = time.time()
+            self.forwardpass(*args)
+            end_time = time.time()
+            time_list.append(end_time - start_time)
+        
+        # save table to file in experiments root
+        with open(os.path.join(self.opt.path.logging_dir, "flops_table.txt"), "w") as f:
+            f.write(table)
+        with open(os.path.join(self.opt.path.logging_dir, "flops_summary.txt"), "w") as f:
+            f.writelines([f"Total FLOPs: {total_flops / 1e9:.3f} GFLOPs\n",
+                            f"Average time taken to forward pass: {np.mean(time_list)} seconds\n",
+                            f"std: {np.std(time_list)} seconds\n",
+                            f"min: {np.min(time_list)} seconds\n",
+                            f"max: {np.max(time_list)} seconds\n"])
+        
+        self.FLOPS_SAVED = True
+
+        self.logger.info(
+                f"Estimated FLOPs: {total_flops / 1e9:.3f} GFLOPs || Average time taken to forward pass: {np.mean(time_list)} seconds || std: {np.std(time_list)} seconds || min: {np.min(time_list)} seconds || max: {np.max(time_list)} seconds"
+            )

@@ -75,7 +75,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         # image_1 = F.interpolate(image_1, size=(512,512), mode='bicubic')
         # self.sample[lq_key+"_1"] = image_1
 
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2",], 
                        opt=self.opt.train if is_train else self.opt.val)
     
@@ -133,8 +133,30 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         
         return self._optimize_parameters(denoised_latents, gt_1, prompt_embeds, neg_prompt_embeds)
     
+    def forwardpass(self, lq1, lq2):
+        if lq1.shape[1] == 1:
+            lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
+        if lq2.shape[1] == 1:
+            lq2 = einops.repeat(lq2, 'b 1 h w -> b 3 h w')
+
+        bsz = lq1.shape[0]
+        lq_ram = self.model_vlm_transforms(lq1 * 0.5 + 0.5)
+        caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
+        prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
+
+        output = self.pipeline(
+            lq1 if self.use_image1 else lq2,
+            lq2 if self.use_image1 else lq1,
+            prompt_embeds=prompt_embeds[:bsz],
+            timesteps=[self.opt.train.timestep],
+        )
+        return output.images
+    
     @torch.no_grad()
     def validation(self):
+        self.calculate_flops(self.vae, input_size=(512, 512), in_channels=6)
+        self.calculate_flops(self.unet, input_size=(512//8, 512//8), in_channels=4)
+        
         gc.collect()
         torch.cuda.empty_cache()
         idx = 0
@@ -175,22 +197,8 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             for _ in self.setup_patches():    
                 image_1 = self.sample[lq_key+"_1"]
                 image_2 = self.sample[lq_key+"_2"]
-                if image_1.shape[1] == 1:
-                    image_1 = einops.repeat(image_1, 'b 1 h w -> b 3 h w')
-                if image_2.shape[1] == 1:
-                    image_2 = einops.repeat(image_2, 'b 1 h w -> b 3 h w')
-                bsz = image_1.shape[0]  
-                lq_ram = self.model_vlm_transforms(image_1*0.5+0.5)
-                caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-                prompt_embeds = encode_prompt(caption, self.tokenizer, self.text_encoder)
-                out = self.pipeline(
-                    image_1 if self.use_image1 else image_2,
-                    image_2 if self.use_image1 else image_1,
-                    prompt_embeds=prompt_embeds[:bsz],
-                    # added_cond_kwargs={k: v[:bsz] for k, v in self.unet_added_conditions.items()},
-                    timesteps=[self.opt.train.timestep],
-                )
-                pred.append(out.images)
+                out = self.forwardpass(image_1, image_2)
+                pred.append(out)
             pred = torch.cat(pred, dim=0)
             pred = einops.rearrange(pred, '(b n) c h w -> b n c h w', b=b)
             out = []
@@ -205,26 +213,9 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         else: 
             lq1 = self.sample[lq_key+"_1"]
             lq2 = self.sample[lq_key+"_2"]
-            
-            if lq1.shape[1] == 1:
-                lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
-            if lq2.shape[1] == 1:
-                lq2 = einops.repeat(lq2, 'b 1 h w -> b 3 h w')
             gt1 = self.sample[gt_key+"_1"]
             gt2 = self.sample[gt_key+"_2"]
-            bsz = lq1.shape[0]  
-            lq_ram = self.model_vlm_transforms(lq1*0.5+0.5)
-            caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-            prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
-        
-            output = self.pipeline(
-                lq1 if self.use_image1 else lq2,
-                lq2 if self.use_image1 else lq1,
-                prompt_embeds=prompt_embeds[:bsz],
-                # added_cond_kwargs={"text_embeds": prompt_embeds[:bsz], "time_ids": torch.tensor([self.timesteps]*bsz).to(prompt_embeds.device)},
-                timesteps=[self.opt.train.timestep],
-            )
-            out = output.images
+            out = self.forwardpass(lq1, lq2)
         adapter_input = None
         if self.use_adapter:
             adapter_input = self.adapter_preprocess(lq2 if self.use_image1 else lq1).cpu().numpy()*0.5+0.5

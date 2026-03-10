@@ -31,9 +31,11 @@ def main(opt):
 
 
 if __name__ == '__main__':
+    print(f'{"="*50} BEGINNING OF PROGRAM {"="*50}')
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, help='Path to option YAML file.')
     parser.add_argument('-test', action='store_true', help='Save in test.')
+    parser.add_argument('-infer', action='store_true', help='Save in infer.')
     parser.add_argument('-comment', type=str, default='', help='Experiment name comment.')
     args = parser.parse_args()
     with open(args.opt, mode='r') as f:
@@ -49,6 +51,8 @@ if __name__ == '__main__':
         if args.test:
             opt['name'] = 'test'
             opt['tracker_project_name'] = 'test'
+        if args.infer:
+            opt.is_train = False
         opt['comment'] = args.comment
         opt.test = args.test
     opt.opt_path = args.opt

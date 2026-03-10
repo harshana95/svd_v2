@@ -42,26 +42,25 @@ def apply_lora_to_model(
         # Default: target attention projections
         # PEFT will match these patterns in module names
         target_modules = ["q", "k", "v", "o"]
-    
+
+    # Always compute matching modules for LoraConfig (required for get_peft_model)
+    matching_modules = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            for pattern in target_modules:
+                if pattern in name:
+                    matching_modules.append(name)
+                    break
+
     if verbose:
         print(f"🔧 Applying LoRA with:")
         print(f"   Rank (r): {r}")
         print(f"   Alpha: {lora_alpha}")
         print(f"   Dropout: {lora_dropout}")
         print(f"   Target modules: {target_modules}")
-        
-        # Debug: show matching modules
-        matching_modules = []
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
-                for pattern in target_modules:
-                    if pattern in name:
-                        matching_modules.append(name)
-                        break
-        
         if matching_modules:
             print(f"   Found {len(matching_modules)} matching Linear layers for {target_modules}")
-            if verbose and len(matching_modules) <= 20:
+            if len(matching_modules) <= 20:
                 for name in matching_modules[:10]:
                     print(f"     - {name}")
                 if len(matching_modules) > 10:
@@ -76,10 +75,16 @@ def apply_lora_to_model(
                     count += 1
                     if count >= 10:
                         break
-    
-    # Configure LoRA
+
+    if not matching_modules:
+        raise ValueError("LoRA target_modules matched no Linear layers. Check target_modules or model structure.")
+
+    # Configure LoRA.
+    # NOTE: We intentionally omit `task_type` here so PEFT creates a generic
+    # wrapper that forwards all kwargs directly to the underlying model.
+    # This avoids assumptions about `input_ids` etc. which do not apply to
+    # diffusers video transformers like `WanTransformer3DModel`.
     lora_config = LoraConfig(
-        task_type=TaskType.FEATURE_EXTRACTION,
         r=r,
         lora_alpha=lora_alpha,
         target_modules=matching_modules,
@@ -152,23 +157,73 @@ class ContinuousWarper:
         return warped_frame
 
 def warp_tensor(noise, flows):
+    """
+    Go-with-the-Flow style noise warping.
+
+    Instead of integrating a continuous grid over the entire sequence, we:
+      1) Start from an initial white-noise frame.
+      2) For each subsequent frame, backward-warp the previous noise using the
+         optical flow and then re-Gaussianize via a correlation parameter rho:
+             n_t = rho * W(n_{t-1}) + sqrt(1 - rho^2) * eps_t
+         where W is warping with optical flow and eps_t ~ N(0, I).
+
+    This yields temporally correlated but spatially Gaussian noise similar to the
+    Go-with-the-Flow paper, while keeping the original function signature.
+    """
     batch_size, num_frames, num_channels, height, width = noise.shape
-    # warp noise based on the optical flow
-    warper = ContinuousWarper(height, width, noise.device, noise.dtype)
-    with torch.no_grad():
-        # resize optical flow to latent space 
-        _b, _n, _c, _h, _w = flows.shape
-        flows_resized = torchvision.transforms.functional.resize(flows.view(_b*_n, _c, _h, _w), (height, width)).view(_b, _n, _c, height, width)
-        # subsample frames. we will do it using step
-        # flows = flows[:, ::4]  # because vae compress frames by 4x
-        init_noise = noise[:, 0]
-        for i in range(0, _n):
-            if i % (num_frames-1) == 0:
-                warped_noise = warper.step(init_noise, flows_resized[:, i])
-                noise[:, i//(num_frames-1)] = warped_noise
-            else:
-                warper.step(None, flows_resized[:, i])
-    return noise
+
+    # Resize optical flow to the noise / latent resolution
+    # flows: [B, T, 2, H_f, W_f]  (T == num_frames)
+    b_f, t_f, c_f, h_f, w_f = flows.shape
+    assert b_f == batch_size, "flows and noise batch size mismatch"
+    assert c_f == 2, "flows must have 2 channels (u, v)"
+
+    flows_resized = torchvision.transforms.functional.resize(
+        flows.view(b_f * t_f, c_f, h_f, w_f), (height, width)
+    ).view(b_f, t_f, c_f, height, width)
+
+    device = noise.device
+    dtype = noise.dtype
+
+    # Base normalized grid in [-1, 1]
+    ys, xs = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, height, device=device, dtype=dtype),
+        torch.linspace(-1.0, 1.0, width, device=device, dtype=dtype),
+        indexing="ij",
+    )
+    base_grid = torch.stack((xs, ys), dim=-1)  # [H, W, 2]
+    base_grid = base_grid.unsqueeze(0).repeat(batch_size, 1, 1, 1)  # [B, H, W, 2]
+
+    # Correlation parameter: rho close to 1 => strong temporal coherence
+    rho = 0.95
+    sigma = (1.0 - rho ** 2) ** 0.5
+
+    out = noise.clone()
+
+    for t in range(1, num_frames):
+        flow_t = flows_resized[:, t]  # [B, 2, H, W]
+
+        # Convert pixel flow (u, v) to normalized coordinates for grid_sample.
+        # Backward warping: sample from previous frame at (x - u, y - v).
+        flow_x = 2.0 * flow_t[:, 0] / max(width - 1, 1)
+        flow_y = 2.0 * flow_t[:, 1] / max(height - 1, 1)
+
+        grid = base_grid.clone()
+        grid[..., 0] = grid[..., 0] - flow_x
+        grid[..., 1] = grid[..., 1] - flow_y
+
+        warped_prev = F.grid_sample(
+            out[:, t - 1],
+            grid,
+            mode="bilinear",
+            padding_mode="reflection",
+            align_corners=True,
+        )
+
+        eps = torch.randn_like(warped_prev)
+        out[:, t] = rho * warped_prev + sigma * eps
+
+    return out
 
 def random_insert_latent_frame(
     image_latent: torch.Tensor,

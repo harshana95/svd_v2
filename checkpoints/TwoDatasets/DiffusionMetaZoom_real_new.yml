@@ -21,7 +21,7 @@ datasets:
     type: HuggingFaceDataset
     name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
     split: train
-    num_proc: 4
+    num_proc: 1
     map_batch_size: 16
     trust_remote_code: true
 
@@ -54,7 +54,7 @@ datasets:
     type: HuggingFaceDataset
     name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/5x/
     split: train
-    num_proc: 4
+    num_proc: 1
     map_batch_size: 16
     trust_remote_code: true
 
@@ -89,7 +89,7 @@ datasets:
     type: HuggingFaceDataset
     name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
     split: validation
-    num_proc: 4
+    num_proc: 1
     trust_remote_code: true
 
     use_shuffle: false
@@ -120,7 +120,7 @@ datasets:
     type: HuggingFaceDataset
     name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/5x/
     split: validation
-    num_proc: 4
+    num_proc: 1
     trust_remote_code: true
 
     use_shuffle: false

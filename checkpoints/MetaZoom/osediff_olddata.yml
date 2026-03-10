@@ -243,6 +243,19 @@ val:
   batch_size: 1
   num_inference_steps: 1
 
+  # # match color with GT
+  # match_color: true
+
+  # # color cue augmentations
+  # permute_channels: [0, 1, 2] # [0, 1, 2]
+  # saturation_factor: 1.0 # 1.0
+  # hue_factor: 0.0 # 0.0
+
+  # # structure augmentations
+  # random_elastic_transform: false # false
+  # gaussian_blur_pixels: 0 # 0
+  # pixelate_factor: 1.0 # 1.0
+
   patched: false
   patch_size_h: 512
   patch_size_w: 512

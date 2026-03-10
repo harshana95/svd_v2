@@ -68,7 +68,7 @@ class DiffusionLKPN_TwoInput_model(Diffusion_TwoInput_model):
         self.sample = data
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key if is_train else self.test_dataloader.dataset.lq_key
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             self.grids(keys=[lq_key+"_1",lq_key+"_2", gt_key+"_1",gt_key+"_2",], 
                        opt=self.opt.train if is_train else self.opt.val)
     

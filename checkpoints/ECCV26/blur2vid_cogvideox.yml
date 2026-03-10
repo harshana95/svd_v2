@@ -1,0 +1,109 @@
+name: Blur2Vid
+model_type: Blur2Vid_CogVideoX_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: bf16
+allow_tf32: false
+
+tracker_project_name: Blur2Vid_CogVideoX
+experiment_key: Blur2Vid_CogVideoX
+
+args:
+  pretrained_model_name_or_path: THUDM/CogVideoX-2b
+  revision: ~
+  variant: ~
+  height: 352 #720
+  width: 640 #1280
+  fps: 8
+  max_num_frames: 17
+  enable_slicing: true
+  enable_tiling: true
+
+  seed: ${seed}
+  num_inference_steps: 50
+  num_validation_videos: 1
+  guidance_scale: 1.0
+  use_dynamic_cfg: false
+  special_info: "just_one"
+
+
+datasets:
+  train:
+    type: FullMotionBlurDataset
+    data_dir: /scratch/gilbreth/wweligam/experiments/blur2vid/datasets/FullDataset/
+    image_size: [352, 640]
+    split: [0.02, 1.0]
+    num_proc: 2
+    
+    use_shuffle: true
+    num_worker_per_gpu: 2
+
+  val:
+    type: FullMotionBlurDataset
+    data_dir: /scratch/gilbreth/wweligam/experiments/blur2vid/datasets/FullDataset/
+    image_size: [352, 640]
+    split: [0.0, 0.02]
+    num_proc: 2
+
+    use_shuffle: false
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 1e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_weight_decay: 0.0001
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+
+  max_train_steps: 20000
+  validation_steps: 100
+  checkpointing_steps: 100
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+
+# validation settings
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 16
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30

@@ -31,9 +31,8 @@ class KernelDataset(object):
         support = (self.max_support * 0.5) * uniform() + self.max_support * 0.5
         fraction = self.min_fraction + (self.max_fraction - self.min_fraction) * uniform()
 
-        kernel = trajectory2psfs(trajectory, support, fraction, self.calibration_params, self.psf_size)
-
-        return kernel
+        kernel, flow_vector, Ms = trajectory2psfs(trajectory, support, fraction, self.calibration_params, self.psf_size, center=True)
+        return kernel, flow_vector, Ms
 
 
 def get_two_impulses(psf_size, factor=4):

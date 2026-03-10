@@ -73,7 +73,7 @@ class DFlatArrayDepthONN_E2E_model(DFlatArrayDepthONN_model):
         # data[lq_key] = all_meas
         
         self.sample = data
-        if self.opt.train.patched:
+        if self.opt.train.patched if is_train else self.opt.val.patched:
             raise Exception()
 
     def optimize_parameters(self):

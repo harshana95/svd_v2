@@ -36,9 +36,8 @@ class identity:
     
 class apply_model:
     def __init__(self, model_name, model_path, **kwargs):
-        from utils.misc import find_attr
-        from models.archs import _arch_modules
-        c = find_attr(_arch_modules, model_name)
+        from models.archs import find_network_class
+        c, _ = find_network_class(model_name)
         self.model = c.from_pretrained(model_path)
         print(f"Loaded {model_name} model from {model_path}")
         self.model.eval()
@@ -419,8 +418,7 @@ def merge_patches(patches, pos):
     out /= (out_weights + 1e-6)
     return out
 
-
-def patchify(arr, ph, pw, sh, sw):
+def patchify_old(arr, ph, pw, sh, sw):
     """
     Patchify an array
         arr: input image Tensor array (b c h w)
@@ -439,7 +437,11 @@ def patchify(arr, ph, pw, sh, sw):
     exp_size_h = exp_size_h + ph if exp_size_h < size_h else exp_size_h
 
     if exp_size_w > size_w or exp_size_h > size_h:
-        arr = torch.nn.functional.pad(arr, (0, exp_size_w - size_w, 0, exp_size_h - size_h))
+        arr = torch.nn.functional.pad(
+            arr,
+            (0, exp_size_w - size_w, 0, exp_size_h - size_h),
+            mode="reflect",
+        )
 
     # patch arr
     patched = arr.unfold(-2, ph, sh).unfold(-2, pw, sw)
@@ -447,4 +449,40 @@ def patchify(arr, ph, pw, sh, sw):
     patched_pos = torch.tensor(np.mgrid[0:exp_size_h - ph + 1:sh,
                                0:exp_size_w - pw + 1:sw].reshape(2, -1).T)
     return patched, patched_pos
+    
+def patchify(arr, ph, pw, sh, sw):
+    """
+    Patchify an array
+        arr: input image Tensor array (b c h w)
+        ph: patch height
+        pw: patch width
+        sh: stride height
+        sw: stride width
+        return: patch array (b n c ph pw), patch position
+    """
+    # expect arr shape (b, c, h, w)
+    assert arr.ndim == 4, f"patchify expects 4D tensor (b, c, h, w), got {arr.shape}"
 
+    b, c, size_h, size_w = arr.shape
+
+    # compute patch start indices so that the last patch always
+    # includes the image border, even if the stride does not divide evenly
+    hs = list(range(0, max(size_h - ph + 1, 1), sh))
+    if size_h >= ph and hs[-1] != size_h - ph:
+        hs.append(size_h - ph)
+
+    ws = list(range(0, max(size_w - pw + 1, 1), sw))
+    if size_w >= pw and ws[-1] != size_w - pw:
+        ws.append(size_w - pw)
+
+    patches = []
+    positions = []
+    for i in hs:
+        for j in ws:
+            patches.append(arr[:, :, i : i + ph, j : j + pw])
+            positions.append([i, j])
+
+    # stack patches as (b, n, c, ph, pw)
+    patched = torch.stack(patches, dim=1)
+    patched_pos = torch.tensor(positions, dtype=torch.long)
+    return patched, patched_pos

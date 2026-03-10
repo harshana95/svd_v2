@@ -19,11 +19,6 @@ dataset_filenames = [
     if v.endswith('_dataset.py')
 ]
 # import all the dataset modules
-_dataset_modules = [
-    importlib.import_module(f'dataset.{file_name}')
-    for file_name in dataset_filenames
-]
-
 
 def create_dataset(dataset_opt):
     """Create dataset.
@@ -36,7 +31,17 @@ def create_dataset(dataset_opt):
     dataset_type = dataset_opt['type']
 
     # dynamic instantiation
+    dataset_cls = None
+    # Iterate through module names, import one by one, and check for the class.
+    for file_name in dataset_filenames:
+        module = importlib.import_module(f'dataset.{file_name}')
+        cls_ = getattr(module, dataset_type, None)
+        if cls_ is not None:
+            dataset_cls = cls_
+            break
 
-    dataset_cls = find_attr(_dataset_modules, dataset_type)
+    if dataset_cls is None:
+        raise ValueError(f"Dataset class '{dataset_type}' not found in any of the scanned modules.")
+
     dataset = dataset_cls(dataset_opt)
     return dataset

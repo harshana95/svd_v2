@@ -1,0 +1,222 @@
+name: Motion
+model_type: MotionDeform_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 8
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+
+tracker_project_name: Motion
+experiment_key: OurRestormerReblurDeform
+
+# vae_name_or_path: stabilityai/stable-diffusion-3.5-medium
+# vae_subfolder: vae
+
+global_blur: true
+num_frames: 1
+meta_key1: flow
+
+# network structures
+deblur_network:
+  type: RestormerOurs
+  in_channels: 3    # rgb
+  out_channels: 3   # rgb 
+  deform_channels: 64  # deform dim
+  width: 48
+  num_blocks: [4,6,6,8]
+  dual_pixel_task: true
+  use_checkpoint: true
+
+reblur_network:
+  type: NAFNet
+  weight_path: /scratch/gilbreth/wweligam/experiments/Motion/Blur_model_2026_02_24_00_52_39/checkpoint-16000/NAFNet_arch_1/
+  in_channels: 67    # rgb + deform dim
+  out_channels: 3    # rgb  dim
+  width: 32
+  enc_blk_nums: [1, 1, 1, 28]
+  middle_blk_num: 1
+  dec_blk_nums: [1, 1, 1, 1]
+
+deform_network:
+  type: Encoder
+  in_channels: 67 #216   # rgb + meta dim 2*100
+  out_channels: 64 #16   # deform dim
+  down_block_types: []
+  block_out_channels: [64,]
+
+discriminator:
+  type: PatchDiscriminator
+  in_channels: 6 #32
+
+meta_vae:
+  weight_path: /scratch/gilbreth/wweligam/experiments/Motion/Blur_model_2026_02_24_00_52_39/checkpoint-16000/Encoder_arch_1/
+  in_channels: 50
+  out_channels: 64
+  down_block_types: []
+  block_out_channels: [64,]
+
+# meta_vae:
+#   in_channels: 200
+#   out_channels: 200
+#   down_block_types: [DownEncoderBlock2D, DownEncoderBlock2D, DownEncoderBlock2D, DownEncoderBlock2D]
+#   block_out_channels: [128, 256, 512, 512]
+
+
+datasets:
+  train:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [0, 99]
+    is_train: true
+    global_blur: ${global_blur}
+    kernel_size: 64
+    skip_frames: 4
+    meta_key: ${meta_key1}
+    return_meta: true
+    gt_key: image
+    lq_key: blur
+    num_proc: 8
+    num_worker_per_gpu: 4
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+      resize:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [1, 100]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        crop:
+          keys: [gt_key]
+          h: 1024
+          w: 1024
+        resize:
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+
+
+  val:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [99, 100]
+    is_train: false
+    global_blur: ${global_blur}
+    kernel_size: 64
+    skip_frames: 4
+    meta_key: ${meta_key1}
+    return_meta: true
+    gt_key: image
+    lq_key: blur
+    num_proc: 1
+    
+    use_shuffle: false
+    
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+      resize:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [0, 1]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        crop:
+          keys: [gt_key]
+          h: 1024
+          w: 1024
+        resize:
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+# path
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/OurRestormerReblurDeform_2026_02_24_01_49_06/
+  resume_from_checkpoint: latest
+
+# training settings
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 1e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_weight_decay: 0.0001
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 4
+
+  lambda_deblur: 10
+  lambda_reblur: 1
+  lambda_deform: 2
+  lambda_adv: 0.5
+
+  max_train_steps: 20000
+  validation_steps: 100
+  checkpointing_steps: 500
+  checkpoints_total_limit: 2
+
+  patched: true
+  patch_size_h: 128
+  patch_size_w: 128
+  patch_overlap: 0.2
+  max_minibatch: 8
+
+# validation settings
+val:
+  save_images: true
+  patched: true
+  patch_size_h: 128
+  patch_size_w: 128
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      crop: 30
+    mse:
+       crop: 30
