@@ -23,7 +23,7 @@ revision: ~
 variant: ~
 
 # Captioning for prompts (RAM)
-vlm_model_path: /depot/chan129/users/harshana/svd_v2/ram_swin_large_14m.pth
+vlm_model_path: /depot/chan129/users/harshana/svd_v2/weights/ram_swin_large_14m.pth
 dape_path: ~
 
 # Flux control options

@@ -3,6 +3,8 @@
 *.rar
 *.pickle
 *.ckpt
+*.safetensors
+weights/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
