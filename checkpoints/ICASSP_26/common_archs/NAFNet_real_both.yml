@@ -172,8 +172,8 @@ network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/NAFNet_lpipsloss 2025 12 12 19.35.24/
-  resume_from_checkpoint: latest
+  resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/MetaZoom24/NAFNet_lpipsloss 2025 12 12 19.35.24/
+  resume_from_checkpoint: ~ #latest
 
 # training settings
 train:
@@ -193,7 +193,7 @@ train:
     lr_num_cycles: 3
     lr_power: 1.0
 
-  loss: 1*MSE|1*LPIPS_loss
+  loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
   batch_size: 8

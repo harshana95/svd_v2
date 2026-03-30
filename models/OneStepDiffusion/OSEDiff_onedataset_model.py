@@ -149,7 +149,6 @@ class OSEDiff_onedataset_model(BaseModel):
         self.weight_dtype = weight_dtype
 
         self.concatenate_images = self.opt.train.get('concatenate_images', False)
-        self.use_image1 = self.opt.train.get('use_image1', True)
         self.use_hf_loss = self.opt.train.get('use_hf_loss', False)
         self.use_adapter = self.opt.train.get('use_adapter', False)
 
@@ -177,6 +176,9 @@ class OSEDiff_onedataset_model(BaseModel):
 
         self.lambda_l2 = self.opt.train.lambda_l2
         self.lambda_lpips = self.opt.train.lambda_lpips
+        # Extra supervision for color fidelity in a perceptually meaningful chroma space.
+        # When 0.0, behavior matches the original implementation.
+        self.lambda_chroma = self.opt.train.get('lambda_chroma', 0.0)
         self.lambda_kl = self.opt.train.get('lambda_kl', 1.0)
         self.cfg_vsd = self.opt.train.cfg_vsd
 
@@ -327,7 +329,35 @@ class OSEDiff_onedataset_model(BaseModel):
         # loss data
         loss_l2 = F.mse_loss(output_image.float(), gt_1.float(), reduction="mean") * self.lambda_l2
         loss_lpips = self.net_lpips(output_image.float(), gt_1.float()).mean() * self.lambda_lpips
-        loss_data = self.lambda_l2*loss_l2 + self.lambda_lpips * loss_lpips
+        loss_chroma = output_image.new_tensor(0.0)
+        if self.lambda_chroma != 0.0:
+            # Convert RGB in [-1, 1] to [0, 1], then supervise only chroma (Cb/Cr) in YCbCr.
+            rgb01 = (output_image.float() + 1.0) * 0.5
+            gt01 = (gt_1.float() + 1.0) * 0.5
+
+            r = rgb01[:, 0:1]
+            g = rgb01[:, 1:2]
+            b = rgb01[:, 2:3]
+            y = 0.299 * r + 0.587 * g + 0.114 * b
+            cb = 0.564 * (b - y) + 0.5
+            cr = 0.713 * (r - y) + 0.5
+
+            r_gt = gt01[:, 0:1]
+            g_gt = gt01[:, 1:2]
+            b_gt = gt01[:, 2:3]
+            y_gt = 0.299 * r_gt + 0.587 * g_gt + 0.114 * b_gt
+            cb_gt = 0.564 * (b_gt - y_gt) + 0.5
+            cr_gt = 0.713 * (r_gt - y_gt) + 0.5
+
+            eps = 1e-3
+            def charbonnier(diff):
+                return torch.mean(torch.sqrt(diff * diff + eps * eps))
+
+            loss_cb = charbonnier(cb - cb_gt)
+            loss_cr = charbonnier(cr - cr_gt)
+            loss_chroma = 0.5 * (loss_cb + loss_cr)
+
+        loss_data = self.lambda_l2*loss_l2 + self.lambda_lpips * loss_lpips + self.lambda_chroma * loss_chroma
 
         if self.lambda_kl == 0.0:
             self.accelerator.backward(loss_data)
@@ -338,6 +368,7 @@ class OSEDiff_onedataset_model(BaseModel):
             return {'all': loss_data, 
                 'l2': loss_l2, 
                 'lpips': loss_lpips, 
+                'chroma': loss_chroma,
             }
         
         # loss distribution KL
@@ -422,9 +453,10 @@ class OSEDiff_onedataset_model(BaseModel):
         self.optimizers[1].step()
         self.optimizers[1].zero_grad()
         return {'all': loss_gen + loss_d, 
-                'kl': loss_kl, 
-                'l2': loss_l2, 
-                'lpips': loss_lpips, 
+                'kl': loss_kl * self.lambda_kl, 
+                'l2': loss_l2 * self.lambda_l2, 
+                'lpips': loss_lpips * self.lambda_lpips, 
+                'chroma': loss_chroma * self.lambda_chroma,
                 'diff': loss_d,
                 # 'update_err': update_err,
                 # 'fix_err': fix_err,

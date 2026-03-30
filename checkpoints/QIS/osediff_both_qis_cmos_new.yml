@@ -37,9 +37,10 @@ datasets:
     lq_key: blur
 
   val:
-    type: CMOS_QIS_dataset_predefined
-    folder: /depot/chan129/users/pchennur/qis_cmos_lowlight/testing_data/realblur/
-    val_lux:  3.5
+    type: CMOS_QIS_test_dataset_predefined
+    folder: /depot/chan129/users/pchennur/qis_cmos_lowlight/testing_data/real_data/
+    cmos_folder: /depot/chan129/users/pchennur/qis_cmos_lowlight/testing_data/real_data/cmos/any_real_exp
+    val_lux:  1.0
     mode: val
     
     num_proc: 1

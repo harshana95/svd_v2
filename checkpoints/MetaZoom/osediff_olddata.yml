@@ -17,7 +17,7 @@ variant: ~
 use_ema: false
 image_resolution: [512, 512]
 tracker_project_name: MetaZoom
-experiment_key: MetaZoom_OSEDiff_olddata_our_vsd
+experiment_key: MetaZoom_OSEDiff_olddata_our_vsd_noadapter
 dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 # dataset_1_name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
@@ -185,7 +185,7 @@ datasets:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /depot/chan129/users/harshana/FinalModels/MetaZoom 2024 data/MetaZoom_OSEDiff_olddata_no_vsd 2026 01 10 00.12.33/
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_our_vsd 2026 01 20 14.05.24/
   resume_from_checkpoint: latest
 
 # training settings
@@ -215,18 +215,19 @@ train:
   use_image1: true
   lora_finetune: true
   use_hf_loss: true
-  use_adapter: true
-  adapter_in_channels: 3
+  use_adapter: false
+  adapter_in_channels: 6
   hpf_adapter_input: true
 
   timestep: 999
 
-  lambda_kl: 1.0
-  lambda_l2: 1.0
-  lambda_lpips: 2.0
+  lambda_kl: 0.2 # 1.0
+  lambda_l2: 1.0 # 1.0
+  lambda_lpips: 2.0 # 2.0
+  lambda_chroma: 20.0
   cfg_vsd: 7.5
 
-  max_train_steps: 600000
+  max_train_steps: 700000
   validation_steps: 1000
   checkpointing_steps: 5000
   checkpoints_total_limit: 2

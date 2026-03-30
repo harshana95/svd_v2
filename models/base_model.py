@@ -1,5 +1,6 @@
 from datetime import datetime
 import gc
+import glob
 import importlib
 import math
 import os
@@ -12,6 +13,8 @@ import numpy as np
 import torch
 from torch.nn.parallel import DataParallel, DistributedDataParallel
 from huggingface_hub import create_repo, upload_folder
+from safetensors.torch import load_file
+import peft
 
 from torch.utils.data import DataLoader
 from diffusers import get_scheduler
@@ -58,29 +61,56 @@ def load_model_hook(models, input_dir):
         class_name = model._get_name()
         saved[class_name] = 1 if class_name not in saved.keys() else saved[class_name] + 1
         print(f"Loading model {class_name}_{saved[class_name]} from {input_dir}")
-        try:
-            c, _ = find_network_class(class_name)
-        except ValueError as e:  # class is not written by us. Try to load from diffusers
-            print(f"Class {class_name} not found in archs. Trying to load from diffusers...")
-            m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
-            c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
         
-        assert c is not None
-        if hasattr(c, 'config_class'):
-            assert c.config_class is not None
-        else:
-            print(f"Class {class_name} does not have a config_class") 
+        ckpt_dir = os.path.join(input_dir, f"{class_name}_{saved[class_name]}")
+
         # load diffusers style into model
         try:
-            load_model = c.from_pretrained(os.path.join(input_dir, f"{class_name}_{saved[class_name]}"))
-            model.load_state_dict(load_model.state_dict())
-            del load_model
+            try:
+                c, _ = find_network_class(class_name)
+            except ValueError as e:  # class is not written by us. Try to load from diffusers
+                m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
+                c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
+            
+            assert c is not None
+            if hasattr(c, 'config_class'):
+                assert c.config_class is not None
+            else:
+                print(f"********* Class {class_name} does not have a config_class") 
+
+            if "PeftModel" in class_name:
+                model = peft.PeftModel.from_pretrained(model.base_model.model, ckpt_dir, is_trainable=True)
+            else:
+                combined_state_dict = {}
+                for file_path in glob.glob(os.path.join(ckpt_dir, "*.safetensors")):
+                    state_dict_part = load_file(file_path)
+                    combined_state_dict.update(state_dict_part)
+                model.load_state_dict(combined_state_dict)
+                
         except Exception as e:
-            print(f"{'='*50} Failed to load {class_name} {'='*50} {e} {c} {model}")
+            # Fallback: load plain torch checkpoint produced by save_model_hook
+            try:
+                bin_path = os.path.join(ckpt_dir, "pytorch_model.bin")
+                state = torch.load(bin_path, map_location="cpu")
+                if isinstance(state, dict) and "state_dict" in state:
+                    state = state["state_dict"]
+                # Handle the common case where a submodule state_dict was saved
+                # (e.g. keys like "0.weight" instead of "net.0.weight").
+                if isinstance(state, dict) and state and not any(k.startswith("net.") for k in state.keys()):
+                    if hasattr(model, "net") and all(k.split(".", 1)[0].isdigit() for k in state.keys()):
+                        state = {f"net.{k}": v for k, v in state.items()}
+                missing, unexpected = model.load_state_dict(state, strict=False)
+                if missing:
+                    print(f"[{class_name}] Missing keys: {missing}")
+                if unexpected:
+                    print(f"[{class_name}] Unexpected keys: {unexpected}")
+            except Exception as e2:
+                print(f"{'='*50} Failed to load {class_name} {'='*50} {e} {c} {model}")
+                print(f"{'='*50} Torch fallback also failed for {class_name} {'='*50} {e2}")
 
 class BaseModel():
     """Base model."""
-    self.FLOPS_SAVED = False
+    FLOPS_SAVED = False
 
     def __init__(self, opt, logger=None):
         self.is_train = opt['is_train']
@@ -295,6 +325,30 @@ class BaseModel():
             self.opt.train.num_train_epochs = math.ceil(self.opt.train.max_train_steps / num_update_steps_per_epoch)
             self.num_update_steps_per_epoch = num_update_steps_per_epoch
 
+    def _sanitize_optimizer_state_shapes(self):
+        """Drop stale optimizer states whose tensor shapes no longer match params.
+
+        This can happen when resuming from checkpoints after architecture/config
+        changes (e.g., channel count, LoRA ranks, adapter settings).
+        """
+        for optimizer in self.optimizers:
+            # Iterate param groups and remove only incompatible state entries.
+            for group in optimizer.param_groups:
+                for param in group["params"]:
+                    state = optimizer.state.get(param, None)
+                    if not state:
+                        continue
+
+                    invalid_state = False
+                    for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                        buf = state.get(key, None)
+                        if torch.is_tensor(buf) and buf.shape != param.shape:
+                            invalid_state = True
+                            break
+
+                    if invalid_state:
+                        optimizer.state.pop(param, None)
+
     def setup_optimizers(self):
         # Optimizer creation
         optimizer_class = torch.optim.AdamW
@@ -444,6 +498,9 @@ class BaseModel():
                     self.accelerator.load_state(load_path)
                 except Exception as e:
                     self.accelerator.print(f" {'='*50} Failed to load state {e}")
+                # Optimizer moments can be stale when model param shapes changed.
+                # Remove incompatible entries so Adam re-initializes them lazily.
+                self._sanitize_optimizer_state_shapes()
                 self.load_other_parameters(load_path)
                 self.global_step = int(path.split("-")[1])
 
@@ -470,7 +527,7 @@ class BaseModel():
                         progress_bar.update(1)
 
                         if self.accelerator.is_main_process:
-                            if self.global_step % self.opt.train.checkpointing_steps == 0:
+                            if self.global_step % self.opt.train.checkpointing_steps == 0 and self.global_step > 1:
                                 # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
                                 if self.opt.train.checkpoints_total_limit is not None:
                                     keep_last_checkpoints(self.opt.path.experiments_root, self.opt.train.checkpoints_total_limit, self.logger)
@@ -618,9 +675,9 @@ class BaseModel():
             time_list.append(end_time - start_time)
         
         # save table to file in experiments root
-        with open(os.path.join(self.opt.path.logging_dir, "flops_table.txt"), "w") as f:
+        with open(os.path.join(self.opt.path.experiments_root, self.opt.path.logging_dir, "flops_table.txt"), "w") as f:
             f.write(table)
-        with open(os.path.join(self.opt.path.logging_dir, "flops_summary.txt"), "w") as f:
+        with open(os.path.join(self.opt.path.experiments_root, self.opt.path.logging_dir, "flops_summary.txt"), "w") as f:
             f.writelines([f"Total FLOPs: {total_flops / 1e9:.3f} GFLOPs\n",
                             f"Average time taken to forward pass: {np.mean(time_list)} seconds\n",
                             f"std: {np.std(time_list)} seconds\n",

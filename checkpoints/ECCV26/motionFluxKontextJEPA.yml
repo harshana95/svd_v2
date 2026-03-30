@@ -1,0 +1,201 @@
+# FluxJEPADeblur training: I-JEPA structural conditioning + optional T5 text captions.
+#
+# Novel aspect: I-JEPA patch tokens from the blurry input are projected into Flux's
+# text-embedding space and prepended to T5 embeddings as encoder_hidden_states.
+# This provides structural/spatial conditioning beyond what text captions can describe.
+#
+# Run (single node, 2 GPU):
+#   accelerate launch --num_processes 2 trainer.py -opt checkpoints/ECCV26/motionFluxJEPA.yml
+#
+name: Motion
+model_type: FluxKontextJEPADeblur_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 2
+seed: 10
+mixed_precision: bf16
+allow_tf32: true
+
+# Flux pretrained backbone
+pretrained_model_name_or_path: black-forest-labs/FLUX.1-Kontext-dev
+revision: ~
+variant: ~
+
+# ---- I-JEPA encoder --------------------------------------------------
+# ViT-H/14 trained on ImageNet-22K. Produces 256 patch tokens of dim 1280.
+# Use "facebook/ijepa_vith14_1k" for ImageNet-1K variant (lighter).
+jepa_model_path: facebook/ijepa_vith14_22k
+jepa_image_size: 224          # JEPA encoder input resolution (fixed)
+jepa_projection_layers: 2     # Depth of projection MLP (JEPA_dim → 4096)
+finetune_jepa: false          # Freeze encoder; only projection MLP is trained
+jepa_use_proxy: true
+
+# ---- Restore proxy (applied before VLM caption extraction) -----------
+# Produces a partially-restored image from the blurry LQ so the VLM
+# receives cleaner content and generates more accurate captions.
+#
+# Mode "unsharp" (default, zero params): fast differentiable unsharp mask.
+proxy_type:            model
+save_proxy_model:      true
+#
+# Mode "model": use a pretrained lightweight deblurring network (e.g. NAFNet).
+# Uncomment and fill in if a pretrained checkpoint is available.
+proxy_arch_type:       NAFNet
+proxy_arch_opt:
+  in_channels: 3
+  out_channels: 3
+  width: 32
+  middle_blk_num: 1
+  enc_blk_nums: [1, 1, 1, 28]
+  dec_blk_nums: [1, 1, 1, 1]
+proxy_model_path: ~
+
+# ---- Conditioning strategy -------------------------------------------
+# true:  JEPA tokens prepended to T5 text caption embeddings (hybrid)
+# false: JEPA tokens only — fully caption-free (no RAM VLM needed at inference)
+use_text_conditioning: true
+
+# Captioning for prompts (RAM) — only used when use_text_conditioning: true
+vlm_model_path: /depot/chan129/users/harshana/svd_v2/weights/ram_swin_large_14m.pth
+dape_path: ~
+
+# ---- Flux control options --------------------------------------------
+guidance_scale: 3.5
+only_target_transformer_blocks: false
+weighting_scheme: logit_normal   # none | sigma_sqrt | logit_normal | mode | cosmap
+logit_mean: 0.0
+logit_std: 1.0
+control_init_scale: 0.5
+caption_from_gt: true
+
+tracker_project_name: Motion
+experiment_key: FluxKontextJEPADeblur
+
+datasets:
+  train:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [0, 99]
+    is_train: true
+    global_blur: true
+    return_meta: false
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 8
+    num_worker_per_gpu: 4
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [1, 100]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        crop:
+          keys: [gt_key]
+          h: 1024
+          w: 1024
+  val:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [99, 100]
+    is_train: false
+    global_blur: true
+    return_meta: false
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 1
+    num_worker_per_gpu: 1
+    use_shuffle: false
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [0, 1]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        crop:
+          keys: [gt_key]
+          h: 1024
+          w: 1024
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/FluxKontextJEPADeblur_2026_03_19_01_08_15/
+  resume_from_checkpoint: latest
+
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: true
+    learning_rate: !!float 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  lora_finetune: true
+
+  max_train_steps: 500000
+  validation_steps: 2000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 50
+  patched: false
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

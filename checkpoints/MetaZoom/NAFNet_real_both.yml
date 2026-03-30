@@ -188,7 +188,7 @@ train:
     max_grad_norm: 1.0
 
   scheduler:
-    type: cosine_with_restarts
+    type: constant
     lr_warmup_steps: 500
     lr_num_cycles: 3
     lr_power: 1.0

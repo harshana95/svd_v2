@@ -19,17 +19,19 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.models.attention_processor import AttnProcessor2_0, XFormersAttnProcessor, LoRAXFormersAttnProcessor, \
     LoRAAttnProcessor2_0
 
-def hpf_adapter_input(image):
+def hpf_adapter_input(image1, image2):
+    if image2 is None:
+        image2 = image1
     # use a HPF to extract high-frequency components
     r = 15  # radius of the low-frequency center to be removed
-    b, c, h, w = image.shape
+    b, c, h, w = image2.shape
     crow, ccol = h // 2, w // 2
     
-    image_fft = torch.fft.fft2(image)
+    image_fft = torch.fft.fft2(image2)
     image_fftshift = torch.fft.fftshift(image_fft)
     
     # create a mask first, center square is 0, remaining all ones
-    mask = torch.ones((b, c, h, w), device=image.device)
+    mask = torch.ones((b, c, h, w), device=image2.device)
     mask[:, :, crow - r:crow + r, ccol - r:ccol + r] = 0
     
     # apply mask and inverse FFT
@@ -37,7 +39,7 @@ def hpf_adapter_input(image):
     f_ishift = torch.fft.ifftshift(fshift)
     img_back = torch.fft.ifft2(f_ishift)
     img_back = torch.real(img_back)
-    return img_back
+    return torch.cat([image1, img_back], dim=1)
 
 @dataclass
 class PipelineOutput(BaseOutput):
@@ -68,8 +70,6 @@ class OSEDiffPipeline(
         )
         self.concatenate_images=concatenate_images
         self.adapter_preprocess=adapter_preprocess
-        if self.adapter_preprocess is None:
-            self.adapter_preprocess = lambda x: x
         self.register_to_config()
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
@@ -78,8 +78,8 @@ class OSEDiffPipeline(
     @torch.no_grad()
     def __call__(
             self,
-            image_1: PipelineImageInput,
-            image_2: PipelineImageInput,
+            image_1,
+            image_2,
             prompt_embeds,
             added_cond_kwargs=None,
             timesteps=[999],
@@ -103,10 +103,7 @@ class OSEDiffPipeline(
         latent_model_input = latents
         # latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
         if self.adapter is not None:
-            if image_2 is not None:
-                down_block_additional_residuals = self.adapter(self.adapter_preprocess(image_2))
-            else:
-                down_block_additional_residuals = self.adapter(self.adapter_preprocess(image_1))
+            down_block_additional_residuals = self.adapter(self.adapter_preprocess(image_1, image_2))
         else:
             down_block_additional_residuals = None
 

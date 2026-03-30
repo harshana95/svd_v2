@@ -85,7 +85,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
 
         image_1 = self.sample[lq_key+"_1"]
         image_2 = self.sample[lq_key+"_2"]
-        gt_1 = self.sample[gt_key+"_1"] if self.use_image1 else self.sample[gt_key+"_2"]
+        gt_1 = self.sample[gt_key+"_1"]
         # gt_2 = self.sample[gt_key+"_2"] 
 
         if image_1.shape[1] == 1:
@@ -113,11 +113,11 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         if self.concatenate_images:
             vae_input = torch.cat([image_1, image_2], dim=1)
         else:
-            vae_input = image_1 if self.use_image1 else image_2
+            vae_input = image_1
 
         latents = self.vae.encode(vae_input).latent_dist.sample() * self.vae.config.scaling_factor
         if self.use_adapter:
-            down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(image_2 if self.use_image1 else image_1))
+            down_block_additional_residuals = self.t2iadapter(self.adapter_preprocess(image_1, image_2))    
         else:
             down_block_additional_residuals = None
 
@@ -145,8 +145,8 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
 
         output = self.pipeline(
-            lq1 if self.use_image1 else lq2,
-            lq2 if self.use_image1 else lq1,
+            lq1,
+            lq2,
             prompt_embeds=prompt_embeds[:bsz],
             timesteps=[self.opt.train.timestep],
         )
@@ -154,9 +154,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
     
     @torch.no_grad()
     def validation(self):
-        self.calculate_flops(self.vae, input_size=(512, 512), in_channels=6)
-        self.calculate_flops(self.unet, input_size=(512//8, 512//8), in_channels=4)
-        
+
         gc.collect()
         torch.cuda.empty_cache()
         idx = 0
@@ -172,6 +170,10 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             adapter_preprocess=self.adapter_preprocess,
             concatenate_images=self.concatenate_images
         )
+
+        self.calculate_flops(torch.randn(1, 3, 512, 512).to(self.device), 
+                             torch.randn(1, 3, 512, 512).to(self.device),
+                             n=10)
         dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
                                 shuffle=False, 
                                 batch_size=1)
@@ -218,7 +220,9 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             out = self.forwardpass(lq1, lq2)
         adapter_input = None
         if self.use_adapter:
-            adapter_input = self.adapter_preprocess(lq2 if self.use_image1 else lq1).cpu().numpy()*0.5+0.5
+            adapter_input = self.adapter_preprocess(lq1, lq2).cpu().numpy()*0.5+0.5
+            if adapter_input.shape[1] == 6:
+                adapter_input = einops.rearrange(adapter_input, 'n (c1 c2) h w -> n c1 (h c2) w', c1=3, c2=2)
             if adapter_input.shape[1] == 1:
                 adapter_input = einops.repeat(adapter_input, 'n 1 h w -> n 3 h w')
             
