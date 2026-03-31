@@ -52,7 +52,7 @@ def denoise_lucidflux(
     model,                # diffusers FluxTransformer2DModel
     dual_condition_model,  # DualConditionBranch
     img: Tensor,          # packed noise [B, seq, 64]
-    img_ids: Tensor,
+    img_ids: Tensor,     # [B, seq, 3]
     txt: Tensor,          # T5 text [B, txt_len, 4096]
     txt_ids: Tensor,
     siglip_txt: Tensor,   # cat([T5, Redux]) [B, txt_len+1024, 4096]
@@ -81,6 +81,9 @@ def denoise_lucidflux(
             timesteps=t_vec,
             guidance=guidance_vec,
         )
+        for i, block_res_sample in enumerate(block_res_samples):
+            block_res_samples[i] = block_res_sample.to(dtype)
+
 
         # ---- Main Flux transformer (diffusers) ----
         pred = model(
@@ -90,7 +93,7 @@ def denoise_lucidflux(
             timestep=t_vec,
             guidance=guidance_vec,
             txt_ids=siglip_txt_ids.to(dtype),
-            img_ids=img_ids.to(dtype),
+            img_ids=img_ids.to(dtype)[0], # no need for batch dim
             controlnet_block_samples=block_res_samples,
             return_dict=False,
         )[0]

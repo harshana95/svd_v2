@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /depot/chan129/users/harshana/svd_v2/models/*_model.py | xargs -I {} basename {} | sort | uniq)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:zhu-zhiyu.github.io)",
+      "WebFetch(domain:proceedings.neurips.cc)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

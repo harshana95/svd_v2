@@ -1,0 +1,171 @@
+# LucidFluxJEPA: LucidFlux-style dual-branch conditioning with V-JEPA 2.1
+# replacing SigLIP image tokens before the Flux Redux connector.
+#
+# Run: python trainer.py -opt checkpoints/Flux/LucidFluxJEPA.yml -comment my_run
+
+name: Motion
+model_type: LucidFluxJEPA_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 2
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.1-dev
+revision: ~
+variant: ~
+
+# Optional LucidFlux branch weights. These can still be reused because the
+# JEPA model adds a small adapter before the existing Redux connector.
+lucidflux_weights_path: ~
+
+# Optional SwinIR prior for the "pre" branch. Leave ~ to use the raw LQ image.
+swinir_model_path: ~
+
+# V-JEPA 2.1 backbone configuration.
+# Set `vjepa_pretrained: true` only if the torch.hub checkpoint URL is reachable.
+# Otherwise keep it false and point `vjepa_checkpoint_path` to a local checkpoint.
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: false
+vjepa_checkpoint_path: ~
+
+precomputed_embeddings_path: /depot/chan129/users/harshana/LucidFlux/weights/lucidflux/prompt_embeddings.pt
+
+guidance_scale: 4.0
+discrete_flow_shift: 3.1582
+
+tracker_project_name: Motion
+experiment_key: LucidFluxJEPA
+
+datasets:
+  train:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [0, 99]
+    is_train: true
+    global_blur: true
+    return_meta: false
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 8
+    num_worker_per_gpu: 4
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [1, 100]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        crop:
+          keys: [gt_key]
+          h: 512
+          w: 512
+  val:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [99, 100]
+    is_train: false
+    global_blur: true
+    return_meta: false
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 1
+    num_worker_per_gpu: 1
+    use_shuffle: false
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    foreground_dataset:
+      name: /scratch/gilbreth/wweligam/dataset/foreground_images/foreground/
+      split: train
+      split_range: [0, 1]
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        crop:
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  optim:
+    type: adafactor
+    scale_lr: false
+    learning_rate: !!float 2e-5
+    relative_step: false
+    scale_parameter: false
+    warmup_init: false
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 4
+  num_train_epochs: 20
+  batch_size: 1
+
+  max_train_steps: 200000
+  validation_steps: 5000
+  checkpointing_steps: 5000
+  checkpoints_total_limit: 3
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  use_cpu_offload: false
+  num_inference_steps: 50
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30
