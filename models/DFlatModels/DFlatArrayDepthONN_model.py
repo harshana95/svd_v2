@@ -10,8 +10,7 @@ from torchvision.transforms import transforms
 from dataset import create_dataset
 from dataset.ZipDatasetWrapper import ZipDatasetWrapper
 from models.DFlatModels.DFlatArrayDepth_model import DFlatArrayDepth_model
-from models.archs import define_network
-from models.archs.related.AdaBinsMonoDepth.unet_adaptive_bins import UnetAdaptiveBins
+from models.archs import define_network 
 from models.archs.related.MonoDepth2.monodepth2_arch import DepthDecoder, ResnetEncoder
 from utils.dataset_utils import crop_arr, grayscale, merge_patches
 from utils.image_utils import save_images_as_zip

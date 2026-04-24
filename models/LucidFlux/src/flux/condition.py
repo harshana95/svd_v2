@@ -20,8 +20,11 @@ from .modules.layers import (
 @dataclass
 class FluxParams:
     in_channels: int = 64
+    cond_in_channels: int = 64
+    cond_patch_size: int = 2
     vec_in_dim: int = 768
     context_in_dim: int = 4096
+    text_in_dim: int = 4096
     hidden_size: int = 3072
     mlp_ratio: float = 4.0
     num_heads: int = 24
@@ -187,6 +190,8 @@ class SingleConditionBranch(nn.Module):
         super().__init__()
         self.params = params
         self.in_channels = params.in_channels
+        self.cond_in_channels = params.cond_in_channels
+        self.cond_patch_size = params.cond_patch_size
         self.out_channels = self.in_channels
         if params.hidden_size % params.num_heads != 0:
             raise ValueError(
@@ -233,7 +238,9 @@ class SingleConditionBranch(nn.Module):
             controlnet_block = zero_module(controlnet_block)
             self.controlnet_blocks.append(controlnet_block)
 
-        self.pos_embed_input = nn.Linear(self.in_channels, self.hidden_size, bias=True)
+        self.pos_embed_input = nn.Linear(
+            self.cond_in_channels, self.hidden_size, bias=True
+        )
         self.gradient_checkpointing = False
 
         # Pixel-space conditioning encoder
@@ -295,11 +302,37 @@ class SingleConditionBranch(nn.Module):
         if img_ids.ndim != 3:
             raise ValueError(f"Expected img_ids to be 3D [B, S, 3], got {img_ids.ndim}D")
 
+        # The LucidFlux conditioner uses its own RoPE layout, which is independent
+        # from the Flux2 transformer's 4D positional ids.
+        target_dims = len(self.pe_embedder.axes_dim)
+
+        def _match_id_dims(x: torch.Tensor, target_dims: int) -> torch.Tensor:
+            if x.shape[-1] > target_dims:
+                return x[..., :target_dims]
+            if x.shape[-1] < target_dims:
+                pad = torch.zeros(
+                    *x.shape[:-1],
+                    target_dims - x.shape[-1],
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+                return torch.cat([x, pad], dim=-1)
+            return x
+
+        txt_ids = _match_id_dims(txt_ids, target_dims)
+        img_ids = _match_id_dims(img_ids, target_dims)
+
         img = self.img_in(img)
         controlnet_cond = self.input_hint_block(controlnet_cond)
-        controlnet_cond = rearrange(
-            controlnet_cond, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2
-        )
+        if self.cond_patch_size == 1:
+            controlnet_cond = rearrange(controlnet_cond, "b c h w -> b (h w) c")
+        else:
+            controlnet_cond = rearrange(
+                controlnet_cond,
+                "b c (h ph) (w pw) -> b (h w) (c ph pw)",
+                ph=self.cond_patch_size,
+                pw=self.cond_patch_size,
+            )
         controlnet_cond = self.pos_embed_input(
             controlnet_cond.to(dtype=self.pos_embed_input.weight.dtype)
         )
@@ -357,12 +390,14 @@ class DualConditionBranch(nn.Module):
         condition_branch_pre: nn.Module,
         modulation_lq: nn.Module,
         modulation_pre: nn.Module,
+        depth: int,
     ):
         super().__init__()
         self.lq = condition_branch_lq
         self.pre = condition_branch_pre
         self.modulation_lq = modulation_lq
         self.modulation_pre = modulation_pre
+        self.depth = depth
 
     def forward(
         self,
@@ -376,7 +411,8 @@ class DualConditionBranch(nn.Module):
         guidance: torch.Tensor,
         condition_cond_lq: torch.Tensor,
         condition_cond_pre: torch.Tensor,
-    ) -> list[torch.Tensor]:
+        return_last_only: bool = False,
+    ) -> list[torch.Tensor] | torch.Tensor:
         out_lq = self.lq(
             img=img,
             img_ids=img_ids,
@@ -399,7 +435,8 @@ class DualConditionBranch(nn.Module):
         )
 
         out = []
-        num_blocks = 19  # Flux double-stream depth
+        last_out = None
+        num_blocks = self.depth  # Flux double-stream depth
         for i in range(num_blocks // 2 + 1):
             for control_index, (lq, pre) in enumerate(zip(out_lq, out_pre)):
                 control_index_t = torch.tensor(
@@ -409,8 +446,12 @@ class DualConditionBranch(nn.Module):
                 if len(out) == num_blocks:
                     break
                 pre = self.modulation_pre(pre, timesteps, i * 2 + control_index_t)
-                out.append(lq + pre)
-        return out
+                combined = lq + pre
+                if return_last_only:
+                    last_out = combined
+                else:
+                    out.append(combined)
+        return last_out if return_last_only else out
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +464,7 @@ class ConditionBranchWithRedux(nn.Module):
         condition_branch: DualConditionBranch,
         redux_image_encoder: nn.Module,
         vision_feature_adapter: nn.Module | None = None,
+        text_state_adapter: nn.Module | None = None,
     ):
         super().__init__()
         self.condition_branch = condition_branch
@@ -430,7 +472,7 @@ class ConditionBranchWithRedux(nn.Module):
         self.vision_feature_adapter = (
             vision_feature_adapter if vision_feature_adapter is not None else nn.Identity()
         )
-
+        self.text_state_adapter = text_state_adapter if text_state_adapter is not None else nn.Identity()
     def forward(
         self,
         *,
@@ -445,8 +487,9 @@ class ConditionBranchWithRedux(nn.Module):
         condition_cond_pre: torch.Tensor | None = None,
         vision_image_pre_fts: torch.Tensor | None = None,
         siglip_image_pre_fts: torch.Tensor | None = None,
+        return_last_only: bool = False,
     ):
-        siglip_txt = txt
+        imgtxt_redux = txt
         siglip_txt_ids = txt_ids
         if vision_image_pre_fts is None:
             vision_image_pre_fts = siglip_image_pre_fts
@@ -463,10 +506,22 @@ class ConditionBranchWithRedux(nn.Module):
                     ),
                 )
             )
+            adapted_text_fts = self.text_state_adapter(txt)
+            
             image_embeds = self.redux_image_encoder(
                 adapted_vision_fts.to(device=txt.device, dtype=enc_dtype)
             )["image_embeds"].to(dtype=txt.dtype)
-            siglip_txt = torch.cat([txt, image_embeds], dim=1)
+
+            imgtxt_redux = torch.cat([adapted_text_fts, image_embeds], dim=1)
+
+            # vision_image_pre_fts: [B, 576, 1024]
+            # adapted_vision_fts: [B, 576, 1152]
+            # image_embeds: [B, 576, 4096]
+
+            # txt: [B, 512, 15360]
+            # adapted_text_fts: [B, 512, 4096]
+            # imgtxt_redux: [B, 1088, 4096]
+
             extra_seq_len = image_embeds.shape[1]
             if txt_ids.ndim == 2:
                 _, channels = txt_ids.shape
@@ -475,7 +530,7 @@ class ConditionBranchWithRedux(nn.Module):
                     device=txt_ids.device,
                     dtype=txt_ids.dtype,
                 )
-                siglip_txt_ids = torch.cat([txt_ids, extra_ids], dim=0)
+                imgtxt_redux_ids = torch.cat([txt_ids, extra_ids], dim=0)
             elif txt_ids.ndim == 3:
                 batch_size, _, channels = txt_ids.shape
                 extra_ids = torch.zeros(
@@ -483,7 +538,7 @@ class ConditionBranchWithRedux(nn.Module):
                     device=txt_ids.device,
                     dtype=txt_ids.dtype,
                 )
-                siglip_txt_ids = torch.cat([txt_ids, extra_ids], dim=1)
+                imgtxt_redux_ids = torch.cat([txt_ids, extra_ids], dim=1)
             else:
                 raise ValueError(
                     f"Expected txt_ids to be 2D or 3D, got {txt_ids.ndim}D"
@@ -492,7 +547,7 @@ class ConditionBranchWithRedux(nn.Module):
         block_res_samples = self.condition_branch(
             img=img,
             img_ids=img_ids,
-            txt=txt,
+            txt=adapted_text_fts,
             txt_ids=txt_ids,
             y=y,
             timesteps=timesteps,
@@ -501,9 +556,10 @@ class ConditionBranchWithRedux(nn.Module):
             condition_cond_pre=condition_cond_pre
             if condition_cond_pre is not None
             else condition_cond_lq,
+            return_last_only=return_last_only,
         )
 
-        return block_res_samples, siglip_txt, siglip_txt_ids
+        return block_res_samples, imgtxt_redux, imgtxt_redux_ids
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +605,7 @@ def load_dual_condition_branch(
         condition_pre,
         modulation_lq=modulation_lq,
         modulation_pre=modulation_pre,
+        depth=params.depth,
     ).to(target_device)
 
 
@@ -572,7 +629,7 @@ def load_condition_branch_with_redux(
         branch_dtype=branch_dtype,
         modulation_dim=modulation_dim,
     )
-    redux_image_encoder = ReduxImageEncoder()
+    redux_image_encoder = ReduxImageEncoder(txt_in_features=params.context_in_dim)
     redux_image_encoder.load_state_dict(
         lucidflux_weights["connector"], strict=False
     )
@@ -613,9 +670,9 @@ def build_condition_branch_fresh(
     modulation_pre = ConditionModulation(dim=modulation_dim).to(device, dtype=branch_dtype)
 
     dual_branch = DualConditionBranch(
-        condition_lq, condition_pre, modulation_lq, modulation_pre
+        condition_lq, condition_pre, modulation_lq, modulation_pre, params.depth
     )
-    redux_image_encoder = ReduxImageEncoder().to(device, dtype=connector_dtype)
+    redux_image_encoder = ReduxImageEncoder(txt_in_features=params.context_in_dim).to(device, dtype=connector_dtype)
     redux_in_dim = redux_image_encoder.redux_up.in_features
     if vision_feature_dim == redux_in_dim:
         vision_feature_adapter = nn.Identity()
@@ -624,10 +681,15 @@ def build_condition_branch_fresh(
             device, dtype=connector_dtype
         )
 
+    if params.text_in_dim != params.context_in_dim:
+        text_state_adapter = nn.Linear(params.text_in_dim, params.context_in_dim).to(device, dtype=branch_dtype)
+    else:
+        text_state_adapter = nn.Identity()
     return ConditionBranchWithRedux(
         dual_branch,
         redux_image_encoder,
         vision_feature_adapter=vision_feature_adapter,
+        text_state_adapter=text_state_adapter,
     )
 
 

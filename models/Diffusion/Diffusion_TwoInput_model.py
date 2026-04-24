@@ -5,6 +5,7 @@ import einops
 import numpy as np
 import torch
 from tqdm import tqdm
+from peft import LoraConfig
 
 from transformers import PretrainedConfig, AutoTokenizer
 from diffusers import AutoencoderKL, UNet2DConditionModel, EulerDiscreteScheduler, T2IAdapter, EMAModel
@@ -100,6 +101,43 @@ def compute_embeddings(prompt_batch, accelerator, res, proportion_empty_prompts,
 
     return {"prompt_embeds": prompt_embeds, **unet_added_cond_kwargs}
 
+
+def initialize_osediff_lora_unet(unet, rank=4):
+    l_target_modules_encoder, l_target_modules_decoder, l_modules_others = [], [], []
+    l_grep = [
+        "to_k", "to_q", "to_v", "to_out.0", "conv", "conv1", "conv2",
+        "conv_in", "conv_shortcut", "conv_out", "proj_out", "proj_in",
+        "ff.net.2", "ff.net.0.proj",
+    ]
+    for n, _p in unet.named_parameters():
+        if "bias" in n or "norm" in n:
+            continue
+        for pattern in l_grep:
+            if pattern in n and ("down_blocks" in n or "conv_in" in n):
+                l_target_modules_encoder.append(n.replace(".weight", ""))
+                break
+            elif pattern in n and ("up_blocks" in n or "conv_out" in n):
+                l_target_modules_decoder.append(n.replace(".weight", ""))
+                break
+            elif pattern in n:
+                l_modules_others.append(n.replace(".weight", ""))
+                break
+
+    unet.add_adapter(
+        LoraConfig(r=rank, init_lora_weights="gaussian", target_modules=l_target_modules_encoder),
+        adapter_name="default_encoder",
+    )
+    unet.add_adapter(
+        LoraConfig(r=rank, init_lora_weights="gaussian", target_modules=l_target_modules_decoder),
+        adapter_name="default_decoder",
+    )
+    unet.add_adapter(
+        LoraConfig(r=rank, init_lora_weights="gaussian", target_modules=l_modules_others),
+        adapter_name="default_others",
+    )
+    unet.set_adapter(["default_encoder", "default_decoder", "default_others"])
+    return unet
+
 class Diffusion_TwoInput_model(TwoDatasetBasemodel):
 
     def __init__(self, opt, logger):
@@ -181,7 +219,19 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
         text_encoder_one.requires_grad_(False)
         text_encoder_two.requires_grad_(False)
         vae.requires_grad_(False)
-        unet.requires_grad_(True)
+
+        self.lora_finetune = self.opt.train.get("lora_finetune", False)
+        self.lora_rank = self.opt.train.get("lora_rank", 4)
+        if self.lora_finetune:
+            unet.requires_grad_(False)
+            unet = initialize_osediff_lora_unet(unet, rank=self.lora_rank)
+            # Keep the same trainable stem used in OSEDiff LoRA mode.
+            unet.conv_in.requires_grad_(True)
+            for n, p in unet.named_parameters():
+                if "lora" in n:
+                    p.requires_grad = True
+        else:
+            unet.requires_grad_(True)
 
         # Let's first compute all the embeddings so that we can free up the text encoders
         # from memory.
@@ -223,7 +273,11 @@ class Diffusion_TwoInput_model(TwoDatasetBasemodel):
 
         # Optimizer creation
         optimizer_class = torch.optim.AdamW
-        params_to_optimize = list(self.t2iadapter_1.parameters()) + list(self.t2iadapter_2.parameters()) + list(self.unet.parameters())
+        params_to_optimize = (
+            [p for p in self.t2iadapter_1.parameters() if p.requires_grad]
+            + [p for p in self.t2iadapter_2.parameters() if p.requires_grad]
+            + [p for p in self.unet.parameters() if p.requires_grad]
+        )
         
         optimizer = optimizer_class(
             params_to_optimize,

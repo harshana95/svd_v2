@@ -6,12 +6,11 @@ import einops
 import numpy as np
 import torch
 import torch.nn.functional as F
-from diffusers import (
-    AutoencoderKL,
-    FlowMatchEulerDiscreteScheduler,
-    FluxTransformer2DModel,
-)
-from einops import rearrange
+from diffusers import FlowMatchEulerDiscreteScheduler, Flux2Pipeline, Flux2Transformer2DModel
+try:
+    from diffusers import AutoencoderKLFlux2
+except ImportError:
+    from diffusers import AutoencoderKL as AutoencoderKLFlux2
 from tqdm import tqdm
 
 from models.base_model import BaseModel
@@ -29,23 +28,51 @@ from .src.flux.lucidflux import (
     load_swinir,
     load_vjepa2_model,
     load_vjepa2_weights,
-    prepare_with_embeddings,
     vjepa_from_unit_tensor,
 )
-from .src.flux.sampling import denoise_lucidflux, get_noise, get_schedule, unpack
 
 
-def encode_images_flux(pixels: torch.Tensor, vae: torch.nn.Module, weight_dtype):
-    pixel_latents = vae.encode(pixels.to(vae.dtype)).latent_dist.sample()
-    shift = getattr(vae.config, "shift_factor", 0.0)
-    scale = getattr(vae.config, "scaling_factor", vae.config.scaling_factor)
-    pixel_latents = (pixel_latents - shift) * scale
-    return pixel_latents.to(weight_dtype)
+def retrieve_latents(
+    encoder_output: torch.Tensor,
+    generator: torch.Generator | None = None,
+    sample_mode: str = "sample",
+):
+    if hasattr(encoder_output, "latent_dist") and sample_mode == "sample":
+        return encoder_output.latent_dist.sample(generator)
+    if hasattr(encoder_output, "latent_dist") and sample_mode == "argmax":
+        return encoder_output.latent_dist.mode()
+    if hasattr(encoder_output, "latents"):
+        return encoder_output.latents
+    raise AttributeError("Could not access latents of provided encoder_output")
+
+
+def encode_images_flux2(
+    pixels: torch.Tensor, vae: torch.nn.Module, weight_dtype, generator=None
+):
+    if hasattr(vae, "bn") and hasattr(vae, "_patchify_latents"):
+        image_latents = retrieve_latents(
+            vae.encode(pixels.to(vae.dtype)), generator=generator, sample_mode="argmax"
+        )
+        image_latents = vae._patchify_latents(image_latents)
+        latents_bn_mean = vae.bn.running_mean.view(1, -1, 1, 1).to(
+            image_latents.device, image_latents.dtype
+        )
+        latents_bn_std = torch.sqrt(
+            vae.bn.running_var.view(1, -1, 1, 1) + vae.config.batch_norm_eps
+        )
+        image_latents = (image_latents - latents_bn_mean) / latents_bn_std
+    else:
+        pixel_latents = vae.encode(pixels.to(vae.dtype)).latent_dist.sample()
+        shift = getattr(vae.config, "shift_factor", 0.0)
+        scale = getattr(vae.config, "scaling_factor", 1.0)
+        image_latents = (pixel_latents - shift) * scale
+
+    return image_latents.to(weight_dtype)
 
 
 def decode_latents_flux(latents: torch.Tensor, vae: torch.nn.Module):
     shift = getattr(vae.config, "shift_factor", 0.0)
-    scale = getattr(vae.config, "scaling_factor", vae.config.scaling_factor)
+    scale = getattr(vae.config, "scaling_factor", 1.0)
     latents = latents / scale + shift
     image = vae.decode(latents.to(vae.dtype), return_dict=False)[0]
     return image
@@ -65,27 +92,26 @@ def get_noisy_model_input_and_timesteps(
         torch.randn((batch_size,), device=device) + discrete_flow_shift
     )
     timesteps = (sigmas * num_timesteps).long()
-    sigmas = sigmas.view(-1, 1, 1)
+    sigmas = sigmas.view(-1, 1, 1, 1)
     noisy_model_input = (1 - sigmas) * latents + sigmas * noise
-    return noisy_model_input, timesteps, sigmas.squeeze()
+    return noisy_model_input, timesteps, sigmas
 
 
-def unpack_latents(
-    x: torch.Tensor, packed_latent_height: int, packed_latent_width: int
-) -> torch.Tensor:
-    return rearrange(
-        x,
-        "b (h w) (c ph pw) -> b c (h ph) (w pw)",
-        h=packed_latent_height,
-        w=packed_latent_width,
-        ph=2,
-        pw=2,
-    )
+def calculate_shift(
+    image_seq_len: int,
+    base_seq_len: int = 256,
+    max_seq_len: int = 4096,
+    base_shift: float = 0.5,
+    max_shift: float = 1.15,
+) -> float:
+    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+    b = base_shift - m * base_seq_len
+    return float(image_seq_len) * m + b
 
 
-class LucidFluxJEPA_model(BaseModel):
+class LucidFlux2JEPA_model(BaseModel):
     def __init__(self, opt, logger):
-        super(LucidFluxJEPA_model, self).__init__(opt, logger)
+        super(LucidFlux2JEPA_model, self).__init__(opt, logger)
 
         weight_dtype = torch.float32
         if self.accelerator.mixed_precision == "fp16":
@@ -94,44 +120,21 @@ class LucidFluxJEPA_model(BaseModel):
             weight_dtype = torch.bfloat16
         self.weight_dtype = weight_dtype
 
-        self.guidance_scale = getattr(opt, "guidance_scale", 4.0)
-        self.discrete_flow_shift = getattr(opt, "discrete_flow_shift", 3.1582)
-
-        
-
-
-        pretrained = opt.pretrained_model_name_or_path
-        revision = getattr(opt, "revision", None)
-        variant = getattr(opt, "variant", None)
-
-        self.transformer = FluxTransformer2DModel.from_pretrained(
-            pretrained, subfolder="transformer", revision=revision, variant=variant
+        # creating condition branch with redux
+        flux_params = FluxParams(
+            in_channels=32,
+            cond_in_channels=16,
+            cond_patch_size=1,
+            context_in_dim=4096,
+            text_in_dim=15360,
+            vec_in_dim=512*4,
+            depth=0, # we use redux as a single block
         )
-        self.transformer.requires_grad_(False)
-        self.transformer.eval()
-        if hasattr(self.transformer, "enable_gradient_checkpointing"):
-            self.transformer.enable_gradient_checkpointing()
-            logger.info("Gradient checkpointing enabled for frozen transformer")
-
-        self.vae = AutoencoderKL.from_pretrained(
-            pretrained, subfolder="vae", revision=revision, variant=variant
-        )
-        self.vae.requires_grad_(False)
-        self.vae.eval()
-
-        self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            pretrained, subfolder="scheduler"
-        )
-        self.noise_scheduler_copy = copy.deepcopy(self.noise_scheduler)
-
-        flux_params = FluxParams()
         lucidflux_weights_path = getattr(opt, "lucidflux_weights_path", None)
         self.vjepa_hub_entry = getattr(opt, "vjepa_hub_entry", "vjepa2_1_vit_large_384")
         self.vjepa_image_size = getattr(opt, "vjepa_image_size", 384)
         self.vjepa_pretrained = getattr(opt, "vjepa_pretrained", False)
         self.vjepa_checkpoint_path = getattr(opt, "vjepa_checkpoint_path", None)
-        # Keep V-JEPA in fp32 by default. Some hub/checkpoint combinations end up
-        # with mixed internal dtypes under bf16 and fail inside SDPA.
         self.vjepa_dtype = torch.float32
 
         if "vit_base" in self.vjepa_hub_entry:
@@ -158,7 +161,7 @@ class LucidFluxJEPA_model(BaseModel):
                 vision_feature_dim=self.vjepa_feature_dim,
             )
         else:
-            logger.info("Building fresh LucidFlux JEPA condition branch")
+            logger.info("Building fresh LucidFlux 2 JEPA condition branch")
             self.condition_branch = build_condition_branch_fresh(
                 params=flux_params,
                 device="cpu",
@@ -166,9 +169,10 @@ class LucidFluxJEPA_model(BaseModel):
                 connector_dtype=torch.float32,
                 vision_feature_dim=self.vjepa_feature_dim,
             )
+            
         self.condition_branch.train()
         self.condition_branch.requires_grad_(True)
-
+        
         for module in [
             self.condition_branch.condition_branch.lq,
             self.condition_branch.condition_branch.pre,
@@ -196,6 +200,7 @@ class LucidFluxJEPA_model(BaseModel):
         self.vjepa.requires_grad_(False)
         self.vjepa.eval()
 
+        # loading precomputed embeddings
         embeddings_path = getattr(opt, "precomputed_embeddings_path", None)
         if embeddings_path and os.path.exists(embeddings_path):
             embeds = load_precomputed_embeddings(embeddings_path, "cpu")
@@ -207,15 +212,63 @@ class LucidFluxJEPA_model(BaseModel):
             )
             self.register_buffer_txt = None
             self.register_buffer_vec = None
+        
+        # loading Flux 2 transformer and vae
+        self.guidance_scale = getattr(opt, "guidance_scale", 4.0)
+        self.discrete_flow_shift = getattr(opt, "discrete_flow_shift", 3.1582)
+        pretrained = opt.pretrained_model_name_or_path
+        revision = getattr(opt, "revision", None)
+        variant = getattr(opt, "variant", None)
+        self.transformer = Flux2Transformer2DModel.from_pretrained(
+            pretrained, subfolder="transformer", revision=revision, variant=variant
+        )
+        self.transformer.requires_grad_(False)
+        self.transformer.eval()
+        if hasattr(self.transformer, "enable_gradient_checkpointing"):
+            self.transformer.enable_gradient_checkpointing()
+            logger.info("Gradient checkpointing enabled for frozen transformer")
+
+        self.vae = AutoencoderKLFlux2.from_pretrained(
+            pretrained, subfolder="vae", revision=revision, variant=variant
+        )
+        self.vae.requires_grad_(False)
+        self.vae.eval()
+
+        self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            pretrained, subfolder="scheduler"
+        )
+        self.noise_scheduler_copy = copy.deepcopy(self.noise_scheduler)
+        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        self.transformer_context_dim = getattr(self.transformer.config, "joint_attention_dim", 15360)
+        self.transformer_rope_dims = len(
+            getattr(self.transformer.config, "axes_dims_rope", (32, 32, 32, 32))
+        )
 
         self.transformer = self.transformer.to(self.accelerator.device, dtype=weight_dtype)
         self.vae = self.vae.to(self.accelerator.device, dtype=weight_dtype)
         self.condition_branch = self.condition_branch.to(self.accelerator.device)
+
+        self.encoder_state_adapter = torch.nn.Linear(
+            flux_params.hidden_size, flux_params.context_in_dim
+        )
+        self.encoder_state_adapter.requires_grad_(True)
+        self.encoder_state_adapter = self.encoder_state_adapter.to(
+            self.accelerator.device, dtype=weight_dtype
+        )
+
+        self.encoder_state_projection = torch.nn.Linear(
+            flux_params.context_in_dim, self.transformer_context_dim
+        )
+        self.encoder_state_projection.requires_grad_(True)
+        self.encoder_state_projection = self.encoder_state_projection.to(self.accelerator.device, dtype=weight_dtype)
+        
         self.vjepa = self.vjepa.to(self.accelerator.device, dtype=self.vjepa_dtype)
         if self.swinir is not None:
             self.swinir = self.swinir.to(self.accelerator.device)
 
         self.models.append(self.condition_branch)
+        self.models.append(self.encoder_state_adapter)
+        self.models.append(self.encoder_state_projection)
 
         for m in self.models:
             all_param = sum(p.numel() for p in m.parameters())
@@ -228,21 +281,36 @@ class LucidFluxJEPA_model(BaseModel):
     def _ensure_null_embeddings(self):
         if self.register_buffer_txt is not None:
             return
-        self.logger.info("Generating null-text embeddings via Flux text encoders...")
-        from diffusers import FluxPipeline
-
-        pipe = FluxPipeline.from_pretrained(
+        self.logger.info("Generating null-text embeddings via Flux 2 text encoders...")
+        pipe = Flux2Pipeline.from_pretrained(
             self.opt.pretrained_model_name_or_path,
             transformer=None,
             vae=None,
             torch_dtype=self.weight_dtype,
         ).to(self.accelerator.device)
         with torch.no_grad():
-            prompt_embeds, pooled_prompt_embeds, _ = pipe.encode_prompt(
-                [""], prompt_2=None
-            )
+            try:
+                result = pipe.encode_prompt(
+                    [""], num_images_per_prompt=1, do_classifier_free_guidance=False
+                )
+                if isinstance(result, tuple) and len(result) >= 2:
+                    prompt_embeds, pooled_prompt_embeds = result[0], result[1]
+                elif isinstance(result, dict):
+                    prompt_embeds = result.get("prompt_embeds")
+                    pooled_prompt_embeds = result.get("pooled_prompt_embeds")
+                else:
+                    prompt_embeds, pooled_prompt_embeds = result, None
+            except Exception:
+                prompt_embeds, pooled_prompt_embeds, _ = pipe.encode_prompt(
+                    [""], prompt_2=None
+                )
+                
         self.register_buffer_txt = prompt_embeds.cpu()
-        self.register_buffer_vec = pooled_prompt_embeds.cpu()
+        self.register_buffer_vec = (
+            pooled_prompt_embeds.cpu()
+            if pooled_prompt_embeds is not None
+            else torch.zeros((1, 512, 4), dtype=prompt_embeds.dtype)
+        )
         del pipe
         gc.collect()
         torch.cuda.empty_cache()
@@ -250,7 +318,12 @@ class LucidFluxJEPA_model(BaseModel):
     def setup_optimizers(self):
         opt = self.opt.train.optim
         optimizer_type = getattr(opt, "type", "adamw").lower()
-        trainable_params = [p for p in self.condition_branch.parameters() if p.requires_grad]
+        trainable_params = [
+            p
+            for module in [self.condition_branch, self.encoder_state_adapter, self.encoder_state_projection]
+            for p in module.parameters()
+            if p.requires_grad
+        ]
 
         if optimizer_type == "adafactor":
             from transformers import Adafactor
@@ -307,6 +380,52 @@ class LucidFluxJEPA_model(BaseModel):
                 dtype=self.vjepa_dtype,
             )
 
+    def _prepare_text_inputs(self, batch_size: int, device: torch.device):
+        self._ensure_null_embeddings()
+        txt = self.register_buffer_txt.to(device).expand(batch_size, -1, -1).to(self.weight_dtype)
+        vec = self.register_buffer_vec.to(device).expand(batch_size, -1, -1).to(self.weight_dtype)
+        vec = vec.view(batch_size, -1)
+        txt_ids = torch.zeros(
+            txt.shape[1], self.transformer_rope_dims, device=device, dtype=self.weight_dtype
+        )
+        return txt, vec, txt_ids
+
+    def _block_res_to_encoder_states(
+        self,
+        block_res_samples: list[torch.Tensor] | tuple[torch.Tensor, ...] | torch.Tensor,
+        imgtxt: torch.Tensor,
+        imgtxt_ids: torch.Tensor,
+        img_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # if isinstance(block_res_samples, torch.Tensor):
+        #     last_block = block_res_samples
+        # else:
+        #     if len(block_res_samples) == 0:
+        #         raise ValueError("Expected non-empty block_res_samples")
+        #     last_block = block_res_samples[-1]
+        
+        # redux_like_embeds = self.encoder_state_adapter(last_block.to(self.weight_dtype))
+        # encoder_hidden_states = torch.cat(
+        #     [imgtxt.to(self.weight_dtype), redux_like_embeds], dim=1
+        # ) # (B, 1088 + 4096 = 5184, 4096)
+        # encoder_hidden_states = self.encoder_state_projection(
+        #     encoder_hidden_states.to(self.weight_dtype)
+        # )
+        
+        # if imgtxt_ids.ndim == 2:
+        #     extra_ids = img_ids[0].to(self.weight_dtype)
+        #     encoder_txt_ids = torch.cat([imgtxt_ids.to(self.weight_dtype), extra_ids], dim=0)
+        # elif imgtxt_ids.ndim == 3:
+        #     extra_ids = img_ids.to(self.weight_dtype)
+        #     encoder_txt_ids = torch.cat([imgtxt_ids.to(self.weight_dtype), extra_ids], dim=1)
+        # else:
+        #     raise ValueError(f"Expected imgtxt_ids to be 2D or 3D, got {imgtxt_ids.ndim}D")
+
+        encoder_hidden_states = self.encoder_state_projection(imgtxt.to(self.weight_dtype))
+        encoder_txt_ids = imgtxt_ids.to(self.weight_dtype)
+
+        return encoder_hidden_states, encoder_txt_ids
+
     def optimize_parameters(self):
         self._ensure_null_embeddings()
 
@@ -323,7 +442,8 @@ class LucidFluxJEPA_model(BaseModel):
             lq_image = einops.repeat(lq_image, "b 1 h w -> b 3 h w")
 
         with torch.no_grad():
-            pixel_latents = encode_images_flux(gt_image, self.vae, self.weight_dtype)
+            pixel_latents = encode_images_flux2(gt_image, self.vae, self.weight_dtype)
+            # control_latents = encode_images_flux2(lq_image, self.vae, self.weight_dtype)
 
         noise = torch.randn_like(pixel_latents)
         noisy_latents, timesteps, _ = get_noisy_model_input_and_timesteps(
@@ -334,16 +454,21 @@ class LucidFluxJEPA_model(BaseModel):
             discrete_flow_shift=self.discrete_flow_shift,
         )
 
-        _, _, lat_h, lat_w = pixel_latents.shape
-        packed_latent_h = lat_h // 2
-        packed_latent_w = lat_w // 2
+        lat_h, lat_w = noisy_latents.shape[2], noisy_latents.shape[3]
+        transformer_latents = Flux2Pipeline._patchify_latents(noisy_latents)
+        
+        packed_transformer_input = Flux2Pipeline._pack_latents(transformer_latents)
+        packed_noisy_model_input = Flux2Pipeline._pack_latents(noisy_latents)
+        
+        latent_image_ids = Flux2Pipeline._prepare_latent_ids(
+            noisy_latents
+        ).to(device=self.accelerator.device, dtype=self.weight_dtype)
+        
+        transformer_image_ids = Flux2Pipeline._prepare_latent_ids(
+            transformer_latents
+        ).to(device=self.accelerator.device, dtype=self.weight_dtype)
 
-        with torch.no_grad():
-            model_inputs = prepare_with_embeddings(
-                img=noisy_latents,
-                precomputed_txt=self.register_buffer_txt.to(self.accelerator.device),
-                precomputed_vec=self.register_buffer_vec.to(self.accelerator.device),
-            )
+        txt, vec, txt_ids = self._prepare_text_inputs(bsz, self.accelerator.device)
 
         condition_cond_lq = lq_image.to(self.weight_dtype)
         with torch.no_grad():
@@ -366,33 +491,45 @@ class LucidFluxJEPA_model(BaseModel):
         normalized_timesteps = (timesteps.float() / 1000).to(self.weight_dtype)
 
         block_res_samples, vision_txt, vision_txt_ids = self.condition_branch(
-            img=model_inputs["img"].to(self.weight_dtype),
-            img_ids=model_inputs["img_ids"].to(self.weight_dtype),
+            img=packed_noisy_model_input.to(self.weight_dtype),
+            img_ids=latent_image_ids.to(self.weight_dtype),
             condition_cond_lq=condition_cond_lq,
             condition_cond_pre=condition_cond_pre,
-            txt=model_inputs["txt"].to(self.weight_dtype),
-            txt_ids=model_inputs["txt_ids"].to(self.weight_dtype),
-            y=model_inputs["vec"].to(self.weight_dtype),
+            txt=txt,
+            txt_ids=txt_ids,
+            y=vec,
             timesteps=normalized_timesteps,
             guidance=guidance_vec,
             vision_image_pre_fts=vision_image_pre_fts,
+            return_last_only=True,
         )
 
+        # block_res_samples 19 x (1, 4096, 3072)
+        # vision_txt (1, 1088, 4096)
+        # vision_txt_ids (1088, 4)
+        # latent_image_ids (1, 4096, 4)
+        
+        encoder_hidden_states, encoder_txt_ids = self._block_res_to_encoder_states(
+            block_res_samples, vision_txt, vision_txt_ids, latent_image_ids
+        )
+        # encoder_hidden_states: (B, 5184, 15360)
+        # encoder_txt_ids: (5184, 4)
+        
         model_pred = self.transformer(
-            hidden_states=model_inputs["img"].to(self.weight_dtype),
-            encoder_hidden_states=vision_txt.to(self.weight_dtype),
-            pooled_projections=model_inputs["vec"].to(self.weight_dtype),
+            hidden_states=packed_transformer_input.to(self.weight_dtype),
+            encoder_hidden_states=encoder_hidden_states.to(self.weight_dtype),
             timestep=normalized_timesteps,
             guidance=guidance_vec,
-            txt_ids=vision_txt_ids.to(self.weight_dtype),
-            img_ids=model_inputs["img_ids"][0].to(self.weight_dtype),
-            controlnet_block_samples=[
-                s.to(dtype=self.weight_dtype) for s in block_res_samples
-            ],
+            txt_ids=encoder_txt_ids.to(self.weight_dtype),
+            img_ids=transformer_image_ids.to(self.weight_dtype),
             return_dict=False,
         )[0]
+        model_pred = Flux2Pipeline._unpack_latents_with_ids(
+            model_pred,
+            transformer_image_ids,
+        )
+        model_pred = Flux2Pipeline._unpatchify_latents(model_pred)
 
-        model_pred = unpack_latents(model_pred, packed_latent_h, packed_latent_w)
         target = noise - pixel_latents
         loss = F.mse_loss(model_pred.float(), target.float())
 
@@ -432,7 +569,9 @@ class LucidFluxJEPA_model(BaseModel):
             model.train()
 
     @torch.no_grad()
-    def forwardpass(self, lq_image: torch.Tensor, height: int, width: int, num_steps: int = 50):
+    def forwardpass(
+        self, lq_image: torch.Tensor, height: int, width: int, num_steps: int = 50
+    ):
         self._ensure_null_embeddings()
         device = self.accelerator.device
         dtype = self.weight_dtype
@@ -448,65 +587,83 @@ class LucidFluxJEPA_model(BaseModel):
             condition_cond_pre = condition_cond_lq
 
         vision_image_pre_fts = self._extract_vision_features(pre_01)
-
-        txt = self.register_buffer_txt.to(device).expand(bsz, -1, -1).to(dtype)
-        vec = self.register_buffer_vec.to(device).expand(bsz, -1).to(dtype)
-        txt_ids = torch.zeros(txt.shape[1], 3, device=device, dtype=dtype)
-
-        vision_txt = txt
-        vision_txt_ids = txt_ids
-        if vision_image_pre_fts is not None:
-            cb = self.accelerator.unwrap_model(self.condition_branch)
-            adapted = cb.vision_feature_adapter(
-                vision_image_pre_fts.to(
-                    device=device,
-                    dtype=getattr(
-                        getattr(cb.vision_feature_adapter, "weight", None),
-                        "dtype",
-                        self.vjepa_dtype,
-                    ),
-                )
-            )
-            enc_dtype = cb.redux_image_encoder.redux_up.weight.dtype
-            image_embeds = cb.redux_image_encoder(
-                adapted.to(device=device, dtype=enc_dtype)
-            )["image_embeds"].to(dtype=dtype)
-            vision_txt = torch.cat([txt, image_embeds], dim=1)
-            extra_ids = torch.zeros(image_embeds.shape[1], 3, device=device, dtype=dtype)
-            vision_txt_ids = torch.cat([txt_ids, extra_ids], dim=0)
-
-        noise = get_noise(bsz, height, width, device, dtype, seed=42)
-        lat_h, lat_w = noise.shape[2], noise.shape[3]
-        img = rearrange(noise, "b c (h ph) (w pw) -> b (h w) (c ph pw)", ph=2, pw=2)
-        img_ids = torch.zeros(lat_h // 2, lat_w // 2, 3, device=device, dtype=dtype)
-        img_ids[..., 1] += torch.arange(lat_h // 2, device=device)[:, None]
-        img_ids[..., 2] += torch.arange(lat_w // 2, device=device)[None, :]
-        img_ids = img_ids.unsqueeze(0).expand(bsz, -1, -1, -1)
-        img_ids = rearrange(img_ids, "b h w c -> b (h w) c")
-
-        image_seq_len = img.shape[1]
-        timesteps_schedule = get_schedule(num_steps, image_seq_len)
+        txt, vec, txt_ids = self._prepare_text_inputs(bsz, device)
 
         cb = self.accelerator.unwrap_model(self.condition_branch)
 
-        img = denoise_lucidflux(
-            model=self.transformer,
-            dual_condition_model=cb.condition_branch,
-            img=img,
-            img_ids=img_ids,
-            txt=txt,
-            txt_ids=txt_ids,
-            siglip_txt=vision_txt,
-            siglip_txt_ids=vision_txt_ids,
-            vec=vec,
-            timesteps=timesteps_schedule,
-            guidance=self.guidance_scale,
-            condition_cond_lq=condition_cond_lq,
-            condition_cond_pre=condition_cond_pre,
+        control_latents = encode_images_flux2(lq_image, self.vae, dtype)
+        lat_c, lat_h, lat_w = (
+            control_latents.shape[1],
+            control_latents.shape[2],
+            control_latents.shape[3],
         )
 
-        img = unpack(img, height, width)
-        decoded = decode_latents_flux(img, self.vae)
+        guidance_vec = torch.full((bsz,), self.guidance_scale, device=device, dtype=dtype)
+
+        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            self.opt.pretrained_model_name_or_path, subfolder="scheduler"
+        )
+        if getattr(scheduler.config, "use_dynamic_shifting", False):
+            image_seq_len = (lat_h // 2) * (lat_w // 2)
+            mu = calculate_shift(
+                image_seq_len,
+                base_seq_len=getattr(scheduler.config, "base_image_seq_len", 256),
+                max_seq_len=getattr(scheduler.config, "max_image_seq_len", 4096),
+                base_shift=getattr(scheduler.config, "base_shift", 0.5),
+                max_shift=getattr(scheduler.config, "max_shift", 1.15),
+            )
+            scheduler.set_timesteps(num_steps, device=device, mu=mu)
+        else:
+            scheduler.set_timesteps(num_steps, device=device)
+
+        latents = torch.randn(bsz, lat_c, lat_h, lat_w, device=device, dtype=dtype)
+
+        for t in scheduler.timesteps:
+            transformer_latents = Flux2Pipeline._patchify_latents(latents)
+            packed_transformer_input = Flux2Pipeline._pack_latents(transformer_latents)
+            packed_latents = Flux2Pipeline._pack_latents(latents)
+
+            latent_image_ids = Flux2Pipeline._prepare_latent_ids(
+                latents
+            ).to(device=device, dtype=dtype)
+            transformer_image_ids = Flux2Pipeline._prepare_latent_ids(
+                transformer_latents
+            ).to(device=device, dtype=dtype)
+
+            timestep = t.unsqueeze(0).expand(bsz).to(device=device, dtype=dtype) / 1000.0
+            block_res_samples, vision_txt, vision_txt_ids = cb(
+                img=packed_latents,
+                img_ids=latent_image_ids,
+                condition_cond_lq=condition_cond_lq,
+                condition_cond_pre=condition_cond_pre,
+                txt=txt,
+                txt_ids=txt_ids,
+                y=vec,
+                timesteps=timestep,
+                guidance=guidance_vec,
+                vision_image_pre_fts=vision_image_pre_fts,
+                return_last_only=True,
+            )
+            encoder_hidden_states, encoder_txt_ids = self._block_res_to_encoder_states(
+                block_res_samples, vision_txt, vision_txt_ids, latent_image_ids
+            )
+            noise_pred = self.transformer(
+                hidden_states=packed_transformer_input,
+                encoder_hidden_states=encoder_hidden_states.to(dtype),
+                timestep=timestep,
+                guidance=guidance_vec,
+                txt_ids=encoder_txt_ids.to(dtype),
+                img_ids=transformer_image_ids.to(dtype),
+                return_dict=False,
+            )[0]
+            noise_pred = Flux2Pipeline._unpack_latents_with_ids(
+                noise_pred,
+                transformer_image_ids,
+            )
+            noise_pred = Flux2Pipeline._unpatchify_latents(noise_pred)
+            latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+
+        decoded = decode_latents_flux(latents, self.vae)
         return decoded.clamp(-1, 1)
 
     def validate_step(self, batch, idx, lq_key, gt_key):

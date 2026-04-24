@@ -4,6 +4,7 @@ Run FLUX Kontext (image-to-image editing) with diffusers.
 
 Example:
   python playground/run_flux_kontext.py --image path/to/input.png --prompt "remove the people, keep the background" --out out.png
+  /depot/chan129/data/GoPro/test/GOPR0384_11_00/blur/000001.png
 """
 
 from __future__ import annotations

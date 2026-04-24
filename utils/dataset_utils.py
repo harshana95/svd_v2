@@ -286,10 +286,32 @@ class padding:
 
 class normalize:
     def __init__(self, mean, std, inplace=False):
-        self.norm = transforms.Normalize( mean, std, inplace)  # (x - mean) / std
+        # Keep raw stats and adapt per-sample when channel count differs
+        # (e.g. grayscale 1ch tensors with RGB 3-value mean/std in configs).
+        self.mean = [mean] if np.isscalar(mean) else list(mean)
+        self.std = [std] if np.isscalar(std) else list(std)
+        self.inplace = inplace
 
     def __call__(self, sample):
-        return self.norm(sample)
+        # Supports both CHW and BCHW tensors.
+        channels = sample.shape[-3]
+        mean = self.mean
+        std = self.std
+
+        if len(mean) != channels:
+            if channels == 1 and len(mean) > 1:
+                mean = [mean[0]]
+                std = [std[0]]
+            elif len(mean) == 1 and channels > 1:
+                mean = mean * channels
+                std = std * channels
+            else:
+                raise ValueError(
+                    f"normalize stats length ({len(mean)}) does not match channels ({channels}) "
+                    f"for tensor shape {tuple(sample.shape)}"
+                )
+
+        return transforms.Normalize(mean, std, self.inplace)(sample)
 
 
 class rotate:

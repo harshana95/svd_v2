@@ -35,9 +35,14 @@ class DiffusionLKPNSTNNafnet_TwoInput_model(DiffusionLKPN_TwoInput_model):
 
         # Optimizer creation
         optimizer_class = torch.optim.AdamW
-        params_to_optimize = list(self.t2iadapter_1.parameters()) + list(self.t2iadapter_2.parameters()) + list(self.unet.parameters()) 
-        domain_params_to_optimize = list(self.lkpn_1.parameters()) + list(self.lkpn_2.parameters()) + list(self.stn.parameters())
-        domain_params_to_optimize += list(self.nafnet_1.parameters()) + list(self.nafnet_2.parameters())
+        params_to_optimize = ([p for p in self.t2iadapter_1.parameters() if p.requires_grad] 
+                                + [p for p in self.t2iadapter_2.parameters() if p.requires_grad] 
+                                + [p for p in self.unet.parameters() if p.requires_grad]) 
+        lkpn_params_to_optimize = ([p for p in self.lkpn_1.parameters() if p.requires_grad] 
+                                + [p for p in self.lkpn_2.parameters() if p.requires_grad] 
+                                + [p for p in self.stn.parameters() if p.requires_grad])
+        dam_params_to_optimize = ([p for p in self.nafnet_1.parameters() if p.requires_grad] 
+                                + [p for p in self.nafnet_2.parameters() if p.requires_grad])
         optimizer = optimizer_class(
             params_to_optimize,
             lr=opt.learning_rate,
@@ -45,15 +50,23 @@ class DiffusionLKPNSTNNafnet_TwoInput_model(DiffusionLKPN_TwoInput_model):
             weight_decay=opt.adam_weight_decay,
             eps=opt.adam_epsilon,
             )
-        domain_optimizer = optimizer_class(
-            domain_params_to_optimize,
+        lkpn_optimizer = optimizer_class(
+            lkpn_params_to_optimize,
+            lr=opt.learning_rate,
+            betas=(opt.adam_beta1, opt.adam_beta2),
+            weight_decay=opt.adam_weight_decay,
+            eps=opt.adam_epsilon,
+        )
+        dam_optimizer = optimizer_class(
+            dam_params_to_optimize,
             lr=opt.learning_rate,
             betas=(opt.adam_beta1, opt.adam_beta2),
             weight_decay=opt.adam_weight_decay,
             eps=opt.adam_epsilon,
         )
         self.optimizers.append(optimizer)
-        self.optimizers.append(domain_optimizer)
+        self.optimizers.append(lkpn_optimizer)
+        self.optimizers.append(dam_optimizer)
 
 
     def feed_data(self, data, is_train=True):
@@ -115,13 +128,26 @@ class DiffusionLKPNSTNNafnet_TwoInput_model(DiffusionLKPN_TwoInput_model):
         sigmas = self.get_sigmas(timesteps, len(noisy_latents.shape), noisy_latents.dtype)
         inp_noisy_latents = noisy_latents / ((sigmas ** 2 + 1) ** 0.5)  # these are around -4 to +4
 
-        # apply stn
-        transformed = self.stn(torch.cat([image_1, image_2], axis=-3))
-        image_1, _ = torch.chunk(transformed, 2, dim=-3)
-        
         # change the domain of the image using nafnet
         image_1 = self.nafnet_1(image_1)
         image_2 = self.nafnet_2(image_2)
+
+        # calculate the loss for nafnet
+        loss_dam = torch.mean(torch.nn.functional.mse_loss(image_1, gt_1)) + torch.mean(torch.nn.functional.mse_loss(image_2, gt_2))
+        loss_dam *= 1
+        self.accelerator.backward(loss_dam)
+        if self.accelerator.sync_gradients:
+            params_to_clip = list(self.nafnet_1.parameters()) + list(self.nafnet_2.parameters())
+            self.accelerator.clip_grad_norm_(params_to_clip, 1.0)
+        self.optimizers[2].step()
+        self.optimizers[2].zero_grad()
+        
+        image_1 = image_1.detach()
+        image_2 = image_2.detach()
+        
+        # apply stn
+        transformed = self.stn(torch.cat([image_1, image_2], axis=-3))
+        image_1, _ = torch.chunk(transformed, 2, dim=-3)
 
         # get latents for img1 and img2
         if self.preprocessing_space == 'pixel':
@@ -250,14 +276,14 @@ class DiffusionLKPNSTNNafnet_TwoInput_model(DiffusionLKPN_TwoInput_model):
             use_2_as_start=self.opt.val.use_2_as_start,
             preprocessing_space=self.preprocessing_space
         )
-        dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
-                                shuffle=False, 
-                                batch_size=1)
-        print(f"Tesing using {len(dataloader)} training data...")
-        dataloader = self.accelerator.prepare(dataloader)
-        for batch in dataloader:
-            idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
-        self.accelerator._dataloaders.remove(dataloader)
+        # dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
+        #                         shuffle=False, 
+        #                         batch_size=1)
+        # print(f"Tesing using {len(dataloader)} training data...")
+        # dataloader = self.accelerator.prepare(dataloader)
+        # for batch in dataloader:
+        #     idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
+        # self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
             idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
             if idx > self.max_val_steps:
@@ -318,6 +344,10 @@ class DiffusionLKPNSTNNafnet_TwoInput_model(DiffusionLKPN_TwoInput_model):
             steps = output.step_outputs
             predeblur1 = output.deblur_1
             predeblur2 = output.deblur_2
+            kernels1 = output.kernels_1
+            kernels2 = output.kernels_2
+            dam1 = output.image_1
+            dam2 = output.image_2
 
         lq1 = lq1.cpu().numpy()*0.5+0.5
         lq2 = lq2.cpu().numpy()*0.5+0.5
@@ -353,6 +383,24 @@ class DiffusionLKPNSTNNafnet_TwoInput_model(DiffusionLKPN_TwoInput_model):
             image4 = np.stack(image4).clip(0, 1)
             log_image(self.opt, self.accelerator, image3, f'predeblur1_{idx:04d}', self.global_step)
             log_image(self.opt, self.accelerator, image4, f'predeblur2_{idx:04d}', self.global_step)
+
+            # log dam output
+            log_image(self.opt, self.accelerator, (dam1[i:i+1].cpu().numpy()*0.5+0.5).clip(0, 1), f'dam1_{idx:04d}', self.global_step)
+            log_image(self.opt, self.accelerator, (dam2[i:i+1].cpu().numpy()*0.5+0.5).clip(0, 1), f'dam2_{idx:04d}', self.global_step)
             
+            # log kernels (t, b, c, h, w, kh, kw) 50 x [1, 3, 512, 512, 5, 5]
+            image5 = []
+            image6 = []
+            for t in range(0, len(kernels1)):
+                k = kernels1[t][i].cpu().numpy()*0.5+0.5 # 3 512 512 5 5 
+                image5.append(einops.rearrange(k, 'c h w nh nw -> c (h nh) (w nw)'))
+            for t in range(0, len(kernels2)):
+                k = kernels2[t][i].cpu().numpy()*0.5+0.5 # 3 512 512 5 5 
+                image6.append(einops.rearrange(k, 'c h w nh nw -> c (h nh) (w nw)'))
+            image5 = np.stack(image5).clip(0, 1)
+            image6 = np.stack(image6).clip(0, 1)
+            log_image(self.opt, self.accelerator, image5, f'kernels1_{idx:04d}', self.global_step)
+            log_image(self.opt, self.accelerator, image6, f'kernels2_{idx:04d}', self.global_step)
+
         return idx
     

@@ -26,6 +26,10 @@ class PipelineOutput(BaseOutput):
     step_outputs: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
     deblur_1: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
     deblur_2: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
+    image_1: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
+    image_2: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
+    kernels_1: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
+    kernels_2: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
     timesteps: Union[List[PIL.Image.Image], np.ndarray, torch.Tensor]
 
 
@@ -239,6 +243,8 @@ class DiffusionTwoImageLKPNSTNNafnetPipeline(
         step_outputs = []
         predeblurring_1 = []
         predeblurring_2 = []
+        kernels_1 = []
+        kernels_2 = []
         
         if output_intermediate_steps:
             if needs_upcasting:
@@ -250,13 +256,13 @@ class DiffusionTwoImageLKPNSTNNafnetPipeline(
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
         
-        # apply stn
-        transformed = self.stn(torch.cat([image_1, image_2], axis=-3))
-        image_1, _ = torch.chunk(transformed, 2, dim=-3)
-        
         # change the domain of the image using nafnet
         image_1 = self.nafnet_1(image_1)
         image_2 = self.nafnet_2(image_2)
+
+        # apply stn
+        transformed = self.stn(torch.cat([image_1, image_2], axis=-3))
+        image_1, _ = torch.chunk(transformed, 2, dim=-3)
 
         # prepare LKPN conditions
         if self.preprocessing_space == 'pixel':
@@ -289,7 +295,10 @@ class DiffusionTwoImageLKPNSTNNafnetPipeline(
                 z_1_ref = self.eac(k_1, z_1)
                 z_2_ref = self.eac(k_2, z_2)
                 
-                
+                if i%10 == 0: # saving all is too much memory
+                    kernels_1.append(k_1)
+                    kernels_2.append(k_2)
+
                 # generate adapter features
                 adapter_state1 = self.adapter1(torch.cat([z_1, z_1_ref], dim=-3))
                 adapter_state2 = self.adapter2(torch.cat([z_2, z_2_ref], dim=-3))
@@ -336,7 +345,11 @@ class DiffusionTwoImageLKPNSTNNafnetPipeline(
 
         # Offload all models
         self.maybe_free_model_hooks()
-        return PipelineOutput(images=step_outputs[-1], step_outputs=step_outputs, deblur_1=predeblurring_1, deblur_2=predeblurring_2, timesteps=timesteps)
+        return PipelineOutput(images=step_outputs[-1], step_outputs=step_outputs, 
+                                deblur_1=predeblurring_1, deblur_2=predeblurring_2, 
+                                image_1=image_1, image_2=image_2,
+                                kernels_1=kernels_1, kernels_2=kernels_2, 
+                                timesteps=timesteps)
 
 
 class DiffusionSingleImageLKPNPipeline(
@@ -555,4 +568,8 @@ class DiffusionSingleImageLKPNPipeline(
 
         # Offload all models
         self.maybe_free_model_hooks()
-        return PipelineOutput(images=step_outputs[-1], step_outputs=step_outputs, deblur_1=predeblurring_1, deblur_2=[], timesteps=timesteps)
+        return PipelineOutput(images=step_outputs[-1], step_outputs=step_outputs, 
+                                deblur_1=predeblurring_1, deblur_2=[], 
+                                kernels_1=k_1, kernels_2=[],
+                                image_1=image_1, image_2=[],
+                                timesteps=timesteps)

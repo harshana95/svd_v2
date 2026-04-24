@@ -93,7 +93,7 @@ class Simple_model(BaseModel):
     def optimize_parameters(self):
         lq = self.sample[self.dataloader.dataset.lq_key]
         gt = self.sample[self.dataloader.dataset.gt_key]
-
+        
         # If no discriminator, follow base flow
         if self.discriminator is None:
             for optimizer in self.optimizers:
@@ -215,8 +215,6 @@ class Simple_model(BaseModel):
 
     def validate_step(self, batch, idx,lq_key,gt_key):
         self.feed_data(batch, is_train=False)
-        self.calculate_flops(torch.randn(1, 3, 512, 512).to(self.device))
-        
         if self.opt.val.patched:
             b,c,h,w = self.original_size[lq_key]
             pred = []
@@ -236,7 +234,11 @@ class Simple_model(BaseModel):
             lq = self.sample[lq_key]
             gt = self.sample[gt_key]
             out = self.forwardpass(lq)
-            
+        
+        # need to know the number of channels in the input
+        c = lq.shape[1]
+        self.calculate_flops(torch.randn(1, c, 512, 512).to(self.device))
+
         lq = lq.cpu().numpy()*0.5+0.5
         gt = gt.cpu().numpy()*0.5+0.5
         out = out.cpu().numpy()*0.5+0.5

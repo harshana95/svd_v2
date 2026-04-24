@@ -108,6 +108,10 @@ def load_vjepa2_model(
 
 
 def load_vjepa2_weights(model: nn.Module, checkpoint_path: str) -> None:
+    param = next(model.parameters(), None)
+    target_device = param.device if param is not None else None
+    target_dtype = param.dtype if param is not None else None
+
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if not isinstance(ckpt, dict):
         raise ValueError("V-JEPA checkpoint must be a dict-like object.")
@@ -125,6 +129,11 @@ def load_vjepa2_weights(model: nn.Module, checkpoint_path: str) -> None:
         key = key.replace("module.", "").replace("backbone.", "")
         cleaned[key] = val
     model.load_state_dict(cleaned, strict=False)
+
+    # Re-apply the model dtype/device after checkpoint load so all parameters and
+    # buffers stay consistent with the runtime configuration.
+    if target_device is not None or target_dtype is not None:
+        model.to(device=target_device, dtype=target_dtype)
 
 
 def load_swinir(

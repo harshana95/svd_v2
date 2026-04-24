@@ -43,7 +43,7 @@ NAFNET_network_1:
   in_channels: 3
   out_channels: 3
   width: 32
-  enc_blk_nums: [1, 1, 1, 28]
+  enc_blk_nums: [1, 1, 1, 1]
   middle_blk_num: 1
   dec_blk_nums: [1, 1, 1, 1]
 
@@ -52,7 +52,7 @@ NAFNET_network_2:
   in_channels: 3
   out_channels: 3
   width: 32
-  enc_blk_nums: [1, 1, 1, 28]
+  enc_blk_nums: [1, 1, 1, 1]
   middle_blk_num: 1
   dec_blk_nums: [1, 1, 1, 1]
 
@@ -61,7 +61,7 @@ datasets:
     type: HuggingFaceDataset
     name: ${dataset_1_name}
     split: train
-    num_proc: 1
+    num_proc: 16
     map_batch_size: 16
 
     use_shuffle: true
@@ -85,6 +85,9 @@ datasets:
         channels: [True, True, True]
       rotate:
         angle: -90
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -98,7 +101,7 @@ datasets:
     type: HuggingFaceDataset
     name: ${dataset_2_name}
     split: train
-    num_proc: 1
+    num_proc: 16
     map_batch_size: 16
 
     use_shuffle: true
@@ -122,6 +125,9 @@ datasets:
        channels: [False, True, False]
       rotate:
         angle: -90
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -157,6 +163,9 @@ datasets:
        channels: [True, True, True]
       rotate:
         angle: -90
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -192,6 +201,9 @@ datasets:
        channels: [False, True, False]
       rotate:
         angle: -90
+      normalize:
+        mean: [0.5]
+        std: [0.5]
       # identity:
       #   keys: [lq_key]
       #   keys_new: [refined]
@@ -227,14 +239,17 @@ train:
     lr_num_cycles: 10
     lr_power: 1.0
 
+  lora_finetune: true
+  lora_rank: 4
+
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
   batch_size: 1
 
-  max_train_steps: 500000
+  max_train_steps: 50000
   validation_steps: 1000
-  checkpointing_steps: 5000
+  checkpointing_steps: 1000
   checkpoints_total_limit: 2
 
   patched: false
@@ -247,6 +262,7 @@ train:
 val:
   save_images: true
   batch_size: 1
+  max_val_steps: 2
 
   patched: false
   patch_size_h: 256

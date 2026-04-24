@@ -32,8 +32,12 @@ class DiffusionLKPNSTN_TwoInput_model(DiffusionLKPN_TwoInput_model):
 
         # Optimizer creation
         optimizer_class = torch.optim.AdamW
-        params_to_optimize = list(self.t2iadapter_1.parameters()) + list(self.t2iadapter_2.parameters()) + list(self.unet.parameters()) 
-        lkpn_params_to_optimize = list(self.lkpn_1.parameters()) + list(self.lkpn_2.parameters()) + list(self.stn.parameters())
+        params_to_optimize = ([p for p in self.t2iadapter_1.parameters() if p.requires_grad] 
+                                + [p for p in self.t2iadapter_2.parameters() if p.requires_grad] 
+                                + [p for p in self.unet.parameters() if p.requires_grad]) 
+        lkpn_params_to_optimize = ([p for p in self.lkpn_1.parameters() if p.requires_grad] 
+                                + [p for p in self.lkpn_2.parameters() if p.requires_grad] 
+                                + [p for p in self.stn.parameters() if p.requires_grad]) 
         
         optimizer = optimizer_class(
             params_to_optimize,
