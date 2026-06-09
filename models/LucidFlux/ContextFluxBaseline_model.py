@@ -41,6 +41,7 @@ from .dino_helpers import (
 )
 from .jepa_helpers import (
     extract_vjepa_tokens,
+    extract_vjepa_tokens_multilayer,
     get_vjepa_feature_dim,
     get_vjepa_num_patches,
     load_vjepa2_model,
@@ -144,6 +145,8 @@ class ContextFluxBaseline_model(BaseModel):
             self.vjepa_hub_entry,
             fallback_dim=getattr(opt, "vjepa_feature_dim", 1024),
         )
+        self.vjepa_num_layers = int(getattr(opt, "vjepa_num_layers", 1))
+        self.vjepa_feature_dim *= self.vjepa_num_layers
 
         self.dino_model_name = None
         self.dino_image_size = None
@@ -630,11 +633,12 @@ class ContextFluxBaseline_model(BaseModel):
                 device=self.accelerator.device,
                 out_dtype=self.vjepa_dtype,
             )
-            return extract_vjepa_tokens(
+            return extract_vjepa_tokens_multilayer(
                 self.vjepa,
                 vjepa_pixels,
                 device=self.accelerator.device,
                 dtype=self.vjepa_dtype,
+                num_layers=self.vjepa_num_layers,
             )
 
     def _extract_dino_features(self, pre_01: torch.Tensor) -> torch.Tensor:

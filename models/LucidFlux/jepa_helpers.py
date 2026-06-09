@@ -149,3 +149,66 @@ def extract_vjepa_tokens(
     elif feats.ndim != 3:
         raise ValueError(f"Unsupported V-JEPA feature shape: {tuple(feats.shape)}")
     return feats
+
+
+def _find_transformer_blocks(model: nn.Module) -> list:
+    """Walk common attribute paths to find the list of transformer blocks."""
+    for attr in ("blocks", "encoder.layers", "encoder.layer", "layers"):
+        obj = model
+        for part in attr.split("."):
+            obj = getattr(obj, part, None)
+            if obj is None:
+                break
+        if obj is not None and hasattr(obj, "__len__") and len(obj) > 0:
+            return list(obj)
+    raise RuntimeError(
+        "Cannot find transformer blocks in V-JEPA model. "
+        "Tried: blocks, encoder.layers, encoder.layer, layers."
+    )
+
+
+def extract_vjepa_tokens_multilayer(
+    model: nn.Module,
+    pixel_values: torch.Tensor,
+    device,
+    dtype: torch.dtype,
+    num_layers: int = 1,
+) -> torch.Tensor:
+    """Extract and concatenate the last `num_layers` block outputs → [B, N, D*num_layers].
+
+    Uses forward hooks so this works with any V-JEPA model variant.
+    The final element is the LayerNorm-normalized last-layer output from
+    extract_vjepa_tokens(); the preceding elements are raw block outputs.
+    num_layers=1 is identical to extract_vjepa_tokens().
+    """
+    if num_layers <= 1:
+        return extract_vjepa_tokens(model, pixel_values, device, dtype)
+
+    blocks = _find_transformer_blocks(model)
+    if num_layers > len(blocks):
+        raise ValueError(f"num_layers={num_layers} > total blocks ({len(blocks)})")
+
+    captured: list = []
+    hooks = []
+    for block in blocks[-(num_layers - 1):]:
+        def _hook(m, inp, out, buf=captured):
+            h = out[0] if isinstance(out, tuple) else out
+            buf.append(h.float().detach())
+        hooks.append(block.register_forward_hook(_hook))
+
+    try:
+        base = extract_vjepa_tokens(model, pixel_values, device, dtype)
+    finally:
+        for h in hooks:
+            h.remove()
+
+    collapsed = []
+    for feat in captured:
+        if feat.ndim == 5:
+            feat = rearrange(feat, "b t h w d -> b (t h w) d")
+        elif feat.ndim == 4:
+            feat = rearrange(feat, "b t n d -> b (t n) d")
+        collapsed.append(feat)
+    collapsed.append(base.float())
+
+    return torch.cat(collapsed, dim=-1).to(dtype=dtype)

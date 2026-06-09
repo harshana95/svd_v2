@@ -1,0 +1,136 @@
+# Group 4 layer-depth ablation: concatenate last 4 V-JEPA block outputs.
+# Projector embed_dim = 1024 * 4 = 4096.
+# Compare against ContextFluxBaselineJEPA.yml (N=1 baseline).
+
+name: Motion
+model_type: ContextFluxBaseline_model
+tracker_project_name: Motion
+experiment_key: ContextFluxBaselineJEPA_Layers4
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 2
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+lucidflux_weights_path: ~
+
+swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
+
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: true
+vjepa_checkpoint_path: ~
+
+# Concatenate the last 4 V-JEPA block outputs → embed_dim = 4096.
+vjepa_num_layers: 4
+
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+use_vjepa_condition: true
+use_vljepa_condition: false
+use_condition_image_for_transformer: false
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: train
+    trust_remote_code: true
+    repeat: 20
+    num_proc: 32
+    map_batch_size: 16
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop_random:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: validation
+    trust_remote_code: true
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  lora_finetune: false
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 2e-5
+    relative_step: false
+    scale_parameter: false
+    warmup_init: false
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 50
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30
