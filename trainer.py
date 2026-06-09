@@ -3,7 +3,6 @@ import argparse
 import yaml
 import torch.multiprocessing as mp
 from accelerate.logging import get_logger
-from models import create_model
 from omegaconf import OmegaConf
 
 from utils.misc import DictAsMember
@@ -11,6 +10,8 @@ from utils.misc import DictAsMember
 logger = get_logger(__name__)
 
 def main(opt):
+    from models import create_model
+
     # mp.set_start_method('spawn')
     # ============================================ 1. Initialize
     model = create_model(opt, logger)
@@ -56,5 +57,5 @@ if __name__ == '__main__':
         opt['comment'] = args.comment
         opt.test = args.test
     opt.opt_path = args.opt
-    
+
     main(opt)

@@ -31,7 +31,7 @@ swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
 # V-JEPA 2.1 backbone configuration.
 vjepa_hub_entry: vjepa2_1_vit_large_384
 vjepa_image_size: 384
-vjepa_pretrained: false
+vjepa_pretrained: true
 vjepa_checkpoint_path: ~
 
 # Precomputed null prompt embeddings from the Kontext text encoders.

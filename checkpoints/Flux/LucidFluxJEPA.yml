@@ -29,7 +29,7 @@ swinir_model_path: ~
 # Otherwise keep it false and point `vjepa_checkpoint_path` to a local checkpoint.
 vjepa_hub_entry: vjepa2_1_vit_large_384
 vjepa_image_size: 384
-vjepa_pretrained: false
+vjepa_pretrained: true
 vjepa_checkpoint_path: ~
 
 precomputed_embeddings_path: /depot/chan129/users/harshana/LucidFlux/weights/lucidflux/prompt_embeddings.pt

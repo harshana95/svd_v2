@@ -5,6 +5,7 @@ import importlib
 import math
 import os
 from pathlib import Path
+import shutil
 import time
 import timeit
 import einops
@@ -117,7 +118,7 @@ class BaseModel():
         if not self.is_train:
             opt['name'] = 'infer'
             opt['tracker_project_name'] = 'infer'
-        self.experiment_name = opt.experiment_key + f"{opt.comment}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
+        self.experiment_name = opt.experiment_key + f"{opt.comment if opt.comment else ''}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
         self.accelerator = initialize(opt, logger, self.experiment_name)
         logger.info(opt)
         self.opt = opt
@@ -160,7 +161,7 @@ class BaseModel():
         # The trackers initializes automatically on the main process.
         if self.accelerator.is_main_process:
             tracker_kwargs = self.opt.tracker_kwargs
-            self.logger.info(f"tracker_kwargs: {tracker_kwargs}")
+            self.logger.info(f"Initializing trackers with tracker_kwargs: {tracker_kwargs}")
             # tensorboard cannot handle list types for config
             if tracker_kwargs is None:
                 tracker_kwargs = {}
@@ -276,14 +277,7 @@ class BaseModel():
         print(f"Dataset test size {l}: {n} iteration took {np.average(out.repeat(repeat=1, number=n))}")
 
     def setup_dataloaders(self):
-        # create train and validation dataloaders
-        train_set = create_dataset(self.opt.datasets.train)
-        self.dataloader = DataLoader(
-            train_set,
-            shuffle=self.opt.datasets.train.use_shuffle,
-            batch_size=self.opt.train.batch_size,
-            num_workers=self.opt.datasets.train.get('num_worker_per_gpu', 0),
-        )
+        self.logger.info("Setting up val dataloaders...")
         val_set = create_dataset(self.opt.datasets.val)
         self.test_dataloader = DataLoader(
             val_set,
@@ -292,7 +286,17 @@ class BaseModel():
             num_workers=self.opt.datasets.val.get('num_worker_per_gpu', 0),
         )
 
+        self.logger.info("Setting up train dataloader...")
+        train_set = create_dataset(self.opt.datasets.train)
+        self.dataloader = DataLoader(
+            train_set,
+            shuffle=self.opt.datasets.train.use_shuffle,
+            batch_size=self.opt.train.batch_size,
+            num_workers=self.opt.datasets.train.get('num_worker_per_gpu', 0),
+        )
+
     def prepare(self):
+        self.logger.info("Preparing model...")
         if not self.trackers_initialized:
             self.prepare_trackers()
         if self.is_train:
@@ -304,6 +308,7 @@ class BaseModel():
 
             self.setup_optimizers()
             self.setup_schedulers()
+            self.logger.info("Optimizers and schedulers prepared...")
 
         # prepare models, datasets, and optimizers
         for i in range(len(self.models)):
@@ -313,6 +318,7 @@ class BaseModel():
             self.schedulers[i] = self.accelerator.prepare(self.schedulers[i])
         self.dataloader = self.accelerator.prepare(self.dataloader)
         self.test_dataloader = self.accelerator.prepare(self.test_dataloader)
+        self.logger.info("Models, datasets, and optimizers prepared...")
 
         self.print_model_memory()
 
@@ -324,6 +330,34 @@ class BaseModel():
             # Afterwards we recalculate our number of training epochs
             self.opt.train.num_train_epochs = math.ceil(self.opt.train.max_train_steps / num_update_steps_per_epoch)
             self.num_update_steps_per_epoch = num_update_steps_per_epoch
+
+    def snapshot_python_sources(self):
+        """Save a checkpoint copy of repository Python files in the logging directory."""
+        if not self.accelerator.is_main_process:
+            return
+
+        project_root = Path(__file__).resolve().parent.parent
+        logging_root = Path(self.opt.path.experiments_root) / self.opt.path.logging_dir
+        snapshot_dir = logging_root / f"python_source_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        skipped_dirs = {".git", "__pycache__", ".venv", "venv", "env", ".mypy_cache", ".pytest_cache", ".idea", ".cursor"}
+        copied_count = 0
+
+        for py_file in project_root.rglob("*.py"):
+            relative_parts = set(py_file.relative_to(project_root).parts)
+            if relative_parts.intersection(skipped_dirs):
+                continue
+            try:
+                rel_path = py_file.relative_to(project_root)
+                dest_file = snapshot_dir / rel_path
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(py_file, dest_file)
+                copied_count += 1
+            except Exception as e:
+                self.logger.warning(f"Failed to snapshot file {py_file}: {e}")
+
+        self.logger.info(f"Saved Python source snapshot to {snapshot_dir} ({copied_count} files)")
 
     def _sanitize_optimizer_state_shapes(self):
         """Drop stale optimizer states whose tensor shapes no longer match params.
@@ -453,6 +487,8 @@ class BaseModel():
     def train(self):
         total_batch_size = self.opt.train.batch_size * self.accelerator.num_processes * self.opt.train.gradient_accumulation_steps
         is_patched = self.opt.train.patched
+        self.snapshot_python_sources()
+        
         if is_patched:
             self.logger.info("====== Patched training is enabled =======")
         if not self.is_train:

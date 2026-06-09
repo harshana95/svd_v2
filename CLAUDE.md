@@ -12,6 +12,25 @@ This is a PyTorch-based image/video deblurring and restoration research framewor
 conda activate /home/wweligam/home_env
 ```
 
+## GPU Allocation (Gilbreth / Slurm)
+
+Preferred interactive GPU allocation command:
+
+```bash
+sinteractive -A stanchan -N1 -n32 --gpus-per-node=1 --mem=128G -p a100-80gb -t 4-0:00:00
+```
+
+Common variants used:
+
+```bash
+# Longer walltime on A100
+sinteractive -A stanchan -N1 -n32 --gpus-per-node=1 --mem=128G -p a100-80gb -t 7-0:00:00
+
+# Standby queues
+sinteractive -A stanchan --qos=standby -N1 -n32 --gpus-per-node=1 --mem=128G -p a30 -t 4:00:00
+sinteractive -A stanchan --qos=standby -N1 -n32 --gpus-per-node=1 --mem=128G -p a10 -t 4:00:00
+```
+
 Key packages: PyTorch 2.8 + CUDA 12, diffusers 0.35, transformers 4.57, accelerate 1.1, datasets 3.3, omegaconf 2.3, basicsr 1.4.
 
 ## Running Training

@@ -26,9 +26,16 @@ from .helpers import (
     initialize_transformer_lora,
     prepare_image_latents,
 )
+from .dino_helpers import (
+    extract_dino_tokens,
+    get_dino_feature_dim,
+    get_dino_num_patches,
+    load_dinov2_model,
+)
 from .jepa_helpers import (
     extract_vjepa_tokens,
     get_vjepa_feature_dim,
+    get_vjepa_num_patches,
     load_vjepa2_model,
     load_vjepa2_weights,
     vjepa_from_unit_tensor,
@@ -44,7 +51,7 @@ from .vljepa_helpers import (
     preprocess_vljepa_image,
     tokenize_vljepa_query,
 )
-from .vljepa_projector import VLJEPAProjector
+from .cross_attn_projector import PatchCrossAttnProjector
 from .src.flux.lucidflux import (
     load_precomputed_embeddings,
     load_swinir,
@@ -58,12 +65,26 @@ class ContextFluxBaseline_model(BaseModel):
         self.use_condition_image_for_transformer = getattr(opt, "use_condition_image_for_transformer", True)
         self.use_vljepa_condition = getattr(opt, "use_vljepa_condition", False)
         self.use_vjepa_condition = getattr(opt, "use_vjepa_condition", True)
-        if self.use_vljepa_condition and self.use_vjepa_condition:
+        self.use_dino_condition = getattr(opt, "use_dino_condition", False)
+        if self.use_vljepa_condition:
+            if self.use_vjepa_condition:
+                logger.warning(
+                    "Both use_vljepa_condition and use_vjepa_condition are enabled; "
+                    "preferring VL-JEPA semantic conditioning and disabling V-JEPA patch tokens."
+                )
+                self.use_vjepa_condition = False
+            if self.use_dino_condition:
+                logger.warning(
+                    "Both use_vljepa_condition and use_dino_condition are enabled; "
+                    "preferring VL-JEPA semantic conditioning and disabling DINO patch tokens."
+                )
+                self.use_dino_condition = False
+        elif self.use_vjepa_condition and self.use_dino_condition:
             logger.warning(
-                "Both use_vljepa_condition and use_vjepa_condition are enabled; "
-                "preferring VL-JEPA semantic conditioning and disabling V-JEPA patch tokens."
+                "Both use_vjepa_condition and use_dino_condition are enabled; "
+                "preferring V-JEPA patch tokens and disabling DINO."
             )
-            self.use_vjepa_condition = False
+            self.use_dino_condition = False
 
         weight_dtype = torch.float32
         if self.accelerator.mixed_precision == "fp16":
@@ -96,6 +117,19 @@ class ContextFluxBaseline_model(BaseModel):
             self.vjepa_hub_entry,
             fallback_dim=getattr(opt, "vjepa_feature_dim", 1024),
         )
+
+        self.dino_model_name = None
+        self.dino_image_size = None
+        self.dino_dtype = None
+        self.dino_feature_dim = None
+        if self.use_dino_condition:
+            self.dino_model_name = opt.get("dino_model_name") or "facebook/dinov2-large"
+            self.dino_image_size = opt.get("dino_image_size") or 518
+            self.dino_dtype = opt.get("dino_dtype") or torch.float32
+            self.dino_feature_dim = get_dino_feature_dim(
+                self.dino_model_name,
+                fallback_dim=opt.get("dino_feature_dim") or 1024,
+            )
 
         self.vljepa_model = None
         self.vljepa_readout = None
@@ -156,6 +190,7 @@ class ContextFluxBaseline_model(BaseModel):
             else:
                 logger.info("VL-JEPA caption readout disabled via config.")
             self.vjepa = None
+            self.dino = None
             logger.info("V-JEPA patch conditioning disabled (VL-JEPA semantic path active).")
         elif self.use_vjepa_condition:
             logger.info(
@@ -173,9 +208,19 @@ class ContextFluxBaseline_model(BaseModel):
                 load_vjepa2_weights(self.vjepa, self.vjepa_checkpoint_path)
             self.vjepa.requires_grad_(False)
             self.vjepa.eval()
-        else:
-            logger.info("V-JEPA conditioning disabled via `use_vjepa_condition`.")
+            self.dino = None
+        elif self.use_dino_condition:
+            logger.info(f"Loading DINOv2 encoder from {self.dino_model_name}")
+            self.dino = load_dinov2_model(
+                self.dino_model_name,
+                "cpu",
+                self.dino_dtype,
+            )
             self.vjepa = None
+        else:
+            logger.info("Vision patch conditioning disabled (no V-JEPA or DINO).")
+            self.vjepa = None
+            self.dino = None
         
         swinir_path = getattr(opt, "swinir_model_path", None)
         self.swinir = None
@@ -267,6 +312,8 @@ class ContextFluxBaseline_model(BaseModel):
 
         if self.vjepa is not None:
             self.vjepa = self.vjepa.to(self.accelerator.device, dtype=self.vjepa_dtype)
+        if self.dino is not None:
+            self.dino = self.dino.to(self.accelerator.device, dtype=self.dino_dtype)
         if self.vljepa_model is not None:
             self.vljepa_model = self.vljepa_model.to(
                 self.accelerator.device, dtype=self.vljepa_dtype
@@ -302,10 +349,16 @@ class ContextFluxBaseline_model(BaseModel):
             num_text_slots = int(opt.vljepa_num_text_slots)
         self.vljepa_num_text_slots = num_text_slots
 
+        projector_hidden = int(getattr(opt, "vljepa_projector_hidden", 2048))
+        patch_projector_num_slots = getattr(opt, "patch_projector_num_slots", None)
+        if patch_projector_num_slots not in (None, "~"):
+            patch_projector_num_slots = int(patch_projector_num_slots)
+        else:
+            patch_projector_num_slots = None
+
         if self.vljepa_model is not None:
-            projector_hidden = int(getattr(opt, "vljepa_projector_hidden", 2048))
-            self.vljepa_projector = VLJEPAProjector(
-                vljepa_dim=VLJEPA_EMBED_DIM,
+            self.vljepa_projector = PatchCrossAttnProjector(
+                embed_dim=VLJEPA_EMBED_DIM,
                 seq_dim=self.transformer_context_dim,
                 num_slots=num_text_slots,
                 hidden_dim=projector_hidden,
@@ -316,18 +369,46 @@ class ContextFluxBaseline_model(BaseModel):
             )
             self.models.append(self.vljepa_projector)
         elif self.vjepa is not None:
-            self.jepa_projector = torch.nn.Linear(self.vjepa_feature_dim, self.transformer_context_dim)
+            jepa_num_slots = patch_projector_num_slots or get_vjepa_num_patches(
+                self.vjepa_hub_entry,
+                self.vjepa_image_size,
+            )
+            self.jepa_projector = PatchCrossAttnProjector(
+                embed_dim=self.vjepa_feature_dim,
+                seq_dim=self.transformer_context_dim,
+                num_slots=jepa_num_slots,
+                hidden_dim=projector_hidden,
+            )
             self.jepa_projector.requires_grad_(True)
-            self.jepa_projector = self.jepa_projector.to(self.accelerator.device, dtype=weight_dtype)
+            self.jepa_projector = self.jepa_projector.to(
+                self.accelerator.device, dtype=weight_dtype
+            )
             self.models.append(self.jepa_projector)
+        elif self.dino is not None:
+            dino_num_slots = patch_projector_num_slots or get_dino_num_patches(
+                self.dino_model_name,
+                self.dino_image_size,
+            )
+            self.dino_projector = PatchCrossAttnProjector(
+                embed_dim=self.dino_feature_dim,
+                seq_dim=self.transformer_context_dim,
+                num_slots=dino_num_slots,
+                hidden_dim=projector_hidden,
+            )
+            self.dino_projector.requires_grad_(True)
+            self.dino_projector = self.dino_projector.to(
+                self.accelerator.device, dtype=weight_dtype
+            )
+            self.models.append(self.dino_projector)
         if self.lora_finetune:
             self.models.append(self.transformer)
 
         logger.info(
             "Condition toggles: use_vljepa_condition=%s, use_vjepa_condition=%s, "
-            "use_condition_image_for_transformer=%s",
+            "use_dino_condition=%s, use_condition_image_for_transformer=%s",
             self.use_vljepa_condition,
             self.use_vjepa_condition,
+            self.use_dino_condition,
             self.use_condition_image_for_transformer,
         )
 
@@ -389,6 +470,10 @@ class ContextFluxBaseline_model(BaseModel):
         elif self.vjepa is not None:
             trainable_params.extend(
                 p for p in self.jepa_projector.parameters() if p.requires_grad
+            )
+        elif self.dino is not None:
+            trainable_params.extend(
+                p for p in self.dino_projector.parameters() if p.requires_grad
             )
         if self.lora_finetune:
             trainable_params.extend(
@@ -452,6 +537,23 @@ class ContextFluxBaseline_model(BaseModel):
                 dtype=self.vjepa_dtype,
             )
 
+    def _extract_dino_features(self, pre_01: torch.Tensor) -> torch.Tensor:
+        if self.dino is None:
+            raise RuntimeError("DINO is disabled but `_extract_dino_features` was called.")
+        with torch.inference_mode():
+            dino_pixels = vjepa_from_unit_tensor(
+                pre_01,
+                size=self.dino_image_size,
+                device=self.accelerator.device,
+                out_dtype=self.dino_dtype,
+            )
+            return extract_dino_tokens(
+                self.dino,
+                dino_pixels,
+                device=self.accelerator.device,
+                dtype=self.dino_dtype,
+            )
+
     def _extract_vljepa_embedding(self, pre_01: torch.Tensor) -> torch.Tensor:
         if self.vljepa_model is None:
             raise RuntimeError("VL-JEPA is disabled but `_extract_vljepa_embedding` was called.")
@@ -487,6 +589,23 @@ class ContextFluxBaseline_model(BaseModel):
         if txt_ids.shape[0] == 1 and batch_size > 1:
             txt_ids = txt_ids.expand(batch_size, -1, -1)
         return txt.to(device), txt_ids.to(device=device, dtype=self.weight_dtype)
+
+    def _encode_patch_conditioning(
+        self,
+        vision_fts: torch.Tensor,
+        projector: torch.nn.Module,
+        txt: torch.Tensor,
+        txt_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        embeds = projector(vision_fts.to(self.weight_dtype))
+        ids = self.flux2_pipe_cls._prepare_text_ids(embeds)
+        if ids.ndim == 2:
+            ids = ids.unsqueeze(0)
+        if ids.shape[0] == 1 and txt_ids.shape[0] > 1:
+            ids = ids.expand(txt_ids.shape[0], -1, -1)
+        ids = ids.to(device=txt_ids.device, dtype=txt_ids.dtype)
+        ids[:, :, 0] = 1
+        return torch.cat([txt, embeds], dim=1), torch.cat([txt_ids, ids], dim=1)
 
     def _log_vljepa_readout(self, semantic_embeds: torch.Tensor):
         if self.vljepa_readout is None or not self.accelerator.is_main_process:
@@ -533,8 +652,9 @@ class ContextFluxBaseline_model(BaseModel):
 
         semantic_embeds = None
         vision_image_pre_fts = None
+        dino_fts = None
 
-        # Frozen encoders: single batched VAE encode + SwinIR/V-JEPA/VL-JEPA under inference_mode.
+        # Frozen encoders: single batched VAE encode + SwinIR/V-JEPA/VL-JEPA/DINO under inference_mode.
         with torch.inference_mode():
             pixel_latents = encode_vae_image(
                 self.vae, gt_image.to(self.weight_dtype), None, flux2_pipe_cls=self.flux2_pipe_cls
@@ -565,6 +685,8 @@ class ContextFluxBaseline_model(BaseModel):
                     self._log_vljepa_readout(semantic_embeds)
             elif self.use_vjepa_condition:
                 vision_image_pre_fts = self._extract_vision_features(pre_01)
+            elif self.use_dino_condition:
+                dino_fts = self._extract_dino_features(pre_01)
 
         noise = torch.randn_like(pixel_latents)
         noisy_latents, timesteps, _ = get_noisy_model_input_and_timesteps(
@@ -591,16 +713,13 @@ class ContextFluxBaseline_model(BaseModel):
         else:
             txt, txt_ids = self._prepare_text_inputs(bsz, self.accelerator.device)
             if self.use_vjepa_condition:
-                jepa_embeds = self.jepa_projector(vision_image_pre_fts.to(self.weight_dtype))
-                jepa_ids = self.flux2_pipe_cls._prepare_text_ids(jepa_embeds)
-                if jepa_ids.ndim == 2:
-                    jepa_ids = jepa_ids.unsqueeze(0)
-                if jepa_ids.shape[0] == 1 and txt_ids.shape[0] > 1:
-                    jepa_ids = jepa_ids.expand(txt_ids.shape[0], -1, -1)
-                jepa_ids = jepa_ids.to(device=txt_ids.device, dtype=txt_ids.dtype)
-                jepa_ids[:, :, 0] = 1 # set the first dimension to 1
-                encoder_hidden_states = torch.cat([txt, jepa_embeds], dim=1)
-                encoder_txt_ids = torch.cat([txt_ids, jepa_ids], dim=1)
+                encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
+                    vision_image_pre_fts, self.jepa_projector, txt, txt_ids
+                )
+            elif self.use_dino_condition:
+                encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
+                    dino_fts, self.dino_projector, txt, txt_ids
+                )
             else:
                 encoder_hidden_states = txt
                 encoder_txt_ids = txt_ids
@@ -642,6 +761,8 @@ class ContextFluxBaseline_model(BaseModel):
                 clip_params.extend(list(self.vljepa_projector.parameters()))
             elif self.vjepa is not None:
                 clip_params.extend(list(self.jepa_projector.parameters()))
+            elif self.dino is not None:
+                clip_params.extend(list(self.dino_projector.parameters()))
             if self.lora_finetune:
                 clip_params.extend(
                     p for p in self.transformer.parameters() if p.requires_grad
@@ -695,6 +816,7 @@ class ContextFluxBaseline_model(BaseModel):
         txt_ids = None
         semantic_embeds = None
         vision_image_pre_fts = None
+        dino_fts = None
 
         if not self.use_vljepa_condition:
             txt, txt_ids = self._prepare_text_inputs(bsz, device)
@@ -736,6 +858,8 @@ class ContextFluxBaseline_model(BaseModel):
                 )
             elif self.use_vjepa_condition:
                 vision_image_pre_fts = self._extract_vision_features(pre_01)
+            elif self.use_dino_condition:
+                dino_fts = self._extract_dino_features(pre_01)
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             self.opt.pretrained_model_name_or_path, subfolder="scheduler"
@@ -767,16 +891,13 @@ class ContextFluxBaseline_model(BaseModel):
                 step_encoder_hidden_states = encoder_hidden_states
                 step_encoder_txt_ids = encoder_txt_ids
             elif self.use_vjepa_condition:
-                jepa_embeds = self.jepa_projector(vision_image_pre_fts.to(self.weight_dtype))
-                jepa_ids = self.flux2_pipe_cls._prepare_text_ids(jepa_embeds)
-                if jepa_ids.ndim == 2:
-                    jepa_ids = jepa_ids.unsqueeze(0)
-                if jepa_ids.shape[0] == 1 and txt_ids.shape[0] > 1:
-                    jepa_ids = jepa_ids.expand(txt_ids.shape[0], -1, -1)
-                jepa_ids[:, :, 0] = 1 # set the first dimension to 1
-                jepa_ids = jepa_ids.to(device=txt_ids.device, dtype=txt_ids.dtype)
-                step_encoder_hidden_states = torch.cat([txt, jepa_embeds], dim=1)
-                step_encoder_txt_ids = torch.cat([txt_ids, jepa_ids], dim=1)
+                step_encoder_hidden_states, step_encoder_txt_ids = self._encode_patch_conditioning(
+                    vision_image_pre_fts, self.jepa_projector, txt, txt_ids
+                )
+            elif self.use_dino_condition:
+                step_encoder_hidden_states, step_encoder_txt_ids = self._encode_patch_conditioning(
+                    dino_fts, self.dino_projector, txt, txt_ids
+                )
             else:
                 step_encoder_hidden_states = txt
                 step_encoder_txt_ids = txt_ids

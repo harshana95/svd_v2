@@ -69,13 +69,11 @@ datasets:
       normalize:
         mean: [0.5, 0.5, 0.5]
         std: [0.5, 0.5, 0.5]  
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
       apply_model:
         keys: [lq_key]
         model_name: NAFNet_arch
-        model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
+        # model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
+        model_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/DAM_NAFNetRealColor_2026_04_24_22_00_59/checkpoint-100000/NAFNet_arch_1/
 
   train2:
     type: HuggingFaceDataset
@@ -108,14 +106,11 @@ datasets:
       normalize:
         mean: [0.5]
         std: [0.5]
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
-      # apply_model:
       apply_model:
         keys: [lq_key]
         model_name: NAFNet_arch
         model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+        # model_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/DAM_NAFNetRealMono_2026_04_24_13_02_59/checkpoint-50000/NAFNet_arch_1/
         
   val1:
     type: HuggingFaceDataset
@@ -146,13 +141,11 @@ datasets:
       normalize:
         mean: [0.5, 0.5, 0.5]
         std: [0.5, 0.5, 0.5]
-      # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
       apply_model:
         keys: [lq_key]
         model_name: NAFNet_arch
-        model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
+        # model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealColor 2025 09 12 11.09.55/checkpoint-15000/NAFNet_arch_1/
+        model_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/DAM_NAFNetRealColor_2026_04_24_22_00_59/checkpoint-100000/NAFNet_arch_1/
 
   val2:
     type: HuggingFaceDataset
@@ -183,20 +176,18 @@ datasets:
       normalize:
         mean: [0.5]
         std: [0.5]
-        # identity:
-      #   keys: [lq_key]
-      #   keys_new: [refined]
       apply_model:
         keys: [lq_key]
         model_name: NAFNet_arch
-        model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+        # model_path: /depot/chan129/users/harshana/ICASSP_26/NAFNetRealMono 2025 09 12 11.13.49/checkpoint-9000/NAFNet_arch_1/
+        model_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/DAM_NAFNetRealMono_2026_04_24_13_02_59/checkpoint-50000/NAFNet_arch_1/
   
 # path
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /depot/chan129/users/harshana/ICASSP_26/Ex3_pixel 2025 09 12 22.08.22/
-  resume_from_checkpoint: latest
+  resume_from_path: ~
+  resume_from_checkpoint: ~
 
 # training settings
 train:
@@ -237,6 +228,8 @@ val:
   save_images: true
   batch_size: 1
   num_inference_steps: 50
+
+  max_val_steps: 2
 
   patched: false
   patch_size_h: 256

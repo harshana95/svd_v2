@@ -1,0 +1,124 @@
+# LucidFlux2OriginalConditionJEPA: Flux 2 + JEPA with the original
+# LucidFlux condition branch API from `src/flux/condition.py`.
+#
+# Run:
+#   python trainer.py -opt checkpoints/Flux/LucidFlux2OriginalConditionJEPA.yml -comment my_run
+# or
+#   accelerate launch trainer.py -opt checkpoints/Flux/LucidFlux2OriginalConditionJEPA.yml -comment my_run
+
+name: Motion
+model_type: LucidFlux2OriginalConditionJEPA_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 2
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# Use FLUX.2-dev for this original-branch variant.
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-dev
+revision: ~
+variant: ~
+
+# Optional pretrained LucidFlux branch weights (~ means train from scratch).
+lucidflux_weights_path: ~
+
+# Optional SwinIR prior for the "pre" branch.
+swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
+
+# V-JEPA 2.1 backbone configuration.
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: true
+vjepa_checkpoint_path: ~
+
+# Precomputed null prompt embeddings for Flux2.
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2.pt
+
+guidance_scale: 4.0
+discrete_flow_shift: 3.1582
+
+tracker_project_name: Motion
+experiment_key: LucidFlux2OriginalConditionJEPA
+
+datasets:
+  train:
+    type: GoProDataset
+    data_dir: /depot/chan129/data/GoPro/
+    split: train
+    gt_key: gt
+    lq_key: blur
+    split_range: [0, 100]
+    crop_h: 512
+    crop_w: 512
+    random_crop: true
+
+  val:
+    type: GoProDataset
+    data_dir: /depot/chan129/data/GoPro/
+    split: test
+    gt_key: gt
+    lq_key: blur
+    split_range: [0, 0.3]
+    crop_h: 512
+    crop_w: 512
+    random_crop: false
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  optim:
+    type: adafactor
+    scale_lr: false
+    learning_rate: !!float 2e-5
+    relative_step: false
+    scale_parameter: false
+    warmup_init: false
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 4
+  num_train_epochs: 20
+  batch_size: 1
+
+  max_train_steps: 20000
+  validation_steps: 200
+  checkpointing_steps: 500
+  checkpoints_total_limit: 3
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 50
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

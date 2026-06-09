@@ -245,14 +245,14 @@ class DiffusionLKPN_TwoInput_model(Diffusion_TwoInput_model):
             use_2_as_start=self.opt.val.use_2_as_start,
             preprocessing_space=self.preprocessing_space
         )
-        dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
-                                shuffle=False, 
-                                batch_size=1)
-        print(f"Tesing using {len(dataloader)} training data...")
-        dataloader = self.accelerator.prepare(dataloader)
-        for batch in dataloader:
-            idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
-        self.accelerator._dataloaders.remove(dataloader)
+        # dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(5)), 
+        #                         shuffle=False, 
+        #                         batch_size=1)
+        # print(f"Tesing using {len(dataloader)} training data...")
+        # dataloader = self.accelerator.prepare(dataloader)
+        # for batch in dataloader:
+        #     idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
+        # self.accelerator._dataloaders.remove(dataloader)
         for batch in tqdm(self.test_dataloader):
             idx = self.validate_step(batch, idx, self.test_dataloader.dataset.lq_key, self.test_dataloader.dataset.gt_key)
             if idx > self.max_val_steps:
@@ -314,10 +314,10 @@ class DiffusionLKPN_TwoInput_model(Diffusion_TwoInput_model):
             predeblur1 = output.deblur_1
             predeblur2 = output.deblur_2
 
-        lq1 = lq1.cpu().numpy()
-        lq2 = lq2.cpu().numpy()
-        gt = gt.cpu().numpy()
-        out = out.cpu().numpy()
+        lq1 = lq1.cpu().numpy()*0.5+0.5
+        lq2 = lq2.cpu().numpy()*0.5+0.5
+        gt = gt.cpu().numpy()*0.5+0.5
+        out = out.cpu().numpy()*0.5+0.5
         for i in range(len(gt)):
             idx += 1
             image1 = [lq1[i], lq2[i], gt[i], out[i]]

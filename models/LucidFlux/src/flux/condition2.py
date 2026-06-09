@@ -58,17 +58,24 @@ class ConditionBranchFlux2(nn.Module):
         guidance: torch.Tensor,
         vision_image_pre_fts: torch.Tensor | None = None,
     ):
-        if vision_image_pre_fts is not None:
-            adapted_vision_fts = self.vision_feature_adapter(
-                vision_image_pre_fts.to(
-                    device=txt.device,
-                    dtype=getattr(getattr(self.vision_feature_adapter, "weight", None),"dtype",),
-                )
-            )
-            
-            imgtxt_redux = torch.cat([txt, adapted_vision_fts], dim=1)
+        if vision_image_pre_fts is None:
+            return txt, txt_ids
 
-            extra_seq_len = adapted_vision_fts.shape[1]
+        adapted_vision_fts = self.vision_feature_adapter(
+            vision_image_pre_fts.to(
+                device=txt.device,
+                dtype=getattr(
+                    getattr(self.vision_feature_adapter, "weight", None),
+                    "dtype",
+                    txt.dtype,
+                ),
+            )
+        )
+
+        imgtxt_redux = torch.cat([txt, adapted_vision_fts], dim=1)
+
+        extra_seq_len = adapted_vision_fts.shape[1]
+        if txt_ids.ndim == 2:
             _, channels = txt_ids.shape
             extra_ids = torch.zeros(
                 (extra_seq_len, channels),
@@ -76,10 +83,16 @@ class ConditionBranchFlux2(nn.Module):
                 dtype=txt_ids.dtype,
             )
             imgtxt_redux_ids = torch.cat([txt_ids, extra_ids], dim=0)
-
-            # imgtxt_redux = txt
-            # imgtxt_redux_ids = txt_ids
-        
+        elif txt_ids.ndim == 3:
+            batch_size, _, channels = txt_ids.shape
+            extra_ids = torch.zeros(
+                (batch_size, extra_seq_len, channels),
+                device=txt_ids.device,
+                dtype=txt_ids.dtype,
+            )
+            imgtxt_redux_ids = torch.cat([txt_ids, extra_ids], dim=1)
+        else:
+            raise ValueError(f"Expected txt_ids to be 2D or 3D, got {txt_ids.ndim}D")
 
         return imgtxt_redux, imgtxt_redux_ids
 

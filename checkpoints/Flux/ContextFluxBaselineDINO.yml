@@ -1,0 +1,173 @@
+# ContextFluxBaseline with DINOv2 patch conditioning on a Flux 2 backbone.
+# Only the DINO projector is trained; the Flux backbone and DINO encoder are frozen.
+#
+
+name: Motion
+model_type: ContextFluxBaseline_model
+tracker_project_name: Motion
+experiment_key: ContextFluxBaselineDINO
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 2
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# Flux 2 Klein 4B backbone (frozen)
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+# Optional pretrained LucidFlux branch weights. Leave ~ to train from scratch.
+lucidflux_weights_path: ~
+
+# Optional SwinIR prior for the "pre" branch. Leave ~ to feed raw LQ to both branches.
+swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
+
+# V-JEPA 2.1 backbone configuration (unused when use_dino_condition=true).
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: true
+vjepa_checkpoint_path: ~
+
+# Precomputed null prompt embeddings from the Klein text encoder.
+# If omitted, the model will generate empty-prompt embeddings on first use.
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+# Toggle V-JEPA token conditioning appended to transformer text context.
+use_vjepa_condition: false
+
+# VL-JEPA semantic conditioning (replaces null prompt + patch tokens when enabled).
+use_vljepa_condition: false
+vljepa_checkpoint_path: /depot/chan129/users/harshana/weights/open-vljepa/best.pt
+vljepa_caption_query: "Describe the image in detail."
+vljepa_num_frames: 1
+vljepa_image_size: 256
+vljepa_readout_vocab: ram_tags
+vljepa_enable_readout: true
+vljepa_projector_hidden: 2048
+vljepa_num_text_slots: ~
+
+# DINOv2 patch token conditioning appended to null prompt text context.
+use_dino_condition: true
+dino_model_name: facebook/dinov2-large
+dino_image_size: 518
+
+# Toggle condition-image latent tokens appended to transformer latent input.
+use_condition_image_for_transformer: false
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+
+# Speed: disable unless VRAM is tight (checkpointing trades compute for memory).
+transformer_gradient_checkpointing: false
+
+
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+
+    split: train
+    trust_remote_code: true
+
+    repeat: 20
+    num_proc: 32
+    map_batch_size: 16
+
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop_random:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: validation
+    trust_remote_code: true
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  lora_finetune: false
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 2e-5
+    relative_step: false
+    scale_parameter: false
+    warmup_init: false
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 50
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

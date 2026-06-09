@@ -16,35 +16,28 @@ from tqdm import tqdm
 from models.base_model import BaseModel
 from utils import log_image, log_metrics
 
+from .helpers import (
+    calculate_shift,
+    get_noisy_model_input_and_timesteps,
+    retrieve_latents,
+)
+from .jepa_helpers import (
+    extract_vjepa_tokens,
+    get_vjepa_feature_dim,
+    load_vjepa2_model,
+    load_vjepa2_weights,
+    vjepa_from_unit_tensor,
+)
 from .src.flux.condition import (
     FluxParams,
     build_condition_branch_fresh,
     load_condition_branch_with_redux,
 )
 from .src.flux.lucidflux import (
-    extract_vjepa_tokens,
     load_lucidflux_weights,
     load_precomputed_embeddings,
     load_swinir,
-    load_vjepa2_model,
-    load_vjepa2_weights,
-    vjepa_from_unit_tensor,
 )
-
-
-def retrieve_latents(
-    encoder_output: torch.Tensor,
-    generator: torch.Generator | None = None,
-    sample_mode: str = "sample",
-):
-    if hasattr(encoder_output, "latent_dist") and sample_mode == "sample":
-        return encoder_output.latent_dist.sample(generator)
-    if hasattr(encoder_output, "latent_dist") and sample_mode == "argmax":
-        return encoder_output.latent_dist.mode()
-    if hasattr(encoder_output, "latents"):
-        return encoder_output.latents
-    raise AttributeError("Could not access latents of provided encoder_output")
-
 
 def encode_images_flux2(
     pixels: torch.Tensor, vae: torch.nn.Module, weight_dtype, generator=None
@@ -78,40 +71,9 @@ def decode_latents_flux(latents: torch.Tensor, vae: torch.nn.Module):
     return image
 
 
-def get_noisy_model_input_and_timesteps(
-    noise_scheduler,
-    latents: torch.Tensor,
-    noise: torch.Tensor,
-    device: torch.device,
-    discrete_flow_shift: float = 3.1582,
-):
-    batch_size = latents.shape[0]
-    num_timesteps = noise_scheduler.config.num_train_timesteps
-
-    sigmas = torch.sigmoid(
-        torch.randn((batch_size,), device=device) + discrete_flow_shift
-    )
-    timesteps = (sigmas * num_timesteps).long()
-    sigmas = sigmas.view(-1, 1, 1, 1)
-    noisy_model_input = (1 - sigmas) * latents + sigmas * noise
-    return noisy_model_input, timesteps, sigmas
-
-
-def calculate_shift(
-    image_seq_len: int,
-    base_seq_len: int = 256,
-    max_seq_len: int = 4096,
-    base_shift: float = 0.5,
-    max_shift: float = 1.15,
-) -> float:
-    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
-    b = base_shift - m * base_seq_len
-    return float(image_seq_len) * m + b
-
-
-class LucidFlux2JEPA_model(BaseModel):
+class LucidFlux2OriginalConditionJEPA_model(BaseModel):
     def __init__(self, opt, logger):
-        super(LucidFlux2JEPA_model, self).__init__(opt, logger)
+        super(LucidFlux2OriginalConditionJEPA_model, self).__init__(opt, logger)
 
         weight_dtype = torch.float32
         if self.accelerator.mixed_precision == "fp16":
@@ -137,16 +99,10 @@ class LucidFlux2JEPA_model(BaseModel):
         self.vjepa_checkpoint_path = getattr(opt, "vjepa_checkpoint_path", None)
         self.vjepa_dtype = torch.float32
 
-        if "vit_base" in self.vjepa_hub_entry:
-            self.vjepa_feature_dim = 768
-        elif "vit_large" in self.vjepa_hub_entry:
-            self.vjepa_feature_dim = 1024
-        elif "vit_giant" in self.vjepa_hub_entry and "gigantic" not in self.vjepa_hub_entry:
-            self.vjepa_feature_dim = 1280
-        elif "vit_gigantic" in self.vjepa_hub_entry:
-            self.vjepa_feature_dim = 1664
-        else:
-            self.vjepa_feature_dim = getattr(opt, "vjepa_feature_dim", 1024)
+        self.vjepa_feature_dim = get_vjepa_feature_dim(
+            self.vjepa_hub_entry,
+            fallback_dim=getattr(opt, "vjepa_feature_dim", 1024),
+        )
 
         if lucidflux_weights_path and os.path.exists(lucidflux_weights_path):
             logger.info(f"Loading pretrained LucidFlux weights from {lucidflux_weights_path}")
@@ -220,7 +176,11 @@ class LucidFlux2JEPA_model(BaseModel):
         revision = getattr(opt, "revision", None)
         variant = getattr(opt, "variant", None)
         self.transformer = Flux2Transformer2DModel.from_pretrained(
-            pretrained, subfolder="transformer", revision=revision, variant=variant
+            pretrained,
+            subfolder="transformer",
+            revision=revision,
+            variant=variant,
+            torch_dtype=weight_dtype,
         )
         self.transformer.requires_grad_(False)
         self.transformer.eval()
@@ -229,7 +189,11 @@ class LucidFlux2JEPA_model(BaseModel):
             logger.info("Gradient checkpointing enabled for frozen transformer")
 
         self.vae = AutoencoderKLFlux2.from_pretrained(
-            pretrained, subfolder="vae", revision=revision, variant=variant
+            pretrained,
+            subfolder="vae",
+            revision=revision,
+            variant=variant,
+            torch_dtype=weight_dtype,
         )
         self.vae.requires_grad_(False)
         self.vae.eval()
@@ -539,8 +503,8 @@ class LucidFlux2JEPA_model(BaseModel):
                 self.condition_branch.parameters(),
                 getattr(self.opt.train.optim, "max_grad_norm", 1.0),
             )
-        self.optimizers[0].step()
-        self.optimizers[0].zero_grad()
+            self.optimizers[0].step()
+            self.optimizers[0].zero_grad()
 
         return {"all": loss}
 
@@ -673,6 +637,7 @@ class LucidFlux2JEPA_model(BaseModel):
         lq = self.sample[lq_key]
         gt = self.sample[gt_key]
         bsz = lq.shape[0]
+        swinir_np = None
 
         if lq.shape[1] == 1:
             lq = einops.repeat(lq, "b 1 h w -> b 3 h w")
@@ -680,6 +645,12 @@ class LucidFlux2JEPA_model(BaseModel):
         out = self.forwardpass(
             lq, lq.shape[-2], lq.shape[-1], num_inference_steps
         )
+
+        if self.swinir is not None:
+            with torch.inference_mode():
+                lq_01 = torch.clamp((lq.float() + 1.0) / 2.0, 0.0, 1.0)
+                pre_01 = self.swinir(lq_01).detach().clamp(0.0, 1.0)
+            swinir_np = pre_01.cpu().float().numpy().clip(0, 1)
 
         lq_np = (lq.cpu().numpy() * 0.5 + 0.5).clip(0, 1)
         gt_np = (gt.cpu().numpy() * 0.5 + 0.5).clip(0, 1)
@@ -694,5 +665,13 @@ class LucidFlux2JEPA_model(BaseModel):
             images = np.stack(images)
             images = np.clip(images, 0, 1)
             log_image(self.opt, self.accelerator, images, f"{idx:04d}", self.global_step)
+            if swinir_np is not None:
+                log_image(
+                    self.opt,
+                    self.accelerator,
+                    swinir_np[i : i + 1],
+                    f"swinir_{idx:04d}",
+                    self.global_step,
+                )
             log_metrics(gt_np[i], out_np[i], self.opt.val.metrics, self.accelerator, self.global_step)
         return idx

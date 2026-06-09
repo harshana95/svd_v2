@@ -302,16 +302,19 @@ def log_image(args, accelerator, formatted_images, name, step):
         os.makedirs(os.path.join(args.path.experiments_root, 'images'), exist_ok=True)
         plt.imsave(os.path.join(args.path.experiments_root, 'images' , f"{name}_{step//1000:04d}k.jpg"), einops.rearrange(np.hstack(formatted_images),'c h w -> h w c'))
     name += '.jpg'
+    skip_comet_ml = False
+    for tracker in accelerator.trackers:
+        if tracker.name == "tensorboard":
+            skip_comet_ml = True
+            break
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             tracker.writer.add_images(name, formatted_images, step, dataformats="NCHW")
         elif tracker.name == "wandb":
             tracker.log({"validation": wandb.Image(formatted_images, caption=name)})
-        elif tracker.name == "comet_ml":
+        elif tracker.name == "comet_ml" and not skip_comet_ml:
             tracker.writer.log_image(einops.rearrange(formatted_images, 'n c h w -> c (n h) w'), name=name, step=step, image_channels="first")
-        else:
-            raise Exception(f"image logging not implemented for {tracker.name}")
-
+        
 def log_video(args, accelerator, video, name, step, fps=20):
     os.makedirs(os.path.join(args.path.experiments_root, 'videos'), exist_ok=True)
     filename = os.path.join(args.path.experiments_root, 'videos' , f"{name}_{step//1000:04d}k.mp4")
@@ -329,13 +332,24 @@ def log_video(args, accelerator, video, name, step, fps=20):
             raise Exception(f"video logging not implemented for {tracker.name}")
 
 def log_metric(accelerator, data, step):
+    def _to_scalar(value):
+        if isinstance(value, np.ndarray):
+            return float(np.mean(value))
+        if isinstance(value, (np.floating, np.integer)):
+            return float(value)
+        if torch.is_tensor(value):
+            return float(value.detach().float().mean().item())
+        return value
+
+    scalar_data = {k: _to_scalar(v) for k, v in data.items()}
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
-            raise NotImplementedError()
+            for key, value in scalar_data.items():
+                tracker.writer.add_scalar(key, value, step)
         elif tracker.name == "wandb":
-            raise NotImplementedError()
+            tracker.log(scalar_data, step=step)
         elif tracker.name == "comet_ml":
-            tracker.writer.log_metrics(data, step=step)
+            tracker.writer.log_metrics(scalar_data, step=step)
         else:
             raise Exception(f"image logging not implemented for {tracker.name}")
 

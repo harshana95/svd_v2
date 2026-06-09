@@ -5,7 +5,7 @@
 name: Motion
 model_type: ContextFluxBaseline_model
 tracker_project_name: Motion
-experiment_key: ContextFluxBaseline
+experiment_key: ContextFluxBaselineVLJEPA
 
 is_train: true
 report_to: comet_ml
@@ -40,10 +40,10 @@ precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embedd
 use_vjepa_condition: false
 
 # VL-JEPA semantic conditioning (replaces null prompt + V-JEPA patch tokens when enabled).
-# Download checkpoint: huggingface-cli download cun-bjy/open-vljepa best.pt --local-dir /scratch/gilbreth/wweligam/checkpoints/open-vljepa
+# Download checkpoint: huggingface-cli download cun-bjy/open-vljepa best.pt --local-dir /depot/chan129/users/harshana/weights/open-vljepa
 # Requires HF login + Llama 3.2 / Gemma license acceptance.
 use_vljepa_condition: true
-vljepa_checkpoint_path: /scratch/gilbreth/wweligam/checkpoints/open-vljepa/best.pt
+vljepa_checkpoint_path: /depot/chan129/users/harshana/weights/open-vljepa/best.pt
 vljepa_caption_query: "Describe the image in detail."
 vljepa_num_frames: 1
 vljepa_image_size: 256

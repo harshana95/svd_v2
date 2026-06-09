@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 from einops import rearrange, repeat
 from PIL import Image
-from torchvision import transforms
 
 
 def _expand_batch(tensor: torch.Tensor, batch_size: int, name: str) -> torch.Tensor:
@@ -64,11 +63,14 @@ def load_precomputed_embeddings(
     embeddings_path: str, device: torch.device | str
 ) -> dict:
     embeddings_data = torch.load(embeddings_path, map_location="cpu", weights_only=False)
-    return {
+    result = {
         "txt": embeddings_data["txt"].to(device),
-        "vec": embeddings_data["vec"].to(device),
+        "vec": embeddings_data["vec"].to(device) if embeddings_data.get("vec") is not None else None,
         "prompt": embeddings_data.get("prompt", "Unknown prompt"),
     }
+    if "txt_ids" in embeddings_data and embeddings_data["txt_ids"] is not None:
+        result["txt_ids"] = embeddings_data["txt_ids"].to(device)
+    return result
 
 
 def load_siglip_model(
@@ -84,56 +86,6 @@ def load_siglip_model(
     target = "cpu" if offload else device
     siglip_model.to(target).to(dtype=dtype)
     return siglip_model
-
-
-def load_vjepa2_model(
-    hub_entry: str,
-    device: torch.device | str,
-    dtype: torch.dtype,
-    offload: bool = False,
-    pretrained: bool = False,
-    **hub_kwargs,
-) -> nn.Module:
-    model_obj = torch.hub.load(
-        "facebookresearch/vjepa2",
-        hub_entry,
-        pretrained=pretrained,
-        **hub_kwargs,
-    )
-    vjepa_model = model_obj[0] if isinstance(model_obj, (tuple, list)) else model_obj
-    vjepa_model.eval()
-    target = "cpu" if offload else device
-    vjepa_model.to(target).to(dtype=dtype)
-    return vjepa_model
-
-
-def load_vjepa2_weights(model: nn.Module, checkpoint_path: str) -> None:
-    param = next(model.parameters(), None)
-    target_device = param.device if param is not None else None
-    target_dtype = param.dtype if param is not None else None
-
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if not isinstance(ckpt, dict):
-        raise ValueError("V-JEPA checkpoint must be a dict-like object.")
-
-    source = None
-    for key in ("ema_encoder", "target_encoder", "encoder", "model", "state_dict"):
-        if key in ckpt and isinstance(ckpt[key], dict):
-            source = ckpt[key]
-            break
-    if source is None:
-        source = ckpt
-
-    cleaned = {}
-    for key, val in source.items():
-        key = key.replace("module.", "").replace("backbone.", "")
-        cleaned[key] = val
-    model.load_state_dict(cleaned, strict=False)
-
-    # Re-apply the model dtype/device after checkpoint load so all parameters and
-    # buffers stay consistent with the runtime configuration.
-    if target_device is not None or target_dtype is not None:
-        model.to(device=target_device, dtype=target_dtype)
 
 
 def load_swinir(
@@ -232,79 +184,6 @@ def siglip_from_unit_tensor(
     else:
         result = result.to(dtype=out_dtype)
     return result
-
-
-def vjepa_from_unit_tensor(
-    x: torch.Tensor,
-    size: int = 384,
-    device: torch.device | str | None = None,
-    out_dtype: torch.dtype = torch.float32,
-    strict_range: bool = True,
-) -> torch.Tensor:
-    """Convert [0,1] tensor to V-JEPA-compatible ImageNet-normalized pixels."""
-    if x.ndim == 3:
-        x = x.unsqueeze(0)
-    assert x.ndim == 4 and x.shape[1] == 3, "Expected shape (B,3,H,W)"
-
-    if strict_range:
-        minv, maxv = float(x.min()), float(x.max())
-        if minv < -1e-3 or maxv > 1 + 1e-3:
-            raise ValueError(
-                f"Input must be in [0,1], got range [{minv:.4f},{maxv:.4f}]"
-            )
-
-    resize = transforms.Resize(
-        (size, size),
-        interpolation=transforms.InterpolationMode.BICUBIC,
-        antialias=True,
-    )
-    mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(1, 3, 1, 1)
-    x = resize(x.float())
-    x = (x - mean.to(x.device)) / std.to(x.device)
-
-    if device is not None:
-        x = x.to(device=device, dtype=out_dtype)
-    else:
-        x = x.to(dtype=out_dtype)
-    return x
-
-
-def extract_vjepa_tokens(
-    model: nn.Module,
-    pixel_values: torch.Tensor,
-    device: torch.device | str,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    """Run a V-JEPA encoder and flatten its output to [B, N, D]."""
-    if pixel_values.ndim == 4:
-        pixel_values = pixel_values.unsqueeze(2)
-    if pixel_values.ndim != 5:
-        raise ValueError(
-            f"Expected V-JEPA pixel_values to be 4D or 5D, got {pixel_values.ndim}D"
-        )
-
-    outputs = model(pixel_values.to(device=device, dtype=dtype))
-    if isinstance(outputs, torch.Tensor):
-        feats = outputs
-    elif isinstance(outputs, dict):
-        feats = outputs.get("last_hidden_state", outputs.get("x", outputs.get("features")))
-        if feats is None:
-            raise ValueError(f"Unsupported V-JEPA dict output keys: {list(outputs.keys())}")
-    elif isinstance(outputs, (tuple, list)) and len(outputs) > 0:
-        feats = outputs[0]
-    elif hasattr(outputs, "last_hidden_state"):
-        feats = outputs.last_hidden_state
-    else:
-        raise TypeError(f"Unsupported V-JEPA output type: {type(outputs)}")
-
-    if feats.ndim == 5:
-        feats = rearrange(feats, "b t h w d -> b (t h w) d")
-    elif feats.ndim == 4:
-        feats = rearrange(feats, "b t n d -> b (t n) d")
-    elif feats.ndim != 3:
-        raise ValueError(f"Unsupported V-JEPA feature shape: {tuple(feats.shape)}")
-    return feats
 
 
 def preprocess_lq_image(

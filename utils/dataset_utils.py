@@ -22,9 +22,14 @@ class DictWrapper:
         self.new_keys = new_keys if len(new_keys) > 0 else keys
 
     def __call__(self, sample):
+        if hasattr(self.f, "start_batch"):
+            self.f.start_batch(sample, self.keys)
+        
         for key, new_key in zip(self.keys, self.new_keys):
             sam = sample[key]
             sample[new_key] = [self.f(image) for image in sam]
+        if hasattr(self.f, "end_batch"):
+            self.f.end_batch()
         return sample
     
     def __str__(self):
@@ -163,13 +168,37 @@ class crop_random:
     def __init__(self, h, w):
         self.h = h
         self.w = w
+        self._batch_top = None
+        self._batch_left = None
+
+    def start_batch(self, sample=None, keys=None):
+        self._batch_top = None
+        self._batch_left = None
+
+    def end_batch(self):
+        self._batch_top = None
+        self._batch_left = None
+
+    def _sample_indices(self, image):
+        h, w = image.shape[-2], image.shape[-1]
+        if h <= self.h:
+            top = 0
+        else:
+            top = np.random.randint(0, h - self.h + 1)
+        if w <= self.w:
+            left = 0
+        else:
+            left = np.random.randint(0, w - self.w + 1)
+        return top, left
 
     def crop(self, image):
         h, w = image.shape[-2], image.shape[-1]
         if h <= self.h and w <= self.w:
             return image
-        top = np.random.randint(0, h - self.h)
-        left = np.random.randint(0, w - self.w)
+        if self._batch_top is None or self._batch_left is None:
+            self._batch_top, self._batch_left = self._sample_indices(image)
+        top = min(self._batch_top, max(0, h - self.h))
+        left = min(self._batch_left, max(0, w - self.w))
         return image[..., top:top+self.h, left:left+self.w]
 
     def __call__(self, sample):

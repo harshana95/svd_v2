@@ -99,15 +99,15 @@ network:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: ~
-  resume_from_checkpoint: ~ # latest
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/DAM_NAFNetRealColor_2026_04_24_12_46_47/
+  resume_from_checkpoint: latest
 
 # training settings
 train:
   optim:
     scale_lr: false
     use_8bit_adam: false
-    learning_rate: !!float 2e-4
+    learning_rate: !!float 5e-5
     adam_beta1: 0.9
     adam_beta2: 0.999
     adam_weight_decay: 0.01
@@ -123,9 +123,9 @@ train:
   loss: 1*MSE
   gradient_accumulation_steps: 1
   num_train_epochs: 10
-  batch_size: 8
+  batch_size: 16
 
-  max_train_steps: 50000
+  max_train_steps: 100000
   validation_steps: 500
   checkpointing_steps: 1000
   checkpoints_total_limit: 2

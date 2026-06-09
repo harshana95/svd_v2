@@ -228,6 +228,23 @@ class LucidFlux_model(BaseModel):
                 f"({100 * trainable / all_param:.1f}%)"
             )
 
+    def _run_swinir(self, lq_01: torch.Tensor) -> torch.Tensor:
+        if self.swinir is None:
+            return lq_01
+
+        _, _, h, w = lq_01.shape
+        window_size = int(getattr(self.swinir, "window_size", 1))
+        unshuffle_scale = int(getattr(self.swinir, "unshuffle_scale", 1) or 1)
+        required_multiple = max(1, window_size * unshuffle_scale)
+
+        pad_h = (required_multiple - (h % required_multiple)) % required_multiple
+        pad_w = (required_multiple - (w % required_multiple)) % required_multiple
+        if pad_h or pad_w:
+            lq_01 = F.pad(lq_01, (0, pad_w, 0, pad_h), mode="reflect")
+
+        pre_01 = self.swinir(lq_01).detach().clamp(0.0, 1.0)
+        return pre_01[:, :, :h, :w]
+
     # ── Null embedding generation (lazy, first call only) ────────────────
 
     def _ensure_null_embeddings(self):
@@ -359,7 +376,7 @@ class LucidFlux_model(BaseModel):
         with torch.no_grad():
             if self.swinir is not None:
                 lq_01 = torch.clamp((lq_image.float() + 1.0) / 2.0, 0.0, 1.0)
-                pre_01 = self.swinir(lq_01).detach().clamp(0.0, 1.0)
+                pre_01 = self._run_swinir(lq_01)
                 condition_cond_pre = (pre_01 * 2.0 - 1.0).to(self.weight_dtype)
             else:
                 pre_01 = None
@@ -470,7 +487,7 @@ class LucidFlux_model(BaseModel):
         condition_cond_lq = lq_image.to(dtype)
         if self.swinir is not None:
             lq_01 = torch.clamp((lq_image.float() + 1.0) / 2.0, 0.0, 1.0)
-            pre_01 = self.swinir(lq_01).detach().clamp(0.0, 1.0)
+            pre_01 = self._run_swinir(lq_01)
             condition_cond_pre = (pre_01 * 2.0 - 1.0).to(dtype)
         else:
             pre_01 = None
@@ -557,6 +574,7 @@ class LucidFlux_model(BaseModel):
         lq = self.sample[lq_key]
         gt = self.sample[gt_key]
         bsz = lq.shape[0]
+        swinir_np = None
 
         if lq.shape[1] == 1:
             lq = einops.repeat(lq, "b 1 h w -> b 3 h w")
@@ -564,6 +582,12 @@ class LucidFlux_model(BaseModel):
         out = self.forwardpass(
             lq, lq.shape[-2], lq.shape[-1], num_inference_steps
         )
+
+        if self.swinir is not None:
+            with torch.inference_mode():
+                lq_01 = torch.clamp((lq.float() + 1.0) / 2.0, 0.0, 1.0)
+                pre_01 = self._run_swinir(lq_01)
+            swinir_np = pre_01.cpu().float().numpy().clip(0, 1)
 
         # Convert to [0, 1] for logging
         lq_np = (lq.cpu().numpy() * 0.5 + 0.5).clip(0, 1)
@@ -579,5 +603,8 @@ class LucidFlux_model(BaseModel):
             images = np.stack(images)
             images = np.clip(images, 0, 1)
             log_image(self.opt, self.accelerator, images, f"{idx:04d}", self.global_step)
+            if swinir_np is not None:
+                log_image(self.opt, self.accelerator, swinir_np[i : i + 1], f"swinir_{idx:04d}", self.global_step)
+           
             log_metrics(gt_np[i], out_np[i], self.opt.val.metrics, self.accelerator, self.global_step)
         return idx

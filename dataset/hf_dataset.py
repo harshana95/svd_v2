@@ -15,9 +15,15 @@ class HuggingFaceDataset(data.Dataset):
         dataset_name, split = opt['name'], opt['split']
         self.gt_key = opt.gt_key
         self.lq_key = opt.lq_key
-        self.dataset = load_dataset(dataset_name, split=split, trust_remote_code=opt.get('trust_remote_code', None))
+        self.dataset = load_dataset(
+            dataset_name, 
+            split=split, 
+            trust_remote_code=opt.get('trust_remote_code', None), 
+            num_proc=opt.get('num_proc', 32)
+        )
         if opt.split_range is not None:
             self.dataset = self.dataset.select(range(int(opt.split_range[0]/100*len(self.dataset)), int(opt.split_range[1]/100*len(self.dataset))))
+        self.dataset = self.dataset.repeat(opt.get('repeat', 1))
         self.dataset = self.setup_dataset(self.dataset, opt)
 
     def __len__(self):
