@@ -15,6 +15,13 @@ from utils import log_image, log_metrics
 from utils.misc import log_metric
 from utils.loss import Loss
 
+from .clip_helpers import (
+    clip_from_unit_tensor,
+    extract_clip_tokens,
+    get_clip_feature_dim,
+    get_clip_num_patches,
+    load_clip_model,
+)
 from .cross_attn_projector import PatchCrossAttnProjector
 from .dino_helpers import (
     extract_dino_tokens,
@@ -73,6 +80,7 @@ class ContextProjectorAlign_model(BaseModel):
         self.use_vljepa_condition = _cfg_bool(opt, "use_vljepa_condition", False)
         self.use_vjepa_condition = _cfg_bool(opt, "use_vjepa_condition", True)
         self.use_dino_condition = _cfg_bool(opt, "use_dino_condition", False)
+        self.use_clip_condition = _cfg_bool(opt, "use_clip_condition", False)
         if self.use_vljepa_condition:
             if self.use_vjepa_condition:
                 logger.warning(
@@ -86,17 +94,41 @@ class ContextProjectorAlign_model(BaseModel):
                     "preferring VL-JEPA and disabling DINO."
                 )
                 self.use_dino_condition = False
-        elif self.use_vjepa_condition and self.use_dino_condition:
+            if self.use_clip_condition:
+                logger.warning(
+                    "Both use_vljepa_condition and use_clip_condition are enabled; "
+                    "preferring VL-JEPA and disabling CLIP."
+                )
+                self.use_clip_condition = False
+        elif self.use_vjepa_condition:
+            if self.use_dino_condition:
+                logger.warning(
+                    "Both use_vjepa_condition and use_dino_condition are enabled; "
+                    "preferring V-JEPA and disabling DINO."
+                )
+                self.use_dino_condition = False
+            if self.use_clip_condition:
+                logger.warning(
+                    "Both use_vjepa_condition and use_clip_condition are enabled; "
+                    "preferring V-JEPA and disabling CLIP."
+                )
+                self.use_clip_condition = False
+        elif self.use_dino_condition and self.use_clip_condition:
             logger.warning(
-                "Both use_vjepa_condition and use_dino_condition are enabled; "
-                "preferring V-JEPA and disabling DINO."
+                "Both use_dino_condition and use_clip_condition are enabled; "
+                "preferring DINO and disabling CLIP."
             )
-            self.use_dino_condition = False
+            self.use_clip_condition = False
 
-        if not (self.use_vljepa_condition or self.use_vjepa_condition or self.use_dino_condition):
+        if not (
+            self.use_vljepa_condition
+            or self.use_vjepa_condition
+            or self.use_dino_condition
+            or self.use_clip_condition
+        ):
             raise ValueError(
                 "ContextProjectorAlign_model requires one of "
-                "use_vljepa_condition, use_vjepa_condition, or use_dino_condition."
+                "use_vljepa_condition, use_vjepa_condition, use_dino_condition, or use_clip_condition."
             )
 
         weight_dtype = torch.float32
@@ -139,6 +171,19 @@ class ContextProjectorAlign_model(BaseModel):
                 fallback_dim=opt.get("dino_feature_dim") or 1024,
             )
 
+        self.clip_model_name = None
+        self.clip_image_size = None
+        self.clip_dtype = None
+        self.clip_feature_dim = None
+        if self.use_clip_condition:
+            self.clip_model_name = opt.get("clip_model_name") or "openai/clip-vit-large-patch14"
+            self.clip_image_size = opt.get("clip_image_size") or 224
+            self.clip_dtype = opt.get("clip_dtype") or torch.float32
+            self.clip_feature_dim = get_clip_feature_dim(
+                self.clip_model_name,
+                fallback_dim=opt.get("clip_feature_dim") or 1024,
+            )
+
         self.vljepa_model = None
         self.vljepa_query_tokenizer = None
         self.vljepa_cfg = None
@@ -166,6 +211,7 @@ class ContextProjectorAlign_model(BaseModel):
             self.vljepa_query_tokenizer, _ = load_vljepa_tokenizers(self.vljepa_cfg)
             self.vjepa = None
             self.dino = None
+            self.clip = None
         elif self.use_vjepa_condition:
             logger.info(
                 f"Loading V-JEPA 2.1 encoder from torch.hub entry {self.vjepa_hub_entry}"
@@ -183,6 +229,7 @@ class ContextProjectorAlign_model(BaseModel):
             self.vjepa.requires_grad_(False)
             self.vjepa.eval()
             self.dino = None
+            self.clip = None
             self.vljepa_model = None
         elif self.use_dino_condition:
             logger.info(f"Loading DINOv2 encoder from {self.dino_model_name}")
@@ -192,6 +239,17 @@ class ContextProjectorAlign_model(BaseModel):
                 self.dino_dtype,
             )
             self.vjepa = None
+            self.clip = None
+            self.vljepa_model = None
+        elif self.use_clip_condition:
+            logger.info(f"Loading CLIP vision encoder from {self.clip_model_name}")
+            self.clip = load_clip_model(
+                self.clip_model_name,
+                "cpu",
+                self.clip_dtype,
+            )
+            self.vjepa = None
+            self.dino = None
             self.vljepa_model = None
 
         swinir_path = _cfg(opt, "swinir_model_path", None)
@@ -213,6 +271,8 @@ class ContextProjectorAlign_model(BaseModel):
             self.vjepa = self.vjepa.to(self.accelerator.device, dtype=self.vjepa_dtype)
         if self.dino is not None:
             self.dino = self.dino.to(self.accelerator.device, dtype=self.dino_dtype)
+        if self.clip is not None:
+            self.clip = self.clip.to(self.accelerator.device, dtype=self.clip_dtype)
         if self.vljepa_model is not None:
             self.vljepa_model = self.vljepa_model.to(
                 self.accelerator.device, dtype=self.vljepa_dtype
@@ -255,8 +315,10 @@ class ContextProjectorAlign_model(BaseModel):
             embed_dim = VLJEPA_EMBED_DIM
         elif self.vjepa is not None:
             embed_dim = self.vjepa_feature_dim
-        else:
+        elif self.dino is not None:
             embed_dim = self.dino_feature_dim
+        else:
+            embed_dim = self.clip_feature_dim
 
         self.projector = PatchCrossAttnProjector(
             embed_dim=embed_dim,
@@ -273,12 +335,13 @@ class ContextProjectorAlign_model(BaseModel):
         self._logged_random_baseline = False
 
         logger.info(
-            "ContextProjectorAlign: source_image=%s decode_tokens=%s extractor=(vljepa=%s vjepa=%s dino=%s)",
+            "ContextProjectorAlign: source_image=%s decode_tokens=%s extractor=(vljepa=%s vjepa=%s dino=%s clip=%s)",
             self.source_image,
             self.decode_tokens,
             self.use_vljepa_condition,
             self.use_vjepa_condition,
             self.use_dino_condition,
+            self.use_clip_condition,
         )
         for m in self.models:
             all_param = sum(p.numel() for p in m.parameters())
@@ -373,7 +436,9 @@ class ContextProjectorAlign_model(BaseModel):
             return self._extract_vljepa_embedding(source_01)
         if self.vjepa is not None:
             return self._extract_vision_features(source_01)
-        return self._extract_dino_features(source_01)
+        if self.dino is not None:
+            return self._extract_dino_features(source_01)
+        return self._extract_clip_features(source_01)
 
     def _extract_vision_features(self, pre_01: torch.Tensor) -> torch.Tensor:
         with torch.inference_mode():
@@ -403,6 +468,21 @@ class ContextProjectorAlign_model(BaseModel):
                 dino_pixels,
                 device=self.accelerator.device,
                 dtype=self.dino_dtype,
+            )
+
+    def _extract_clip_features(self, pre_01: torch.Tensor) -> torch.Tensor:
+        with torch.inference_mode():
+            clip_pixels = clip_from_unit_tensor(
+                pre_01,
+                size=self.clip_image_size,
+                device=self.accelerator.device,
+                out_dtype=self.clip_dtype,
+            )
+            return extract_clip_tokens(
+                self.clip,
+                clip_pixels,
+                device=self.accelerator.device,
+                dtype=self.clip_dtype,
             )
 
     def _extract_vljepa_embedding(self, pre_01: torch.Tensor) -> torch.Tensor:

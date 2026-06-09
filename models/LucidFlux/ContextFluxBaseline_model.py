@@ -26,6 +26,13 @@ from .helpers import (
     initialize_transformer_lora,
     prepare_image_latents,
 )
+from .clip_helpers import (
+    clip_from_unit_tensor,
+    extract_clip_tokens,
+    get_clip_feature_dim,
+    get_clip_num_patches,
+    load_clip_model,
+)
 from .dino_helpers import (
     extract_dino_tokens,
     get_dino_feature_dim,
@@ -66,6 +73,7 @@ class ContextFluxBaseline_model(BaseModel):
         self.use_vljepa_condition = getattr(opt, "use_vljepa_condition", False)
         self.use_vjepa_condition = getattr(opt, "use_vjepa_condition", True)
         self.use_dino_condition = getattr(opt, "use_dino_condition", False)
+        self.use_clip_condition = getattr(opt, "use_clip_condition", False)
         if self.use_vljepa_condition:
             if self.use_vjepa_condition:
                 logger.warning(
@@ -79,12 +87,31 @@ class ContextFluxBaseline_model(BaseModel):
                     "preferring VL-JEPA semantic conditioning and disabling DINO patch tokens."
                 )
                 self.use_dino_condition = False
-        elif self.use_vjepa_condition and self.use_dino_condition:
+            if self.use_clip_condition:
+                logger.warning(
+                    "Both use_vljepa_condition and use_clip_condition are enabled; "
+                    "preferring VL-JEPA semantic conditioning and disabling CLIP patch tokens."
+                )
+                self.use_clip_condition = False
+        elif self.use_vjepa_condition:
+            if self.use_dino_condition:
+                logger.warning(
+                    "Both use_vjepa_condition and use_dino_condition are enabled; "
+                    "preferring V-JEPA patch tokens and disabling DINO."
+                )
+                self.use_dino_condition = False
+            if self.use_clip_condition:
+                logger.warning(
+                    "Both use_vjepa_condition and use_clip_condition are enabled; "
+                    "preferring V-JEPA patch tokens and disabling CLIP."
+                )
+                self.use_clip_condition = False
+        elif self.use_dino_condition and self.use_clip_condition:
             logger.warning(
-                "Both use_vjepa_condition and use_dino_condition are enabled; "
-                "preferring V-JEPA patch tokens and disabling DINO."
+                "Both use_dino_condition and use_clip_condition are enabled; "
+                "preferring DINO patch tokens and disabling CLIP."
             )
-            self.use_dino_condition = False
+            self.use_clip_condition = False
 
         weight_dtype = torch.float32
         if self.accelerator.mixed_precision == "fp16":
@@ -129,6 +156,19 @@ class ContextFluxBaseline_model(BaseModel):
             self.dino_feature_dim = get_dino_feature_dim(
                 self.dino_model_name,
                 fallback_dim=opt.get("dino_feature_dim") or 1024,
+            )
+
+        self.clip_model_name = None
+        self.clip_image_size = None
+        self.clip_dtype = None
+        self.clip_feature_dim = None
+        if self.use_clip_condition:
+            self.clip_model_name = opt.get("clip_model_name") or "openai/clip-vit-large-patch14"
+            self.clip_image_size = opt.get("clip_image_size") or 224
+            self.clip_dtype = opt.get("clip_dtype") or torch.float32
+            self.clip_feature_dim = get_clip_feature_dim(
+                self.clip_model_name,
+                fallback_dim=opt.get("clip_feature_dim") or 1024,
             )
 
         self.vljepa_model = None
@@ -191,6 +231,7 @@ class ContextFluxBaseline_model(BaseModel):
                 logger.info("VL-JEPA caption readout disabled via config.")
             self.vjepa = None
             self.dino = None
+            self.clip = None
             logger.info("V-JEPA patch conditioning disabled (VL-JEPA semantic path active).")
         elif self.use_vjepa_condition:
             logger.info(
@@ -209,6 +250,7 @@ class ContextFluxBaseline_model(BaseModel):
             self.vjepa.requires_grad_(False)
             self.vjepa.eval()
             self.dino = None
+            self.clip = None
         elif self.use_dino_condition:
             logger.info(f"Loading DINOv2 encoder from {self.dino_model_name}")
             self.dino = load_dinov2_model(
@@ -217,16 +259,33 @@ class ContextFluxBaseline_model(BaseModel):
                 self.dino_dtype,
             )
             self.vjepa = None
-        else:
-            logger.info("Vision patch conditioning disabled (no V-JEPA or DINO).")
+            self.clip = None
+        elif self.use_clip_condition:
+            logger.info(f"Loading CLIP vision encoder from {self.clip_model_name}")
+            self.clip = load_clip_model(
+                self.clip_model_name,
+                "cpu",
+                self.clip_dtype,
+            )
             self.vjepa = None
             self.dino = None
+        else:
+            logger.info("Vision patch conditioning disabled (no V-JEPA, DINO, or CLIP).")
+            self.vjepa = None
+            self.dino = None
+            self.clip = None
         
         swinir_path = getattr(opt, "swinir_model_path", None)
         self.swinir = None
         if swinir_path and os.path.exists(swinir_path):
             logger.info(f"Loading SwinIR from {swinir_path}")
             self.swinir = load_swinir("cpu", swinir_path, offload=False)
+
+        # Which image is fed to the frozen vision encoder during training.
+        # "lq"  — blurred input (default; SwinIR-refined if swinir is loaded)
+        # "gt"  — clean GT (oracle upper bound; GT is not available at inference)
+        # "pre" — SwinIR-enhanced LQ (intermediate; ignored if swinir is absent)
+        self.vjepa_source_image = getattr(opt, "vjepa_source_image", "lq")
 
         # loading precomputed embeddings
         embeddings_path = getattr(opt, "precomputed_embeddings_path", None)
@@ -314,6 +373,8 @@ class ContextFluxBaseline_model(BaseModel):
             self.vjepa = self.vjepa.to(self.accelerator.device, dtype=self.vjepa_dtype)
         if self.dino is not None:
             self.dino = self.dino.to(self.accelerator.device, dtype=self.dino_dtype)
+        if self.clip is not None:
+            self.clip = self.clip.to(self.accelerator.device, dtype=self.clip_dtype)
         if self.vljepa_model is not None:
             self.vljepa_model = self.vljepa_model.to(
                 self.accelerator.device, dtype=self.vljepa_dtype
@@ -400,15 +461,32 @@ class ContextFluxBaseline_model(BaseModel):
                 self.accelerator.device, dtype=weight_dtype
             )
             self.models.append(self.dino_projector)
+        elif self.clip is not None:
+            clip_num_slots = patch_projector_num_slots or get_clip_num_patches(
+                self.clip_model_name,
+                self.clip_image_size,
+            )
+            self.clip_projector = PatchCrossAttnProjector(
+                embed_dim=self.clip_feature_dim,
+                seq_dim=self.transformer_context_dim,
+                num_slots=clip_num_slots,
+                hidden_dim=projector_hidden,
+            )
+            self.clip_projector.requires_grad_(True)
+            self.clip_projector = self.clip_projector.to(
+                self.accelerator.device, dtype=weight_dtype
+            )
+            self.models.append(self.clip_projector)
         if self.lora_finetune:
             self.models.append(self.transformer)
 
         logger.info(
             "Condition toggles: use_vljepa_condition=%s, use_vjepa_condition=%s, "
-            "use_dino_condition=%s, use_condition_image_for_transformer=%s",
+            "use_dino_condition=%s, use_clip_condition=%s, use_condition_image_for_transformer=%s",
             self.use_vljepa_condition,
             self.use_vjepa_condition,
             self.use_dino_condition,
+            self.use_clip_condition,
             self.use_condition_image_for_transformer,
         )
 
@@ -475,6 +553,10 @@ class ContextFluxBaseline_model(BaseModel):
             trainable_params.extend(
                 p for p in self.dino_projector.parameters() if p.requires_grad
             )
+        elif self.clip is not None:
+            trainable_params.extend(
+                p for p in self.clip_projector.parameters() if p.requires_grad
+            )
         if self.lora_finetune:
             trainable_params.extend(
                 p for p in self.transformer.parameters() if p.requires_grad
@@ -520,6 +602,24 @@ class ContextFluxBaseline_model(BaseModel):
         elif not is_train and self.opt.val.patched:
             self.grids(keys=[lq_key, gt_key], opt=self.opt.val)
 
+    def _resolve_vjepa_source(
+        self,
+        gt_image: torch.Tensor,
+        lq_image: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return a [0,1] image tensor to feed into the frozen vision encoder.
+
+        "gt"  — clean ground truth (oracle; only valid during training).
+        "pre" — SwinIR-enhanced LQ (falls back to raw LQ if SwinIR is absent).
+        "lq"  — raw blurred input, optionally SwinIR-refined (default).
+        """
+        if self.vjepa_source_image == "gt":
+            return torch.clamp((gt_image.float() + 1.0) / 2.0, 0.0, 1.0)
+        lq_01 = torch.clamp((lq_image.float() + 1.0) / 2.0, 0.0, 1.0)
+        if self.swinir is not None:
+            return self._run_swinir(lq_01)
+        return lq_01
+
     def _extract_vision_features(self, pre_01: torch.Tensor) -> torch.Tensor:
         if self.vjepa is None:
             raise RuntimeError("V-JEPA is disabled but `_extract_vision_features` was called.")
@@ -552,6 +652,23 @@ class ContextFluxBaseline_model(BaseModel):
                 dino_pixels,
                 device=self.accelerator.device,
                 dtype=self.dino_dtype,
+            )
+
+    def _extract_clip_features(self, pre_01: torch.Tensor) -> torch.Tensor:
+        if self.clip is None:
+            raise RuntimeError("CLIP is disabled but `_extract_clip_features` was called.")
+        with torch.inference_mode():
+            clip_pixels = clip_from_unit_tensor(
+                pre_01,
+                size=self.clip_image_size,
+                device=self.accelerator.device,
+                out_dtype=self.clip_dtype,
+            )
+            return extract_clip_tokens(
+                self.clip,
+                clip_pixels,
+                device=self.accelerator.device,
+                dtype=self.clip_dtype,
             )
 
     def _extract_vljepa_embedding(self, pre_01: torch.Tensor) -> torch.Tensor:
@@ -653,8 +770,9 @@ class ContextFluxBaseline_model(BaseModel):
         semantic_embeds = None
         vision_image_pre_fts = None
         dino_fts = None
+        clip_fts = None
 
-        # Frozen encoders: single batched VAE encode + SwinIR/V-JEPA/VL-JEPA/DINO under inference_mode.
+        # Frozen encoders: single batched VAE encode + SwinIR/V-JEPA/VL-JEPA/DINO/CLIP under inference_mode.
         with torch.inference_mode():
             pixel_latents = encode_vae_image(
                 self.vae, gt_image.to(self.weight_dtype), None, flux2_pipe_cls=self.flux2_pipe_cls
@@ -673,11 +791,7 @@ class ContextFluxBaseline_model(BaseModel):
                 image_latents = None
                 image_latent_ids = None
 
-            lq_01 = torch.clamp((lq_image.float() + 1.0) / 2.0, 0.0, 1.0)
-            if self.swinir is not None:
-                pre_01 = self._run_swinir(lq_01)
-            else:
-                pre_01 = lq_01
+            pre_01 = self._resolve_vjepa_source(gt_image, lq_image)
 
             if self.use_vljepa_condition:
                 semantic_embeds = self._extract_vljepa_embedding(pre_01)
@@ -687,6 +801,8 @@ class ContextFluxBaseline_model(BaseModel):
                 vision_image_pre_fts = self._extract_vision_features(pre_01)
             elif self.use_dino_condition:
                 dino_fts = self._extract_dino_features(pre_01)
+            elif self.use_clip_condition:
+                clip_fts = self._extract_clip_features(pre_01)
 
         noise = torch.randn_like(pixel_latents)
         noisy_latents, timesteps, _ = get_noisy_model_input_and_timesteps(
@@ -719,6 +835,10 @@ class ContextFluxBaseline_model(BaseModel):
             elif self.use_dino_condition:
                 encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
                     dino_fts, self.dino_projector, txt, txt_ids
+                )
+            elif self.use_clip_condition:
+                encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
+                    clip_fts, self.clip_projector, txt, txt_ids
                 )
             else:
                 encoder_hidden_states = txt
@@ -763,6 +883,8 @@ class ContextFluxBaseline_model(BaseModel):
                 clip_params.extend(list(self.jepa_projector.parameters()))
             elif self.dino is not None:
                 clip_params.extend(list(self.dino_projector.parameters()))
+            elif self.clip is not None:
+                clip_params.extend(list(self.clip_projector.parameters()))
             if self.lora_finetune:
                 clip_params.extend(
                     p for p in self.transformer.parameters() if p.requires_grad
@@ -817,6 +939,7 @@ class ContextFluxBaseline_model(BaseModel):
         semantic_embeds = None
         vision_image_pre_fts = None
         dino_fts = None
+        clip_fts = None
 
         if not self.use_vljepa_condition:
             txt, txt_ids = self._prepare_text_inputs(bsz, device)
@@ -860,6 +983,8 @@ class ContextFluxBaseline_model(BaseModel):
                 vision_image_pre_fts = self._extract_vision_features(pre_01)
             elif self.use_dino_condition:
                 dino_fts = self._extract_dino_features(pre_01)
+            elif self.use_clip_condition:
+                clip_fts = self._extract_clip_features(pre_01)
 
         scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             self.opt.pretrained_model_name_or_path, subfolder="scheduler"
@@ -897,6 +1022,10 @@ class ContextFluxBaseline_model(BaseModel):
             elif self.use_dino_condition:
                 step_encoder_hidden_states, step_encoder_txt_ids = self._encode_patch_conditioning(
                     dino_fts, self.dino_projector, txt, txt_ids
+                )
+            elif self.use_clip_condition:
+                step_encoder_hidden_states, step_encoder_txt_ids = self._encode_patch_conditioning(
+                    clip_fts, self.clip_projector, txt, txt_ids
                 )
             else:
                 step_encoder_hidden_states = txt
