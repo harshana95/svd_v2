@@ -28,9 +28,18 @@ swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
 
 # V-JEPA 2.1 backbone configuration.
 vjepa_hub_entry: vjepa2_1_vit_large_384
-vjepa_image_size: 384
+vjepa_image_size: 512
 vjepa_pretrained: true
 vjepa_checkpoint_path: ~
+
+# Pretrained DualHeadPatchCrossAttnProjector from ContextProjectorAlign_JEPA (strict hot-plug after retrain).
+jepa_projector_weights_path: /scratch/gilbreth/wweligam/experiments/Motion/ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000/DualHeadPatchCrossAttnProjector_1/pytorch_model.bin
+
+# Which dual-head outputs to use: text | vae | both
+jepa_projector_heads: both
+
+# Crop size used for VAE-head latent grid (must match align train_crop_size for vae/both heads).
+train_crop_size: 512
 
 # Precomputed null prompt embeddings from the Klein text encoder.
 # If omitted, the model will generate empty-prompt embeddings on first use.

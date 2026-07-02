@@ -24,17 +24,32 @@ lucidflux_weights_path: ~
 swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
 
 vjepa_hub_entry: vjepa2_1_vit_large_384
-vjepa_image_size: 384
+vjepa_image_size: 512
 vjepa_pretrained: true
 vjepa_checkpoint_path: ~
 
 # Concatenate the last 4 V-JEPA block outputs → embed_dim = 4096.
 vjepa_num_layers: 4
 
+# Which dual-head outputs to use: text | vae | both
+jepa_projector_heads: text
+train_crop_size: 512
+
 precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
 
 use_vjepa_condition: true
+
+# VL-JEPA semantic conditioning (disabled for this ablation).
 use_vljepa_condition: false
+vljepa_checkpoint_path: /depot/chan129/users/harshana/weights/open-vljepa/best.pt
+vljepa_caption_query: "Describe the image in detail."
+vljepa_num_frames: 1
+vljepa_image_size: 256
+vljepa_readout_vocab: ram_tags
+vljepa_enable_readout: true
+vljepa_projector_hidden: 2048
+vljepa_num_text_slots: ~
+
 use_condition_image_for_transformer: false
 
 guidance_scale: 1.0

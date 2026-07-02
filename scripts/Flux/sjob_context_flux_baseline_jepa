@@ -1,0 +1,29 @@
+#!/bin/bash
+#SBATCH -p a100-80gb
+#SBATCH -A stanchan
+#SBATCH -N 1
+#SBATCH -n 32
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=128G
+#SBATCH --time=7-00:00:00
+#SBATCH --job-name ctx_jepa
+#SBATCH -o logs/slurm-%x-%j.out
+#SBATCH -e logs/slurm-%x-%j.err
+
+set -euo pipefail
+cd /home/wweligam/svd_v2
+mkdir -p logs
+
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/wweligam/home_env
+
+# Fail fast if SLURM did not allocate A100 GPUs
+if ! nvidia-smi --query-gpu=name --format=csv,noheader | grep -qi a100; then
+  echo "ERROR: A100 GPU required; got: $(nvidia-smi --query-gpu=name --format=csv,noheader)" >&2
+  exit 1
+fi
+
+accelerate launch \
+  --num_processes 2 \
+  --mixed_precision bf16 \
+  trainer.py -opt ./checkpoints/Flux/ContextFluxBaselineJEPA.yml

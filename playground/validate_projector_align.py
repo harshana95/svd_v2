@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test for ContextProjectorAlign (projector -> Flux VAE token alignment)."""
+"""Smoke test for ContextProjectorAlign (dual-head projector alignment)."""
 import argparse
 import os
 import sys
@@ -68,62 +68,158 @@ def main():
         print(f"[FAIL] {name}: {err}")
 
     if args.projector_only:
-        from models.LucidFlux.cross_attn_projector import PatchCrossAttnProjector
+        from models.LucidFlux.cross_attn_projector import (
+            DualHeadPatchCrossAttnProjector,
+            PatchCrossAttnProjector,
+            VaeToTextTargetBridge,
+            build_dual_head_projector,
+            load_jepa_projector_weights,
+            resample_text_tokens,
+        )
         from models.LucidFlux.dino_helpers import get_dino_num_patches
+        from models.LucidFlux.helpers import pack_projector_vae_tokens
         from models.LucidFlux.jepa_helpers import get_vjepa_num_patches
         from models.LucidFlux.vljepa_helpers import VLJEPA_EMBED_DIM
 
-        crop_size = int(getattr(opt, "train_crop_size", 512))
-        latent_spatial_divisor = 16
-        num_slots = (crop_size // latent_spatial_divisor) ** 2
-        token_dim = 128
+        text_dim = 7680
+        lat_h = lat_w = 32
+        vae_slots = lat_h * lat_w
+        vjepa_num_slots = get_vjepa_num_patches("vjepa2_1_vit_large_384", 384)
+        vjepa_grid = int(vjepa_num_slots**0.5)
 
-        jepa_num_patches = get_vjepa_num_patches("vjepa2_1_vit_large_384", 384)
-        jepa_proj = PatchCrossAttnProjector(
-            embed_dim=1024, seq_dim=token_dim, num_slots=num_slots
+        dual_proj = build_dual_head_projector(
+            embed_dim=1024,
+            text_seq_dim=text_dim,
+            text_num_slots=vjepa_num_slots,
+            vae_seq_dim=128,
+            vae_num_slots=vae_slots,
         )
-        jepa_tokens = torch.randn(2, jepa_num_patches, 1024)
-        jepa_out = jepa_proj(jepa_tokens)
-        assert jepa_out.shape == (2, num_slots, token_dim), (
-            f"V-JEPA shape mismatch: {tuple(jepa_out.shape)}"
+        jepa_tokens = torch.randn(2, vjepa_num_slots, 1024)
+        dual_out = dual_proj(jepa_tokens, heads="both")
+        assert dual_out["text"].shape == (2, vjepa_num_slots, text_dim), (
+            f"Text head shape mismatch: {tuple(dual_out['text'].shape)}"
+        )
+        assert dual_out["vae"].shape == (2, vae_slots, 128), (
+            f"VAE head shape mismatch: {tuple(dual_out['vae'].shape)}"
+        )
+        text_only = dual_proj(jepa_tokens, heads="text")
+        assert text_only.shape == (2, vjepa_num_slots, text_dim)
+        vae_only = dual_proj(jepa_tokens, heads="vae")
+        assert vae_only.shape == (2, vae_slots, 128)
+
+        flux_text = torch.randn(2, 512, text_dim)
+        resampled = resample_text_tokens(flux_text, vjepa_num_slots)
+        assert resampled.shape == (2, vjepa_num_slots, text_dim), (
+            f"Resample shape mismatch: {tuple(resampled.shape)}"
+        )
+
+        class _MockPipe:
+            @staticmethod
+            def _prepare_image_ids(latents):
+                return torch.zeros(1, latents[0].shape[2] * latents[0].shape[3], 3)
+
+        vae_latents, vae_ids = pack_projector_vae_tokens(
+            dual_out["vae"],
+            _MockPipe,
+            lat_h,
+            lat_w,
+            128,
+            batch_size=2,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        assert vae_latents.shape == (2, vae_slots, 128)
+        assert vae_ids.shape[0] == 2
+
+        bridge = VaeToTextTargetBridge(
+            latent_token_dim=128,
+            text_dim=text_dim,
+            lat_h=lat_h,
+            lat_w=lat_w,
+            target_h=vjepa_grid,
+            target_w=vjepa_grid,
+        )
+        vae_tokens = torch.randn(2, vae_slots, 128)
+        bridge_out = bridge(vae_tokens)
+        assert bridge_out.shape == (2, vjepa_num_slots, text_dim), (
+            f"Bridge shape mismatch: {tuple(bridge_out.shape)}"
         )
 
         dino_num_patches = get_dino_num_patches("facebook/dinov2-large", 518)
-        dino_proj = PatchCrossAttnProjector(
-            embed_dim=1024, seq_dim=token_dim, num_slots=num_slots
+        dino_dual = build_dual_head_projector(
+            embed_dim=1024,
+            text_seq_dim=text_dim,
+            text_num_slots=dino_num_patches,
+            vae_seq_dim=128,
+            vae_num_slots=vae_slots,
         )
         dino_tokens = torch.randn(2, dino_num_patches, 1024)
-        dino_out = dino_proj(dino_tokens)
-        assert dino_out.shape == (2, num_slots, token_dim), (
-            f"DINO shape mismatch: {tuple(dino_out.shape)}"
-        )
+        dino_out = dino_dual(dino_tokens, heads="both")
+        assert dino_out["text"].shape == (2, dino_num_patches, text_dim)
 
+        vljepa_num_slots = 512
         vljepa_proj = PatchCrossAttnProjector(
-            embed_dim=VLJEPA_EMBED_DIM, seq_dim=token_dim, num_slots=num_slots
+            embed_dim=VLJEPA_EMBED_DIM,
+            seq_dim=text_dim,
+            num_slots=vljepa_num_slots,
         )
         s_y = torch.randn(2, VLJEPA_EMBED_DIM)
         vljepa_out = vljepa_proj(s_y)
-        assert vljepa_out.shape == (2, num_slots, token_dim), (
+        assert vljepa_out.shape == (2, vljepa_num_slots, text_dim), (
             f"VL-JEPA shape mismatch: {tuple(vljepa_out.shape)}"
         )
 
-        target = torch.randn(2, num_slots, token_dim)
-        pred_before = vljepa_proj(s_y).detach()
-        mse_before = torch.nn.functional.mse_loss(pred_before, target).item()
-        opt_fn = torch.optim.Adam(vljepa_proj.parameters(), lr=1e-3)
+        target_text = torch.randn(2, vjepa_num_slots, text_dim)
+        target_vae = torch.randn(2, vae_slots, 128)
+        pred_before = dual_proj(jepa_tokens, heads="both")
+        mse_before = (
+            torch.nn.functional.mse_loss(pred_before["text"], target_text)
+            + torch.nn.functional.mse_loss(pred_before["vae"], target_vae)
+        ).item()
+        opt_fn = torch.optim.Adam(dual_proj.parameters(), lr=1e-3)
         for _ in range(5):
             opt_fn.zero_grad()
-            pred = vljepa_proj(s_y)
-            loss = torch.nn.functional.mse_loss(pred, target)
+            pred = dual_proj(jepa_tokens, heads="both")
+            loss = torch.nn.functional.mse_loss(pred["text"], target_text) + torch.nn.functional.mse_loss(
+                pred["vae"], target_vae
+            )
             loss.backward()
             opt_fn.step()
-        mse_after = torch.nn.functional.mse_loss(vljepa_proj(s_y).detach(), target).item()
+        pred_after = dual_proj(jepa_tokens, heads="both")
+        mse_after = (
+            torch.nn.functional.mse_loss(pred_after["text"], target_text)
+            + torch.nn.functional.mse_loss(pred_after["vae"], target_vae)
+        ).item()
         assert mse_after < mse_before, (
             f"MSE did not decrease: before={mse_before:.4f} after={mse_after:.4f}"
         )
 
-        print(f"[PASS] projector-only shape checks (num_slots={num_slots}, token_dim={token_dim})")
+        ckpt_path = "/tmp/validate_dual_projector.bin"
+        torch.save(dual_proj.state_dict(), ckpt_path)
+        reload_proj = build_dual_head_projector(
+            embed_dim=1024,
+            text_seq_dim=text_dim,
+            text_num_slots=vjepa_num_slots,
+            vae_seq_dim=128,
+            vae_num_slots=vae_slots,
+        )
+        load_jepa_projector_weights(reload_proj, ckpt_path)
+        baseline_reload = build_dual_head_projector(
+            embed_dim=1024,
+            text_seq_dim=text_dim,
+            text_num_slots=vjepa_num_slots,
+            vae_seq_dim=128,
+            vae_num_slots=vae_slots,
+        )
+        load_jepa_projector_weights(baseline_reload, ckpt_path)
+        os.remove(ckpt_path)
+
+        print(
+            f"[PASS] projector-only dual-head shape checks "
+            f"(text_slots={vjepa_num_slots}, vae_slots={vae_slots}, text_dim={text_dim})"
+        )
         print(f"[PASS] MSE decreased over 5 steps: {mse_before:.4f} -> {mse_after:.4f}")
+        print("[PASS] strict hot-plug reload into align + baseline dual projector")
         return
 
     try:

@@ -4,6 +4,7 @@ import glob
 import importlib
 import os
 import random
+import time
 import einops
 import numpy as np
 import torch
@@ -13,9 +14,8 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, CLIPTextModel
 from diffusers import AutoencoderKL, UNet2DConditionModel, DDPMScheduler, EMAModel, T2IAdapter
 from peft import LoraConfig
-from torchvision import transforms
 from pipelines.OSEDiffPipeline import OSEDiffPipeline, hpf_adapter_input
-from ram import inference_ram as inference
+from models.OneStepDiffusion.prompt_extractors import build_prompt_extractor
 
 from torch.utils.data import DataLoader, Subset
 from models.base_model import BaseModel
@@ -56,7 +56,7 @@ def load_model_hook(models, input_dir):
         # model.load_state_dict(load_model.state_dict())
         # del load_model
         
-def initialize_unet(unet):
+def initialize_unet(unet, rank=128):
     l_target_modules_encoder, l_target_modules_decoder, l_modules_others = [], [], []
     l_grep = ["to_k", "to_q", "to_v", "to_out.0", "conv", "conv1", "conv2", "conv_in", "conv_shortcut", "conv_out", "proj_out", "proj_in", "ff.net.2", "ff.net.0.proj"]
     for n, p in unet.named_parameters():
@@ -73,16 +73,16 @@ def initialize_unet(unet):
                 l_modules_others.append(n.replace(".weight",""))
                 break
 
-    lora_conf_encoder = LoraConfig(r=4, init_lora_weights="gaussian",target_modules=l_target_modules_encoder)
-    lora_conf_decoder = LoraConfig(r=4, init_lora_weights="gaussian",target_modules=l_target_modules_decoder)
-    lora_conf_others = LoraConfig(r=4, init_lora_weights="gaussian",target_modules=l_modules_others)
+    lora_conf_encoder = LoraConfig(r=rank, init_lora_weights="gaussian",target_modules=l_target_modules_encoder)
+    lora_conf_decoder = LoraConfig(r=rank, init_lora_weights="gaussian",target_modules=l_target_modules_decoder)
+    lora_conf_others = LoraConfig(r=rank, init_lora_weights="gaussian",target_modules=l_modules_others)
     unet.add_adapter(lora_conf_encoder, adapter_name="default_encoder")
     unet.add_adapter(lora_conf_decoder, adapter_name="default_decoder")
     unet.add_adapter(lora_conf_others, adapter_name="default_others")
     unet.set_adapter(['default_encoder', 'default_decoder', 'default_others'])  
     return unet
 
-def initialize_vae(vae):
+def initialize_vae(vae, rank=4):
     l_target_modules_encoder = []
     l_grep = ["conv1","conv2","conv_in", "conv_shortcut", "conv", "conv_out", "to_k", "to_q", "to_v", "to_out.0"]
     for n, p in vae.named_parameters():
@@ -94,23 +94,10 @@ def initialize_vae(vae):
             elif ('quant_conv' in n) and ('post_quant_conv' not in n):
                 l_target_modules_encoder.append(n.replace(".weight",""))
     
-    lora_conf_encoder = LoraConfig(r=4, init_lora_weights="gaussian",target_modules=l_target_modules_encoder)
+    lora_conf_encoder = LoraConfig(r=rank, init_lora_weights="gaussian",target_modules=l_target_modules_encoder)
     vae.add_adapter(lora_conf_encoder, adapter_name="default_encoder")
     vae.set_adapter(['default_encoder'])
     return vae
-
-def get_caption_generator(model_path, **kwargs):
-    # init vlm model
-    from ram.models.ram_lora import ram
-    ram_transforms = transforms.Compose([
-        transforms.Resize((384, 384)),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    model_vlm = ram(pretrained=model_path,
-            pretrained_condition=kwargs.get('dape_path'),
-            image_size=384,
-            vit='swin_l')
-    return model_vlm, ram_transforms
 
 def eps_to_mu(scheduler, model_output, sample, timesteps):
     alphas_cumprod = scheduler.alphas_cumprod.to(device=sample.device, dtype=sample.dtype)
@@ -154,18 +141,17 @@ class OSEDiff_onedataset_model(BaseModel):
 
         if self.use_hf_loss:
             self.MASK_CLIP = 5e-1
-            hf_noise_ratio = 1.0
-            hf_noise_power = 1.0
-            hf_noise_piston = 0.0
+            alpha = self.opt.train.get('alpha', 1.0)
+            gamma = self.opt.train.get('gamma', 1.0)
+            beta = self.opt.train.get('beta', 0.0)
             # build weight map for FT transformed image
             res = opt.image_resolution[0] // 8 # //8 because we are adding noise in latent space
-            nr = hf_noise_ratio
-            x = torch.linspace(-1, 1, res, device='cuda') * nr
-            y = torch.linspace(-1, 1, res, device='cuda') * nr
+            x = torch.linspace(-1, 1, res, device='cuda') * alpha
+            y = torch.linspace(-1, 1, res, device='cuda') * alpha
             grid_x, grid_y = torch.meshgrid(x, y) # Create 2D coordinate grids
             radial_distances = torch.sqrt(grid_x**2 + grid_y**2) # Calculate radial distances
-            radial_distances = radial_distances**hf_noise_power
-            radial_distances = (radial_distances + hf_noise_piston).clip(0, 1)  # more than 1 should be clipped
+            radial_distances = radial_distances**gamma
+            radial_distances = (radial_distances + beta).clip(0, 1)  # more than 1 should be clipped
             self.HPF = radial_distances.unsqueeze(0).unsqueeze(0)
             
         self.neg_caption = "painting, oil painting, illustration, drawing, art, sketch, cartoon, CG Style, 3D render, unreal engine, blurring, dirty, messy, worst quality, low quality, frames, watermark, signature, jpeg artifacts, deformed, lowres, over-smooth"
@@ -230,13 +216,16 @@ class OSEDiff_onedataset_model(BaseModel):
             print(f"{'='*50} NO EMA")
 
         if opt.train.lora_finetune:
+            self.lora_rank = int(opt.train.get("lora_rank", 128))
+            self.vae_lora_rank = int(opt.train.get("vae_lora_rank", 4))
             self.unet.requires_grad_(False)
             self.unet_update.requires_grad_(False)
             self.vae.requires_grad_(False)
 
-            self.unet = initialize_unet(self.unet)
-            self.unet_update = initialize_unet(self.unet_update)
-            self.vae = initialize_vae(self.vae)
+            self.unet = initialize_unet(self.unet, rank=self.lora_rank)
+            self.unet_update = initialize_unet(self.unet_update, rank=self.lora_rank)
+            self.vae = initialize_vae(self.vae, rank=self.vae_lora_rank)
+            print(f"LoRA finetune enabled: unet_rank={self.lora_rank}, vae_rank={self.vae_lora_rank}")
             
             self.vae.set_adapter(['default_encoder'])
             self.unet.set_adapter(['default_encoder', 'default_decoder', 'default_others'])
@@ -266,13 +255,9 @@ class OSEDiff_onedataset_model(BaseModel):
         self.models.append(self.unet)
         self.models.append(self.unet_update)
 
-        # get captioning model
-        self.model_vlm, self.model_vlm_transforms = get_caption_generator(opt.vlm_model_path,
-                                                                          dape_path=opt.dape_path)
-        self.model_vlm.eval()
+        self.prompt_extractor = build_prompt_extractor(opt)
+        self.prompt_extractor.setup(self.accelerator.device)
 
-        # move fixed models to gpu
-        self.model_vlm.to(self.accelerator.device, dtype=torch.float16)
         self.unet_fix.to(self.accelerator.device, dtype=torch.float16)
         
         
@@ -465,6 +450,59 @@ class OSEDiff_onedataset_model(BaseModel):
                 # 'output_mean': output_image.mean(),
                 }
     
+    def _get_captions(self, images, bsz):
+        if images.shape[1] == 1:
+            images = einops.repeat(images, 'b 1 h w -> b 3 h w')
+        images = images.clip(-1, 1)
+        return self.prompt_extractor.get_captions(images, bsz)
+
+    def _get_prompt_embeds(self, images, bsz):
+        captions = self._get_captions(images, bsz)
+        return encode_prompt(captions, self.tokenizer, self.text_encoder)
+
+    @torch.no_grad()
+    def calculate_flops(self, *args, n=10, **kwargs):
+        """Measure restoration FLOPs; VLM captioning is excluded."""
+        if self.FLOPS_SAVED:
+            return
+
+        try:
+            from torch.utils.flop_counter import FlopCounterMode
+        except ImportError:
+            self.logger.warning("torch.utils.flop_counter is not installed; cannot compute FLOPs.")
+            return
+
+        lq1 = args[0]
+        bsz = lq1.shape[0]
+        prompt_embeds = encode_prompt([""] * bsz, self.tokenizer, self.text_encoder)
+
+        flop_counter = FlopCounterMode(display=False, depth=None)
+        with flop_counter:
+            self.forwardpass(*args, prompt_embeds=prompt_embeds)
+
+        total_flops = flop_counter.get_total_flops()
+        table = flop_counter.get_table()
+
+        time_list = []
+        for _ in range(n):
+            start_time = time.time()
+            self.forwardpass(*args, prompt_embeds=prompt_embeds)
+            end_time = time.time()
+            time_list.append(end_time - start_time)
+
+        with open(os.path.join(self.opt.path.experiments_root, self.opt.path.logging_dir, "flops_table.txt"), "w") as f:
+            f.write(table)
+        with open(os.path.join(self.opt.path.experiments_root, self.opt.path.logging_dir, "flops_summary.txt"), "w") as f:
+            f.writelines([
+                f"Total FLOPs: {total_flops / 1e9:.3f} GFLOPs\n",
+                f"Average time taken to forward pass: {np.mean(time_list)} seconds\n",
+                f"std: {np.std(time_list)} seconds\n",
+                f"min: {np.min(time_list)} seconds\n",
+                f"max: {np.max(time_list)} seconds\n",
+            ])
+
+        self.FLOPS_SAVED = True
+
     def optimize_parameters(self):
         gt_key = self.dataloader.dataset.gt_key
         lq_key = self.dataloader.dataset.lq_key
@@ -482,9 +520,7 @@ class OSEDiff_onedataset_model(BaseModel):
         if gt_1.shape[1] == 1:
             gt_1 = einops.repeat(gt_1, 'b 1 h w -> b 3 h w')
  
-        gt_ram = self.model_vlm_transforms(image_1*0.5+0.5)
-        caption = inference(gt_ram.to(dtype=torch.float16), self.model_vlm)
-        prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
+        prompt_embeds = self._get_prompt_embeds(image_1, bsz)
         neg_prompt_embeds = encode_prompt([self.neg_caption]*bsz, self.tokenizer, self.text_encoder)
         
         vae_input = image_1
@@ -508,14 +544,13 @@ class OSEDiff_onedataset_model(BaseModel):
 
         return self._optimize_parameters(denoised_latents, gt_1, prompt_embeds, neg_prompt_embeds)
 
-    def forwardpass(self, lq1):
+    def forwardpass(self, lq1, prompt_embeds=None):
         if lq1.shape[1] == 1:
             lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
 
         bsz = lq1.shape[0]
-        lq_ram = self.model_vlm_transforms(lq1 * 0.5 + 0.5)
-        caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-        prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
+        if prompt_embeds is None:
+            prompt_embeds = self._get_prompt_embeds(lq1, bsz)
 
         output = self.pipeline(
             lq1,
@@ -560,6 +595,9 @@ class OSEDiff_onedataset_model(BaseModel):
     def validate_step(self, batch, idx,lq_key,gt_key):
         self.feed_data(batch, is_train=False)
         self.calculate_flops(torch.randn(1, 3, 512, 512).to(self.device))
+
+        caption_input = self.sample[lq_key + '_original'] if self.opt.val.patched else self.sample[lq_key]
+        captions = self._get_captions(caption_input, caption_input.shape[0])
         
         if self.opt.val.patched:
             b,c,h,w = self.original_size[lq_key]
@@ -587,6 +625,7 @@ class OSEDiff_onedataset_model(BaseModel):
         out = out.cpu().numpy()*0.5+0.5
         for i in range(len(gt)):
             idx += 1
+            print(f"[validation {idx:04d}] prompt: {captions[i]}", flush=True)
             image1 = [lq1[i], gt[i], out[i]]
             for j in range(len(image1)):
                 if image1[j].shape[0] == 1:

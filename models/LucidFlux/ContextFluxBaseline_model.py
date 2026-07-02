@@ -22,8 +22,10 @@ from .helpers import (
     decode_latents_flux,
     encode_vae_image,
     get_flux2_pipeline_class,
+    get_latent_token_layout,
     get_noisy_model_input_and_timesteps,
     initialize_transformer_lora,
+    pack_projector_vae_tokens,
     prepare_image_latents,
 )
 from .clip_helpers import (
@@ -59,7 +61,14 @@ from .vljepa_helpers import (
     preprocess_vljepa_image,
     tokenize_vljepa_query,
 )
-from .cross_attn_projector import PatchCrossAttnProjector
+from .cross_attn_projector import (
+    DualHeadPatchCrossAttnProjector,
+    PatchCrossAttnProjector,
+    build_dual_head_projector,
+    load_jepa_projector_weights,
+    resolve_transformer_context_dim,
+    resolve_vjepa_projector_slots,
+)
 from .src.flux.lucidflux import (
     load_precomputed_embeddings,
     load_swinir,
@@ -129,11 +138,7 @@ class ContextFluxBaseline_model(BaseModel):
             pretrained, subfolder="transformer"
         )
         # DictAsMember returns None for missing keys via __getattr__, so use .get().
-        text_in_dim = opt.get("text_in_dim")
-        if text_in_dim is None:
-            text_in_dim = transformer_config.get("joint_attention_dim")
-        if text_in_dim is None:
-            text_in_dim = 15360
+        text_in_dim = resolve_transformer_context_dim(opt, transformer_config)
         default_guidance_scale = 1.0 if "klein" in pretrained.lower() else 4.0
 
         self.vjepa_hub_entry = getattr(opt, "vjepa_hub_entry", "vjepa2_1_vit_large_384")
@@ -145,7 +150,7 @@ class ContextFluxBaseline_model(BaseModel):
             self.vjepa_hub_entry,
             fallback_dim=getattr(opt, "vjepa_feature_dim", 1024),
         )
-        self.vjepa_num_layers = int(getattr(opt, "vjepa_num_layers", 1))
+        self.vjepa_num_layers = int(opt.get("vjepa_num_layers") or 1)
         self.vjepa_feature_dim *= self.vjepa_num_layers
 
         self.dino_model_name = None
@@ -368,6 +373,23 @@ class ContextFluxBaseline_model(BaseModel):
         self.transformer_rope_dims = len(
             getattr(self.transformer.config, "axes_dims_rope", (32, 32, 32, 32))
         )
+        train_crop_size = int(getattr(opt, "train_crop_size", 512) or 512)
+        (
+            self.num_latent_slots,
+            self.latent_token_dim,
+            self.latent_spatial_divisor,
+            self.lat_h,
+            self.lat_w,
+        ) = get_latent_token_layout(
+            train_crop_size,
+            self.vae,
+            transformer_config=transformer_config,
+        )
+        self.jepa_projector_heads = getattr(opt, "jepa_projector_heads", "text")
+        if self.jepa_projector_heads not in ("text", "vae", "both"):
+            raise ValueError(
+                f"jepa_projector_heads must be text, vae, or both; got {self.jepa_projector_heads!r}"
+            )
 
         self.transformer = self.transformer.to(self.accelerator.device, dtype=weight_dtype)
         self.vae = self.vae.to(self.accelerator.device, dtype=weight_dtype)
@@ -433,20 +455,26 @@ class ContextFluxBaseline_model(BaseModel):
             )
             self.models.append(self.vljepa_projector)
         elif self.vjepa is not None:
-            jepa_num_slots = patch_projector_num_slots or get_vjepa_num_patches(
+            jepa_num_slots = patch_projector_num_slots or resolve_vjepa_projector_slots(
+                opt,
                 self.vjepa_hub_entry,
                 self.vjepa_image_size,
             )
-            self.jepa_projector = PatchCrossAttnProjector(
+            self.jepa_projector = build_dual_head_projector(
                 embed_dim=self.vjepa_feature_dim,
-                seq_dim=self.transformer_context_dim,
-                num_slots=jepa_num_slots,
+                text_seq_dim=self.transformer_context_dim,
+                text_num_slots=jepa_num_slots,
+                vae_seq_dim=self.latent_token_dim,
+                vae_num_slots=self.num_latent_slots,
                 hidden_dim=projector_hidden,
             )
             self.jepa_projector.requires_grad_(True)
             self.jepa_projector = self.jepa_projector.to(
                 self.accelerator.device, dtype=weight_dtype
             )
+            weights_path = opt.get("jepa_projector_weights_path")
+            if weights_path and weights_path not in (None, "~") and os.path.exists(weights_path):
+                load_jepa_projector_weights(self.jepa_projector, weights_path)
             self.models.append(self.jepa_projector)
         elif self.dino is not None:
             dino_num_slots = patch_projector_num_slots or get_dino_num_patches(
@@ -485,12 +513,14 @@ class ContextFluxBaseline_model(BaseModel):
 
         logger.info(
             "Condition toggles: use_vljepa_condition=%s, use_vjepa_condition=%s, "
-            "use_dino_condition=%s, use_clip_condition=%s, use_condition_image_for_transformer=%s",
+            "use_dino_condition=%s, use_clip_condition=%s, use_condition_image_for_transformer=%s, "
+            "jepa_projector_heads=%s",
             self.use_vljepa_condition,
             self.use_vjepa_condition,
             self.use_dino_condition,
             self.use_clip_condition,
             self.use_condition_image_for_transformer,
+            self.jepa_projector_heads,
         )
 
         for m in self.models:
@@ -711,14 +741,12 @@ class ContextFluxBaseline_model(BaseModel):
             txt_ids = txt_ids.expand(batch_size, -1, -1)
         return txt.to(device), txt_ids.to(device=device, dtype=self.weight_dtype)
 
-    def _encode_patch_conditioning(
+    def _concat_text_conditioning(
         self,
-        vision_fts: torch.Tensor,
-        projector: torch.nn.Module,
+        embeds: torch.Tensor,
         txt: torch.Tensor,
         txt_ids: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        embeds = projector(vision_fts.to(self.weight_dtype))
         ids = self.flux2_pipe_cls._prepare_text_ids(embeds)
         if ids.ndim == 2:
             ids = ids.unsqueeze(0)
@@ -727,6 +755,52 @@ class ContextFluxBaseline_model(BaseModel):
         ids = ids.to(device=txt_ids.device, dtype=txt_ids.dtype)
         ids[:, :, 0] = 1
         return torch.cat([txt, embeds], dim=1), torch.cat([txt_ids, ids], dim=1)
+
+    def _encode_patch_conditioning(
+        self,
+        vision_fts: torch.Tensor,
+        projector: torch.nn.Module,
+        txt: torch.Tensor,
+        txt_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(projector, DualHeadPatchCrossAttnProjector):
+            embeds = projector(vision_fts.to(self.weight_dtype), heads="text")
+        else:
+            embeds = projector(vision_fts.to(self.weight_dtype))
+        return self._concat_text_conditioning(embeds, txt, txt_ids)
+
+    def _apply_jepa_projector_heads(
+        self,
+        vision_fts: torch.Tensor,
+        txt: torch.Tensor,
+        txt_ids: torch.Tensor,
+        batch_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        heads = self.jepa_projector_heads
+        encoder_hidden_states = txt
+        encoder_txt_ids = txt_ids
+        vae_latents = None
+        vae_ids = None
+
+        if heads in ("text", "both"):
+            encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
+                vision_fts, self.jepa_projector, txt, txt_ids
+            )
+        if heads in ("vae", "both"):
+            pred_vae = self.jepa_projector(
+                vision_fts.to(self.weight_dtype), heads="vae"
+            )
+            vae_latents, vae_ids = pack_projector_vae_tokens(
+                pred_vae,
+                self.flux2_pipe_cls,
+                self.lat_h,
+                self.lat_w,
+                self.latent_token_dim,
+                batch_size,
+                self.accelerator.device,
+                self.weight_dtype,
+            )
+        return encoder_hidden_states, encoder_txt_ids, vae_latents, vae_ids
 
     def _log_vljepa_readout(self, semantic_embeds: torch.Tensor):
         if self.vljepa_readout is None or not self.accelerator.is_main_process:
@@ -824,6 +898,8 @@ class ContextFluxBaseline_model(BaseModel):
         ).to(device=self.accelerator.device, dtype=self.weight_dtype)
 
         latent_token_count = packed_transformer_input.shape[1]
+        jepa_vae_latents = None
+        jepa_vae_ids = None
 
         # prepare text / semantic conditioning
         if self.use_vljepa_condition:
@@ -833,8 +909,13 @@ class ContextFluxBaseline_model(BaseModel):
         else:
             txt, txt_ids = self._prepare_text_inputs(bsz, self.accelerator.device)
             if self.use_vjepa_condition:
-                encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
-                    vision_image_pre_fts, self.jepa_projector, txt, txt_ids
+                (
+                    encoder_hidden_states,
+                    encoder_txt_ids,
+                    jepa_vae_latents,
+                    jepa_vae_ids,
+                ) = self._apply_jepa_projector_heads(
+                    vision_image_pre_fts, txt, txt_ids, bsz
                 )
             elif self.use_dino_condition:
                 encoder_hidden_states, encoder_txt_ids = self._encode_patch_conditioning(
@@ -847,6 +928,8 @@ class ContextFluxBaseline_model(BaseModel):
             else:
                 encoder_hidden_states = txt
                 encoder_txt_ids = txt_ids
+                jepa_vae_latents = None
+                jepa_vae_ids = None
 
         transformer_guidance = self._transformer_guidance(bsz, self.accelerator.device)
         normalized_timesteps = (timesteps.float() / 1000).to(self.weight_dtype)
@@ -856,6 +939,9 @@ class ContextFluxBaseline_model(BaseModel):
         if image_latents is not None:
             latent_model_input = torch.cat([packed_transformer_input, image_latents], dim=1)
             latent_image_ids = torch.cat([transformer_image_ids, image_latent_ids], dim=1)
+        if self.use_vjepa_condition and jepa_vae_latents is not None:
+            latent_model_input = torch.cat([latent_model_input, jepa_vae_latents], dim=1)
+            latent_image_ids = torch.cat([latent_image_ids, jepa_vae_ids], dim=1)
 
         model_pred = self.transformer(
             hidden_states=latent_model_input.to(self.weight_dtype),
@@ -957,6 +1043,8 @@ class ContextFluxBaseline_model(BaseModel):
         latents = torch.randn(bsz, lat_c, lat_h, lat_w, device=device, dtype=dtype)
 
         transformer_guidance = self._transformer_guidance(bsz, device)
+        jepa_vae_latents = None
+        jepa_vae_ids = None
         with torch.inference_mode():
             if self.use_condition_image_for_transformer:
                 image_latents, image_latent_ids = prepare_image_latents(
@@ -985,6 +1073,14 @@ class ContextFluxBaseline_model(BaseModel):
                 )
             elif self.use_vjepa_condition:
                 vision_image_pre_fts = self._extract_vision_features(pre_01)
+                (
+                    encoder_hidden_states,
+                    encoder_txt_ids,
+                    jepa_vae_latents,
+                    jepa_vae_ids,
+                ) = self._apply_jepa_projector_heads(
+                    vision_image_pre_fts, txt, txt_ids, bsz
+                )
             elif self.use_dino_condition:
                 dino_fts = self._extract_dino_features(pre_01)
             elif self.use_clip_condition:
@@ -1020,9 +1116,8 @@ class ContextFluxBaseline_model(BaseModel):
                 step_encoder_hidden_states = encoder_hidden_states
                 step_encoder_txt_ids = encoder_txt_ids
             elif self.use_vjepa_condition:
-                step_encoder_hidden_states, step_encoder_txt_ids = self._encode_patch_conditioning(
-                    vision_image_pre_fts, self.jepa_projector, txt, txt_ids
-                )
+                step_encoder_hidden_states = encoder_hidden_states
+                step_encoder_txt_ids = encoder_txt_ids
             elif self.use_dino_condition:
                 step_encoder_hidden_states, step_encoder_txt_ids = self._encode_patch_conditioning(
                     dino_fts, self.dino_projector, txt, txt_ids
@@ -1040,6 +1135,9 @@ class ContextFluxBaseline_model(BaseModel):
             if image_latents is not None:
                 latent_model_input = torch.cat([packed_transformer_input, image_latents], dim=1)
                 latent_image_ids = torch.cat([transformer_image_ids, image_latent_ids], dim=1)
+            if jepa_vae_latents is not None:
+                latent_model_input = torch.cat([latent_model_input, jepa_vae_latents], dim=1)
+                latent_image_ids = torch.cat([latent_image_ids, jepa_vae_ids], dim=1)
 
             noise_pred = self.transformer(
                 hidden_states=latent_model_input,

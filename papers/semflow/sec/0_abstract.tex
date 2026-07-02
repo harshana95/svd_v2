@@ -1,0 +1,38 @@
+\begin{abstract}
+Blind image deblurring under extreme degradation fails for two
+fundamental reasons: deterministic regression networks overfit to
+training blur distributions and collapse beyond their training range,
+while flow-based generative methods assume either a reliable posterior
+mean or a known degradation operator---both of which break down when
+blur is severe.
+%
+We identify the root cause geometrically: under extreme blur, the
+straight-line trajectory of standard Rectified Flow (RF) traverses
+low-probability regions of the clean image manifold, producing
+artefacts or semantic incoherence.
+%
+We propose \textbf{SemFlow}, a framework that reshapes the RF velocity
+field using spatially grounded semantic tokens extracted by a
+Joint Embedding Predictive Architecture (JEPA) encoder.
+%
+Unlike CLIP-based conditioning, JEPA is pre-trained to predict
+abstract representations from masked and corrupted inputs, making its
+context encoder structurally robust to the extreme degradation it must
+encode.
+%
+Multi-scale JEPA patch tokens are injected into the velocity field via
+time-varying cross-attention, steering the flow trajectory toward
+semantically consistent sharp-image regions without any blur kernel
+information.
+%
+An auxiliary JEPA self-consistency loss further constrains restored
+outputs to match ground-truth abstract structure, complementing
+pixel-level and perceptual objectives.
+%
+We define an operational extreme-blur regime (effective kernel diameter
+$\geq\!33$\,px), introduce the \textbf{Extreme-GoPro-5$\times$}
+benchmark constructed with physics-based synthetic blur, and demonstrate
+through ablation that trajectory curvature induced by JEPA conditioning
+is the decisive factor distinguishing SemFlow from prior flow-based
+and VLM-conditioned baselines.
+\end{abstract}

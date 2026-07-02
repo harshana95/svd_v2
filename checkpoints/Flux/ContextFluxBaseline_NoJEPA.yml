@@ -39,6 +39,9 @@ precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embedd
 # Toggle V-JEPA token conditioning appended to transformer text context.
 use_vjepa_condition: false
 
+# VL-JEPA semantic conditioning (disabled).
+use_vljepa_condition: false
+
 # Toggle condition-image latent tokens appended to transformer latent input.
 use_condition_image_for_transformer: true
 

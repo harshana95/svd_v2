@@ -1,5 +1,4 @@
-# Projector alignment: V-JEPA patch tokens -> Flux VAE packed tokens (direct MSE).
-# Trains only PatchCrossAttnProjector; VAE and V-JEPA are frozen.
+# Dual-head projector alignment: V-JEPA (SwinIR-pre source) -> Flux text + VAE heads.
 #
 
 name: Motion
@@ -23,10 +22,19 @@ source_image: pre
 target_image: gt
 train_crop_size: 512
 
+align_vae_loss_weight: 1.0
+align_text_encoder_loss_weight: 1.0
+align_bridge_loss_weight: 0.0
+# VGG/perceptual loss on the decoded prediction (pixel space) to sharpen output.
+align_perceptual_loss_weight: 0.1
+caption_model_name: Qwen/Qwen3-VL-8B-Instruct
+caption_instruction: "Describe this image in one concise caption."
+caption_on_the_fly: true
+
 swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
 
 vjepa_hub_entry: vjepa2_1_vit_large_384
-vjepa_image_size: 384
+vjepa_image_size: 512
 vjepa_pretrained: true
 vjepa_checkpoint_path: ~
 vjepa_projector_hidden: 2048

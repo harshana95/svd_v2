@@ -13,7 +13,7 @@ except ImportError:
 from models.base_model import BaseModel
 from utils import log_image, log_metrics
 from utils.misc import log_metric
-from utils.loss import Loss
+from utils.loss import Loss, Perceptual_loss
 
 from .clip_helpers import (
     clip_from_unit_tensor,
@@ -22,7 +22,17 @@ from .clip_helpers import (
     get_clip_num_patches,
     load_clip_model,
 )
-from .cross_attn_projector import PatchCrossAttnProjector
+from .caption_helpers import Flux2TextEncoder, ImageCaptioner, resample_text_tokens
+from .cross_attn_projector import (
+    PatchCrossAttnProjector,
+    VaeToTextTargetBridge,
+    build_dual_head_projector,
+    build_flux_patch_projector,
+    resolve_clip_projector_slots,
+    resolve_dino_projector_slots,
+    resolve_transformer_context_dim,
+    resolve_vjepa_projector_slots,
+)
 from .dino_helpers import (
     extract_dino_tokens,
     get_dino_feature_dim,
@@ -73,7 +83,7 @@ def _cfg_int(opt, key, default):
 
 
 class ContextProjectorAlign_model(BaseModel):
-    """Train a projector to map context-extractor tokens to Flux VAE packed tokens."""
+    """Train a projector to map context-extractor tokens into Flux conditioning space."""
 
     def __init__(self, opt, logger):
         super(ContextProjectorAlign_model, self).__init__(opt, logger)
@@ -148,7 +158,35 @@ class ContextProjectorAlign_model(BaseModel):
 
         self.source_image = _cfg(opt, "source_image", "gt")
         self.train_crop_size = _cfg_int(opt, "train_crop_size", 512)
-        self.decode_tokens = _cfg_bool(opt.val, "decode_tokens", True)
+        self.use_text_projector_target = not self.use_vljepa_condition
+        self.decode_tokens = _cfg_bool(
+            opt.val,
+            "decode_tokens",
+            self.use_text_projector_target,
+        )
+        self.align_vae_loss_weight = float(_cfg(opt, "align_vae_loss_weight", 1.0))
+        self.align_text_encoder_loss_weight = float(
+            _cfg(opt, "align_text_encoder_loss_weight", 1.0)
+        )
+        self.align_bridge_loss_weight = float(_cfg(opt, "align_bridge_loss_weight", 0.0))
+        self.align_perceptual_loss_weight = float(
+            _cfg(opt, "align_perceptual_loss_weight", 0.0)
+        )
+        self.caption_model_name = _cfg(
+            opt, "caption_model_name", "Qwen/Qwen3-VL-8B-Instruct"
+        )
+        self.caption_instruction = _cfg(
+            opt,
+            "caption_instruction",
+            "Describe this image in one concise caption.",
+        )
+        self.caption_on_the_fly = _cfg_bool(opt, "caption_on_the_fly", True)
+        self.captioner = None
+        self.flux_text_encoder = None
+        self.text_num_slots = None
+        self.transformer_context_dim = resolve_transformer_context_dim(
+            opt, transformer_config
+        )
 
         self.vjepa_hub_entry = _cfg(opt, "vjepa_hub_entry", "vjepa2_1_vit_large_384")
         self.vjepa_image_size = _cfg_int(opt, "vjepa_image_size", 384)
@@ -158,7 +196,7 @@ class ContextProjectorAlign_model(BaseModel):
             self.vjepa_hub_entry,
             fallback_dim=_cfg_int(opt, "vjepa_feature_dim", 1024),
         )
-        self.vjepa_num_layers = int(getattr(opt, "vjepa_num_layers", 1))
+        self.vjepa_num_layers = _cfg_int(opt, "vjepa_num_layers", 1)
         self.vjepa_feature_dim *= self.vjepa_num_layers
 
         self.dino_model_name = None
@@ -270,6 +308,15 @@ class ContextProjectorAlign_model(BaseModel):
         self.vae.eval()
         self.vae = self.vae.to(self.accelerator.device, dtype=weight_dtype)
 
+        # The perceptual loss backprops through the frozen VAE decoder, which is
+        # memory-heavy. Block-level gradient checkpointing (gated on
+        # torch.is_grad_enabled(), not module.training, so it works on the frozen
+        # eval VAE) + slicing (decode one batch item at a time) keep peak memory
+        # bounded. Both are no-ops during inference_mode validation decodes.
+        if self.is_train and self.align_perceptual_loss_weight > 0:
+            self.vae.enable_gradient_checkpointing()
+            self.vae.enable_slicing()
+
         if self.vjepa is not None:
             self.vjepa = self.vjepa.to(self.accelerator.device, dtype=self.vjepa_dtype)
         if self.dino is not None:
@@ -323,24 +370,78 @@ class ContextProjectorAlign_model(BaseModel):
         else:
             embed_dim = self.clip_feature_dim
 
-        self.projector = PatchCrossAttnProjector(
-            embed_dim=embed_dim,
-            seq_dim=self.latent_token_dim,
-            num_slots=self.num_latent_slots,
-            hidden_dim=projector_hidden,
-        )
+        self.target_bridge = None
+        if self.use_text_projector_target:
+            if self.vjepa is not None:
+                self.text_num_slots = resolve_vjepa_projector_slots(
+                    opt, self.vjepa_hub_entry, self.vjepa_image_size
+                )
+            elif self.dino is not None:
+                self.text_num_slots = resolve_dino_projector_slots(
+                    opt, self.dino_model_name, self.dino_image_size
+                )
+            else:
+                self.text_num_slots = resolve_clip_projector_slots(
+                    opt, self.clip_model_name, self.clip_image_size
+                )
+            target_grid = int(self.text_num_slots**0.5)
+            self.target_bridge = VaeToTextTargetBridge(
+                latent_token_dim=self.latent_token_dim,
+                text_dim=self.transformer_context_dim,
+                lat_h=self.lat_h,
+                lat_w=self.lat_w,
+                target_h=target_grid,
+                target_w=target_grid,
+            )
+            self.target_bridge = self.target_bridge.to(
+                self.accelerator.device, dtype=weight_dtype
+            )
+            self.target_bridge.requires_grad_(True)
+            self.projector = build_dual_head_projector(
+                embed_dim=embed_dim,
+                text_seq_dim=self.transformer_context_dim,
+                text_num_slots=self.text_num_slots,
+                vae_seq_dim=self.latent_token_dim,
+                vae_num_slots=self.num_latent_slots,
+                hidden_dim=projector_hidden,
+            )
+        else:
+            self.projector = build_flux_patch_projector(
+                embed_dim=embed_dim,
+                transformer_context_dim=self.latent_token_dim,
+                num_slots=self.num_latent_slots,
+                hidden_dim=projector_hidden,
+            )
+
         self.projector = self.projector.to(self.accelerator.device, dtype=weight_dtype)
         self.models.append(self.projector)
 
-        if self.is_train:
+        if self.is_train and not self.use_text_projector_target:
             self.criterion = Loss(opt.train.loss).to(self.accelerator.device)
+
+        # Optional VGG/perceptual loss on the decoded prediction (pixel space).
+        # Requires decoding the predicted VAE tokens through the frozen VAE each
+        # step, so it only runs when the weight is > 0.
+        self.perceptual_loss = None
+        if self.is_train and self.align_perceptual_loss_weight > 0:
+            self.perceptual_loss = Perceptual_loss().to(self.accelerator.device)
 
         self._logged_random_baseline = False
 
         logger.info(
-            "ContextProjectorAlign: source_image=%s decode_tokens=%s extractor=(vljepa=%s vjepa=%s dino=%s clip=%s)",
+            "ContextProjectorAlign: source_image=%s decode_tokens=%s "
+            "text_slots=%s vae_slots=%d text_dim=%d vae_dim=%d "
+            "loss_weights=(vae=%.2f te=%.2f bridge=%.2f) "
+            "extractor=(vljepa=%s vjepa=%s dino=%s clip=%s)",
             self.source_image,
             self.decode_tokens,
+            self.text_num_slots,
+            self.num_latent_slots,
+            self.transformer_context_dim,
+            self.latent_token_dim,
+            self.align_vae_loss_weight,
+            self.align_text_encoder_loss_weight,
+            self.align_bridge_loss_weight,
             self.use_vljepa_condition,
             self.use_vjepa_condition,
             self.use_dino_condition,
@@ -358,6 +459,10 @@ class ContextProjectorAlign_model(BaseModel):
         opt = self.opt.train.optim
         optimizer_type = _cfg(opt, "type", "adamw").lower()
         trainable_params = [p for p in self.projector.parameters() if p.requires_grad]
+        if self.target_bridge is not None:
+            trainable_params.extend(
+                p for p in self.target_bridge.parameters() if p.requires_grad
+            )
 
         if optimizer_type == "adafactor":
             from transformers import Adafactor
@@ -510,16 +615,67 @@ class ContextProjectorAlign_model(BaseModel):
                 query_mask,
             )
 
+    def _ensure_captioner(self):
+        if self.captioner is not None or not self.caption_on_the_fly:
+            return
+        self.logger.info("Loading VLM captioner from %s", self.caption_model_name)
+        self.captioner = ImageCaptioner(
+            model_name=self.caption_model_name,
+            instruction=self.caption_instruction,
+            device=self.accelerator.device,
+            dtype=self.weight_dtype,
+        )
+
+    def _ensure_flux_text_encoder(self):
+        if self.flux_text_encoder is not None:
+            return
+        self.logger.info(
+            "Loading Flux2 text encoder from %s",
+            self.opt.pretrained_model_name_or_path,
+        )
+        self.flux_text_encoder = Flux2TextEncoder(
+            pretrained_model_name_or_path=self.opt.pretrained_model_name_or_path,
+            device=self.accelerator.device,
+            dtype=self.weight_dtype,
+        )
+
+    def _caption_gt_images(self, gt_image: torch.Tensor) -> list[str]:
+        if not self.caption_on_the_fly:
+            return [""] * gt_image.shape[0]
+        self._ensure_captioner()
+        gt_01 = torch.clamp((gt_image.float() + 1.0) / 2.0, 0.0, 1.0)
+        return self.captioner.caption_batch(gt_01)
+
+    def _compute_flux_text_target(self, gt_image: torch.Tensor) -> torch.Tensor:
+        self._ensure_flux_text_encoder()
+        captions = self._caption_gt_images(gt_image)
+        text_tokens = self.flux_text_encoder.encode(captions)
+        return resample_text_tokens(text_tokens, self.text_num_slots)
+
     def _compute_target_tokens(self, gt_image: torch.Tensor):
         with torch.inference_mode():
-            target_tokens, patchified_latents = encode_vae_packed_tokens(
+            vae_tokens, patchified_latents = encode_vae_packed_tokens(
                 self.vae,
                 gt_image.to(self.weight_dtype),
                 flux2_pipe_cls=self.flux2_pipe_cls,
                 generator=None,
             )
-        # Clone so MSE loss can use targets outside inference_mode autograd.
-        return target_tokens.clone(), patchified_latents.clone()
+        if self.use_text_projector_target:
+            with torch.inference_mode():
+                text_te_target = self._compute_flux_text_target(gt_image)
+            # Clone frozen targets so MSE loss can run autograd on predictions only.
+            vae_target = vae_tokens.detach().clone()
+            text_te_target = text_te_target.detach().clone()
+            bridge_target = None
+            if self.target_bridge is not None:
+                bridge_target = self.target_bridge(vae_target)
+            return {
+                "vae": vae_target,
+                "text_te": text_te_target,
+                "text_bridge": bridge_target,
+                "patchified_latents": patchified_latents.detach().clone(),
+            }
+        return vae_tokens.detach().clone(), patchified_latents.detach().clone()
 
     def _token_cosine_mean(
         self, pred_tokens: torch.Tensor, target_tokens: torch.Tensor
@@ -532,15 +688,38 @@ class ContextProjectorAlign_model(BaseModel):
         self,
         gt_image: torch.Tensor,
         lq_image: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ):
         _, source_01 = self._resolve_source_image(gt_image, lq_image)
-        target_tokens, patchified_latents = self._compute_target_tokens(gt_image)
+        targets = self._compute_target_tokens(gt_image)
 
         with torch.inference_mode():
             source_tokens = self._extract_source_tokens(source_01)
 
-        pred_tokens = self.projector(source_tokens.to(self.weight_dtype).clone())
-        return pred_tokens, target_tokens, patchified_latents, source_01
+        source_tokens = source_tokens.to(self.weight_dtype).clone()
+        if self.use_text_projector_target:
+            pred = self.projector(source_tokens, heads="both")
+            return pred, targets, source_01
+
+        vae_tokens, patchified_latents = targets
+        pred_tokens = self.projector(source_tokens)
+        return pred_tokens, vae_tokens, patchified_latents, source_01
+
+    def _compute_dual_head_losses(self, pred: dict, targets: dict) -> dict:
+        loss_vae = F.mse_loss(pred["vae"].float(), targets["vae"].float())
+        loss_text_te = F.mse_loss(pred["text"].float(), targets["text_te"].float())
+        losses = {
+            "loss_vae": loss_vae,
+            "loss_text_te": loss_text_te,
+            "all": (
+                self.align_vae_loss_weight * loss_vae
+                + self.align_text_encoder_loss_weight * loss_text_te
+            ),
+        }
+        if self.align_bridge_loss_weight > 0 and targets.get("text_bridge") is not None:
+            loss_bridge = F.mse_loss(pred["text"].float(), targets["text_bridge"].float())
+            losses["loss_text_bridge"] = loss_bridge
+            losses["all"] = losses["all"] + self.align_bridge_loss_weight * loss_bridge
+        return losses
 
     def optimize_parameters(self):
         gt_key = self.dataloader.dataset.gt_key
@@ -554,8 +733,18 @@ class ContextProjectorAlign_model(BaseModel):
         if lq_image.shape[1] == 1:
             lq_image = einops.repeat(lq_image, "b 1 h w -> b 3 h w")
 
-        pred_tokens, target_tokens, _, _ = self._forward_align(gt_image, lq_image)
-        losses = self.criterion(pred_tokens, target_tokens)
+        forward_out = self._forward_align(gt_image, lq_image)
+        if self.use_text_projector_target:
+            pred, targets, _ = forward_out
+            losses = self._compute_dual_head_losses(pred, targets)
+            pred_tokens = pred["text"]
+            target_tokens = targets["text_te"]
+            pred_vae_tokens = pred["vae"]
+            patchified_latents = targets["patchified_latents"]
+        else:
+            pred_tokens, target_tokens, patchified_latents, _ = forward_out
+            losses = self.criterion(pred_tokens, target_tokens)
+            pred_vae_tokens = pred_tokens
 
         if (
             self.global_step == 0
@@ -572,10 +761,31 @@ class ContextProjectorAlign_model(BaseModel):
             )
             self._logged_random_baseline = True
 
+        if self.perceptual_loss is not None:
+            # Decode predicted VAE tokens to RGB (gradients flow through the
+            # frozen VAE back to the projector) and compare to the GT crop.
+            pred_image = decode_packed_vae_tokens(
+                pred_vae_tokens,
+                patchified_latents,
+                self.vae,
+                flux2_pipe_cls=self.flux2_pipe_cls,
+            )
+            loss_perceptual = self.perceptual_loss(
+                pred_image.float(),
+                gt_image.to(pred_image.device).float(),
+            )
+            losses["loss_perceptual"] = loss_perceptual
+            losses["all"] = (
+                losses["all"] + self.align_perceptual_loss_weight * loss_perceptual
+            )
+
         self.accelerator.backward(losses["all"])
         if self.accelerator.sync_gradients:
+            grad_params = list(self.projector.parameters())
+            if self.target_bridge is not None:
+                grad_params.extend(self.target_bridge.parameters())
             self.accelerator.clip_grad_norm_(
-                self.projector.parameters(),
+                grad_params,
                 getattr(self.opt.train.optim, "max_grad_norm", 1.0),
             )
             self.optimizers[0].step()
@@ -583,14 +793,25 @@ class ContextProjectorAlign_model(BaseModel):
 
         token_cosine = self._token_cosine_mean(pred_tokens, target_tokens)
         if self.accelerator.is_main_process:
-            log_metric(
-                self.accelerator,
-                {
-                    "token_mse": losses["all"].detach(),
-                    "token_cosine": token_cosine.detach(),
-                },
-                self.global_step,
-            )
+            metrics = {
+                "token_mse": losses["all"].detach(),
+                "token_cosine": token_cosine.detach(),
+            }
+            if "loss_perceptual" in losses:
+                metrics["loss_perceptual"] = losses["loss_perceptual"].detach()
+            if self.use_text_projector_target:
+                metrics["loss_vae"] = losses["loss_vae"].detach()
+                metrics["loss_text_te"] = losses["loss_text_te"].detach()
+                if "loss_text_bridge" in losses:
+                    metrics["loss_text_bridge"] = losses["loss_text_bridge"].detach()
+                if targets.get("text_bridge") is not None:
+                    metrics["text_cosine_to_flux_encoder"] = self._token_cosine_mean(
+                        pred["text"], targets["text_te"]
+                    ).detach()
+                    metrics["text_cosine_to_bridge"] = self._token_cosine_mean(
+                        pred["text"], targets["text_bridge"]
+                    ).detach()
+            log_metric(self.accelerator, metrics, self.global_step)
 
         return losses
 
@@ -607,32 +828,60 @@ class ContextProjectorAlign_model(BaseModel):
         if lq.shape[1] == 1:
             lq = einops.repeat(lq, "b 1 h w -> b 3 h w")
 
-        pred_tokens, target_tokens, patchified_latents, source_01 = self._forward_align(
-            gt, lq
-        )
-        token_mse = F.mse_loss(pred_tokens.float(), target_tokens.float())
-        token_cosine = self._token_cosine_mean(pred_tokens, target_tokens)
-        if self.accelerator.is_main_process:
-            log_metric(
-                self.accelerator,
-                {
+        forward_out = self._forward_align(gt, lq)
+        if self.use_text_projector_target:
+            pred, targets, source_01 = forward_out
+            pred_tokens = pred["text"]
+            target_tokens = targets["text_te"]
+            patchified_latents = targets["patchified_latents"]
+            pred_vae = pred["vae"]
+            vae_target = targets["vae"]
+            token_mse = F.mse_loss(pred_tokens.float(), target_tokens.float())
+            token_cosine = self._token_cosine_mean(pred_tokens, target_tokens)
+            vae_mse = F.mse_loss(pred_vae.float(), vae_target.float())
+            if self.accelerator.is_main_process:
+                val_metrics = {
                     "val_token_mse": token_mse,
                     "val_token_cosine": token_cosine,
-                },
-                self.global_step,
-            )
+                    "val_vae_mse": vae_mse,
+                    "val_text_cosine_to_flux_encoder": self._token_cosine_mean(
+                        pred_tokens, target_tokens
+                    ),
+                }
+                if targets.get("text_bridge") is not None:
+                    val_metrics["val_text_cosine_to_bridge"] = self._token_cosine_mean(
+                        pred_tokens, targets["text_bridge"]
+                    )
+                log_metric(self.accelerator, val_metrics, self.global_step)
+            decode_pred = pred_vae
+            decode_target = vae_target
+        else:
+            pred_tokens, target_tokens, patchified_latents, source_01 = forward_out
+            token_mse = F.mse_loss(pred_tokens.float(), target_tokens.float())
+            token_cosine = self._token_cosine_mean(pred_tokens, target_tokens)
+            if self.accelerator.is_main_process:
+                log_metric(
+                    self.accelerator,
+                    {
+                        "val_token_mse": token_mse,
+                        "val_token_cosine": token_cosine,
+                    },
+                    self.global_step,
+                )
+            decode_pred = pred_tokens
+            decode_target = target_tokens
 
         if not self.decode_tokens:
             return idx + bsz
 
         teacher_decode = decode_packed_vae_tokens(
-            target_tokens,
+            decode_target,
             patchified_latents,
             self.vae,
             flux2_pipe_cls=self.flux2_pipe_cls,
         )
         pred_decode = decode_packed_vae_tokens(
-            pred_tokens,
+            decode_pred,
             patchified_latents,
             self.vae,
             flux2_pipe_cls=self.flux2_pipe_cls,

@@ -18,7 +18,6 @@ from torchvision import transforms
 import torchvision.transforms.functional as TF
 from models.OneStepDiffusion.OSEDiff_onedataset_model import OSEDiff_onedataset_model, encode_prompt, eps_to_mu
 from pipelines.OSEDiffPipeline import OSEDiffPipeline
-from ram import inference_ram as inference
 
 from torch.utils.data import DataLoader, Subset
 from models.two_dataset_model import TwoDatasetBasemodel
@@ -103,9 +102,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         gt_1 = gt_1.clip(-1, 1)
         # gt_2 = gt_2.clip(-1, 1)
  
-        gt_ram = self.model_vlm_transforms(image_1*0.5+0.5)
-        caption = inference(gt_ram.to(dtype=torch.float16), self.model_vlm)
-        prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
+        prompt_embeds = self._get_prompt_embeds(image_1, bsz)
         neg_prompt_embeds = encode_prompt([self.neg_caption]*bsz, self.tokenizer, self.text_encoder)
         # print(image_1.min(), image_1.max(), gt_1.min(), gt_1.max())
         
@@ -133,16 +130,15 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         
         return self._optimize_parameters(denoised_latents, gt_1, prompt_embeds, neg_prompt_embeds)
     
-    def forwardpass(self, lq1, lq2):
+    def forwardpass(self, lq1, lq2, prompt_embeds=None):
         if lq1.shape[1] == 1:
             lq1 = einops.repeat(lq1, 'b 1 h w -> b 3 h w')
         if lq2.shape[1] == 1:
             lq2 = einops.repeat(lq2, 'b 1 h w -> b 3 h w')
 
         bsz = lq1.shape[0]
-        lq_ram = self.model_vlm_transforms(lq1 * 0.5 + 0.5)
-        caption = inference(lq_ram.to(dtype=torch.float16), self.model_vlm)
-        prompt_embeds = encode_prompt([c for c in caption], self.tokenizer, self.text_encoder)
+        if prompt_embeds is None:
+            prompt_embeds = self._get_prompt_embeds(lq1, bsz)
 
         output = self.pipeline(
             lq1,
@@ -192,6 +188,9 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             
     def validate_step(self, batch, idx,lq_key,gt_key):
         self.feed_data(batch, is_train=False)
+
+        caption_input = self.sample[lq_key + '_1_original'] if self.opt.val.patched else self.sample[lq_key + "_1"]
+        captions = self._get_captions(caption_input, caption_input.shape[0])
         
         if self.opt.val.patched:
             b,c,h,w = self.original_size[lq_key+"_1"]
@@ -223,6 +222,8 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
             adapter_input = self.adapter_preprocess(lq1, lq2).cpu().numpy()*0.5+0.5
             if adapter_input.shape[1] == 6:
                 adapter_input = einops.rearrange(adapter_input, 'n (c1 c2) h w -> n c1 (h c2) w', c1=3, c2=2)
+            elif adapter_input.shape[1] == 4:
+                adapter_input = adapter_input[:, :3]
             if adapter_input.shape[1] == 1:
                 adapter_input = einops.repeat(adapter_input, 'n 1 h w -> n 3 h w')
             
@@ -233,6 +234,7 @@ class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
         out = out.cpu().numpy()*0.5+0.5
         for i in range(len(gt1)):
             idx += 1
+            print(f"[validation {idx:04d}] prompt: {captions[i]}", flush=True)
             image1 = [lq1[i], lq2[i], gt1[i], gt2[i], out[i]]
             for j in range(len(image1)):
                 if image1[j].shape[0] == 1:

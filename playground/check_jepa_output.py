@@ -58,6 +58,20 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional local .pt checkpoint for hub backend (avoids hub download).",
     )
+    pretrained_group = parser.add_mutually_exclusive_group()
+    pretrained_group.add_argument(
+        "--pretrained",
+        dest="pretrained",
+        action="store_true",
+        default=None,
+        help="Load pretrained V-JEPA weights from torch.hub (default when no --hub-checkpoint).",
+    )
+    pretrained_group.add_argument(
+        "--no-pretrained",
+        dest="pretrained",
+        action="store_false",
+        help="Load random-init backbone (shape check only).",
+    )
     parser.add_argument(
         "--image-size",
         type=int,
@@ -426,19 +440,18 @@ def main() -> None:
         model = AutoModel.from_pretrained(args.model).to(device).eval()
         pixel_values = preprocess(image).unsqueeze(0).to(device)  # [B, C, H, W]
     else:
+        use_pretrained = args.pretrained if args.pretrained is not None else not args.hub_checkpoint
         try:
-            # preprocess = torch.hub.load("facebookresearch/vjepa2", "vjepa2_preprocessor")
             preprocess = make_jepa_preprocess(args.image_size)
-            # Force pretrained=False to avoid localhost mirror download in this environment.
             model_obj = torch.hub.load(
                 "facebookresearch/vjepa2",
                 args.hub_entry,
-                pretrained=False,
+                pretrained=use_pretrained and not args.hub_checkpoint,
             )
         except Exception as exc:
             raise RuntimeError(
                 "Failed to initialize V-JEPA from torch.hub. "
-                "Use --backend hf, or ensure torch.hub repo is available."
+                "Use --backend hf, pass --hub-checkpoint, or ensure torch.hub repo is available."
             ) from exc
         if isinstance(model_obj, (tuple, list)):
             model = model_obj[0]
@@ -448,10 +461,10 @@ def main() -> None:
 
         if args.hub_checkpoint:
             _load_hub_encoder_weights(model, args.hub_checkpoint)
-        else:
+        elif not use_pretrained:
             print(
                 "Warning: hub backend is running without pretrained weights. "
-                "Pass --hub-checkpoint /path/to/*.pt for meaningful features."
+                "Pass --pretrained, or --hub-checkpoint /path/to/*.pt for meaningful features."
             )
 
         # V-JEPA torch.hub preprocess expects a video clip (list of frames).

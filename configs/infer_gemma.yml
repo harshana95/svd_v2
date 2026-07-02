@@ -1,0 +1,227 @@
+name: MetaZoom
+model_type: OSEDiff_twodataset_model
+is_train: false
+report_to: tensorboard
+push_to_hub: false
+num_gpu: 1
+seed: 10
+mixed_precision: !!str no
+allow_tf32: false
+pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1
+text_prompt_extractor: gemma  # null | ram_dape | qwen | gemma | florence
+caption_instruction: "Describe this image in one concise caption."
+caption_max_new_tokens: 96
+revision: ~
+variant: ~
+use_ema: false
+image_resolution: [512, 512]
+tracker_project_name: MetaZoom
+experiment_key: MetaZoom_OSEDiff_olddata_gemma_infer
+dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+
+network:
+
+datasets:
+  train1:
+    type: HuggingFaceDataset
+    name: ${dataset_1_name}
+    split: train
+    split_range: [1, 100]
+    num_proc: 16
+    map_batch_size: 4
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
+      crop:
+        h: 1024
+        w: 1024
+      resize:
+        factor: 0.5
+      rotate:
+        angle: -90
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  train2:
+    type: HuggingFaceDataset
+    name: ${dataset_2_name}
+    split: train
+    split_range: [1, 100]
+    num_proc: 16
+    map_batch_size: 4
+
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
+      crop:
+        h: 1024
+        w: 1024
+      resize:
+        factor: 0.5
+      select_channels:
+       channels: [False, True, False]
+      rotate:
+        angle: -90
+      normalize:
+        mean: [0.5]
+        std: [0.5]
+
+  val1:
+    type: HuggingFaceDataset
+    name: ${dataset_1_name}
+    split: validation
+    num_proc: 1
+    map_batch_size: 1
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
+      crop:
+        h: 1024
+        w: 1024
+      resize:
+        factor: 0.5
+      rotate:
+        angle: -90
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val2:
+    type: HuggingFaceDataset
+    name: ${dataset_2_name}
+    split: validation
+    num_proc: 1
+    map_batch_size: 1
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    rf_key: refined
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      homography:
+        keys: [lq_key]
+        M: [[ 1.03423862e+00,  1.72696887e-02, -4.47710015e+01], [-2.09817427e-02,  1.04563574e+00, -1.91616278e+01], [-1.40655326e-05,  8.16967266e-07,  1.00000000e+00]]
+      crop:
+        h: 1024
+        w: 1024
+      resize:
+        factor: 0.5
+      select_channels:
+       channels: [False, True, False]
+      rotate:
+        angle: -90
+      normalize:
+        mean: [0.5]
+        std: [0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_dape_2026_06_26_01_53_58/
+  resume_from_checkpoint: latest
+
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 1500
+    lr_num_cycles: 5
+    lr_power: 1.0
+
+  loss: 1*MSE
+  gradient_accumulation_steps: 1
+  num_train_epochs: 10
+  batch_size: 1
+
+  concatenate_images: true
+  use_image1: true
+  lora_finetune: true
+  use_hf_loss: true
+  use_adapter: true
+  adapter_in_channels: 6
+  hpf_adapter_input: true
+
+  timestep: 999
+
+  lambda_kl: 1.0
+  lambda_l2: 1.0
+  lambda_lpips: 2.0
+  cfg_vsd: 7.5
+
+  max_train_steps: 500000
+  validation_steps: 1000
+  checkpointing_steps: 5000
+  checkpoints_total_limit: 2
+
+  patched: false
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  batch_size: 1
+  num_inference_steps: 1
+
+  permute_channels: [0, 1, 2]
+  saturation_factor: 1.0
+  hue_factor: 0.0
+
+  random_elastic_transform: false
+  gaussian_blur_pixels: 0
+  pixelate_factor: 1.0
+
+  patched: false
+  patch_size_h: 512
+  patch_size_w: 512
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+       crop: 30

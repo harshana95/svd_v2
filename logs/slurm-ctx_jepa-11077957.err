@@ -1,0 +1,203 @@
+The following values were not passed to `accelerate launch` and had defaults used instead:
+		More than one GPU was found, enabling multi-GPU training.
+		If this was unintended please pass in `--num_processes=1`.
+	`--num_machines` was set to a value of `1`
+	`--dynamo_backend` was set to a value of `'no'`
+To avoid this warning pass in values for each of the problematic parameters or run `accelerate config`.
+/home/wweligam/home_env/lib/python3.11/site-packages/timm/models/layers/__init__.py:48: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+/home/wweligam/home_env/lib/python3.11/site-packages/timm/models/layers/__init__.py:48: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+06/21/2026 02:03:22 - INFO - __main__ - Distributed environment: DistributedType.MULTI_GPU  Backend: nccl
+Num processes: 2
+Process index: 1
+Local process index: 1
+Device: cuda:1
+
+Mixed precision type: bf16
+
+06/21/2026 02:03:22 - INFO - __main__ - Distributed environment: DistributedType.MULTI_GPU  Backend: nccl
+Num processes: 2
+Process index: 0
+Local process index: 0
+Device: cuda:0
+
+Mixed precision type: bf16
+
+06/21/2026 02:03:22 - INFO - datasets - PyTorch version 2.8.0 available.
+06/21/2026 02:03:22 - INFO - __main__ - Struct({'name': 'Motion', 'model_type': 'ContextFluxBaseline_model', 'tracker_project_name': 'Motion', 'experiment_key': 'ContextFluxBaselineJEPA', 'is_train': True, 'report_to': 'comet_ml', 'push_to_hub': False, 'num_gpu': 2, 'seed': 42, 'mixed_precision': 'bf16', 'allow_tf32': True, 'pretrained_model_name_or_path': 'black-forest-labs/FLUX.2-klein-4B', 'revision': None, 'variant': None, 'lucidflux_weights_path': None, 'swinir_model_path': '/depot/chan129/users/harshana/LucidFlux/weights/swinir.pth', 'vjepa_hub_entry': 'vjepa2_1_vit_large_384', 'vjepa_image_size': 384, 'vjepa_pretrained': True, 'vjepa_checkpoint_path': None, 'jepa_projector_weights_path': '/scratch/gilbreth/wweligam/experiments/Motion/ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000/DualHeadPatchCrossAttnProjector_1/pytorch_model.bin', 'jepa_projector_heads': 'both', 'train_crop_size': 512, 'precomputed_embeddings_path': '/home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt', 'use_vjepa_condition': True, 'use_vljepa_condition': False, 'vljepa_checkpoint_path': '/depot/chan129/users/harshana/weights/open-vljepa/best.pt', 'vljepa_caption_query': 'Describe the image in detail.', 'vljepa_num_frames': 1, 'vljepa_image_size': 256, 'vljepa_readout_vocab': 'ram_tags', 'vljepa_enable_readout': True, 'vljepa_projector_hidden': 2048, 'vljepa_num_text_slots': None, 'use_condition_image_for_transformer': False, 'guidance_scale': 1.0, 'discrete_flow_shift': 3.1582, 'transformer_gradient_checkpointing': False, 'datasets': Struct({'train': Struct({'type': 'HuggingFaceDataset', 'name': '/depot/chan129/data/Deblur_MIOR/', 'split': 'train', 'trust_remote_code': True, 'repeat': 20, 'num_proc': 32, 'map_batch_size': 16, 'use_shuffle': True, 'gt_key': 'gt', 'lq_key': 'blur', 'common_transforms_keys': ['gt', 'blur'], 'transforms': Struct({'to_tensor': None, 'crop_random': Struct({'h': 512, 'w': 512}), 'normalize': Struct({'mean': [0.5, 0.5, 0.5], 'std': [0.5, 0.5, 0.5]})})}), 'val': Struct({'type': 'HuggingFaceDataset', 'name': '/depot/chan129/data/Deblur_MIOR/', 'split': 'validation', 'trust_remote_code': True, 'use_shuffle': False, 'gt_key': 'gt', 'lq_key': 'blur', 'common_transforms_keys': ['gt', 'blur'], 'transforms': Struct({'to_tensor': None, 'crop': Struct({'h': 512, 'w': 512}), 'normalize': Struct({'mean': [0.5, 0.5, 0.5], 'std': [0.5, 0.5, 0.5]})})})}), 'path': Struct({'root': '/scratch/gilbreth/wweligam/experiments', 'logging_dir': 'logs', 'resume_from_path': None, 'resume_from_checkpoint': None, 'experiments_root': '/scratch/gilbreth/wweligam/experiments/Motion/ContextFluxBaselineJEPA_2026_06_21_02_03_21'}), 'train': Struct({'lora_finetune': False, 'optim': Struct({'type': 'adamw', 'scale_lr': False, 'learning_rate': 2e-05, 'relative_step': False, 'scale_parameter': False, 'warmup_init': False, 'adam_beta1': 0.9, 'adam_beta2': 0.999, 'adam_weight_decay': 0.01, 'adam_epsilon': 1e-08, 'max_grad_norm': 1.0}), 'scheduler': Struct({'type': 'constant', 'lr_warmup_steps': 500, 'lr_num_cycles': 1, 'lr_power': 1.0}), 'gradient_accumulation_steps': 1, 'num_train_epochs': 20, 'batch_size': 2, 'max_train_steps': 50000, 'validation_steps': 1000, 'checkpointing_steps': 2000, 'checkpoints_total_limit': 3, 'patched': False, 'patch_size_h': 256, 'patch_size_w': 256, 'patch_overlap': 0.2, 'max_minibatch': 4}), 'val': Struct({'save_images': True, 'num_inference_steps': 50, 'patched': False, 'patch_size_h': 256, 'patch_size_w': 256, 'patch_overlap': 0.2, 'max_minibatch': 4, 'batch_size': 1, 'max_val_steps': 5, 'metrics': Struct({'psnr': Struct({'crop': 30}), 'mse': Struct({'crop': 30})})}), 'comment': '', 'test': False, 'opt_path': './checkpoints/Flux/ContextFluxBaselineJEPA.yml'})
+06/21/2026 02:03:22 - INFO - datasets - PyTorch version 2.8.0 available.
+06/21/2026 02:03:22 - INFO - __main__ - Loading V-JEPA 2.1 encoder from torch.hub entry vjepa2_1_vit_large_384
+Using cache found in /scratch/gilbreth/wweligam/.cache/torch/hub/facebookresearch_vjepa2_main
+Using cache found in /scratch/gilbreth/wweligam/.cache/torch/hub/facebookresearch_vjepa2_main
+06/21/2026 02:03:48 - INFO - __main__ - Loading SwinIR from /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
+/home/wweligam/home_env/lib/python3.11/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/wweligam/home_env/lib/python3.11/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+All model checkpoint weights were used when initializing Flux2Transformer2DModel.
+
+All the weights of Flux2Transformer2DModel were initialized from the model checkpoint at black-forest-labs/FLUX.2-klein-4B.
+If your task is similar to the task the model of the checkpoint was trained on, you can already use Flux2Transformer2DModel for predictions without further training.
+06/21/2026 02:06:23 - INFO - __main__ - Transformer gradient checkpointing disabled (faster training, higher VRAM)
+06/21/2026 02:06:23 - INFO - __main__ - Transformer LoRA disabled in ContextFluxBaseline_model (set train.lora_finetune=true to enable).
+{'decoder_block_out_channels'} was not found in config. Values will be initialized to default values.
+All model checkpoint weights were used when initializing AutoencoderKLFlux2.
+
+All the weights of AutoencoderKLFlux2 were initialized from the model checkpoint at black-forest-labs/FLUX.2-klein-4B.
+If your task is similar to the task the model of the checkpoint was trained on, you can already use AutoencoderKLFlux2 for predictions without further training.
+06/21/2026 02:06:33 - INFO - models.LucidFlux.cross_attn_projector - Loaded 22/22 jepa_projector keys from /scratch/gilbreth/wweligam/experiments/Motion/ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000/DualHeadPatchCrossAttnProjector_1/pytorch_model.bin (strict)
+06/21/2026 02:06:33 - INFO - __main__ - Condition toggles: use_vljepa_condition=False, use_vjepa_condition=True, use_dino_condition=None, use_clip_condition=None, use_condition_image_for_transformer=False, jepa_projector_heads=both
+06/21/2026 02:06:33 - INFO - __main__ - DualHeadPatchCrossAttnProjector: trainable=38,180,480 / total=38,180,480 (100.0%)
+06/21/2026 02:06:33 - INFO - __main__ - Setting up val dataloaders...
+06/21/2026 02:06:34 - INFO - models.LucidFlux.cross_attn_projector - Loaded 22/22 jepa_projector keys from /scratch/gilbreth/wweligam/experiments/Motion/ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000/DualHeadPatchCrossAttnProjector_1/pytorch_model.bin (strict)
+06/21/2026 02:06:34 - INFO - __main__ - Setting up train dataloader...
+06/21/2026 02:08:26 - INFO - __main__ - Preparing model...
+06/21/2026 02:08:26 - INFO - __main__ - Initializing trackers with tracker_kwargs: None
+COMET INFO: Experiment is live on comet.com https://www.comet.com/harshana95/motion/d024cb74b2a1476595098a62d19ce7fa
+
+06/21/2026 02:08:31 - INFO - __main__ - Optimizers and schedulers prepared...
+[rank1]:[E621 02:18:32.679704851 ProcessGroupNCCL.cpp:685] [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=1, OpType=ALLGATHER, NumelIn=1, NumelOut=2, Timeout(ms)=600000) ran for 600007 milliseconds before timing out.
+[rank1]:[E621 02:18:32.684852010 ProcessGroupNCCL.cpp:2252] [PG ID 0 PG GUID 0(default_pg) Rank 1]  failure detected by watchdog at work sequence id: 1 PG status: last enqueued work: 1, last completed work: -1
+[rank1]:[E621 02:18:32.684867850 ProcessGroupNCCL.cpp:732] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank1]:[E621 02:18:32.684909919 ProcessGroupNCCL.cpp:2584] [PG ID 0 PG GUID 0(default_pg) Rank 1] First PG on this rank to signal dumping.
+[rank0]:[E621 02:18:32.770506766 ProcessGroupNCCL.cpp:685] [Rank 0] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=1, OpType=ALLGATHER, NumelIn=1, NumelOut=2, Timeout(ms)=600000) ran for 600098 milliseconds before timing out.
+[rank0]:[E621 02:18:32.770731770 ProcessGroupNCCL.cpp:2252] [PG ID 0 PG GUID 0(default_pg) Rank 0]  failure detected by watchdog at work sequence id: 1 PG status: last enqueued work: 1, last completed work: -1
+[rank0]:[E621 02:18:32.770743311 ProcessGroupNCCL.cpp:732] Stack trace of the failed collective not found, potentially because FlightRecorder is disabled. You can enable it by setting TORCH_NCCL_TRACE_BUFFER_SIZE to a non-zero value.
+[rank0]:[E621 02:18:32.770784619 ProcessGroupNCCL.cpp:2584] [PG ID 0 PG GUID 0(default_pg) Rank 0] First PG on this rank to signal dumping.
+[rank1]:[E621 02:18:32.543921816 ProcessGroupNCCL.cpp:1870] [PG ID 0 PG GUID 0(default_pg) Rank 1] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 1, last completed NCCL work: -1.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc. 
+[rank1]:[E621 02:18:32.544907179 ProcessGroupNCCL.cpp:1589] [PG ID 0 PG GUID 0(default_pg) Rank 1] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank0]:[E621 02:18:33.680266901 ProcessGroupNCCL.cpp:1870] [PG ID 0 PG GUID 0(default_pg) Rank 0] Received a dump signal due to a collective timeout from this local rank and we will try our best to dump the debug info. Last enqueued NCCL work: 1, last completed NCCL work: -1.This is most likely caused by incorrect usages of collectives, e.g., wrong sizes used across ranks, the order of collectives is not same for all ranks or the scheduled collective, for some reason, didn't run. Additionally, this can be caused by GIL deadlock or other reasons such as network errors or bugs in the communications library (e.g. NCCL), etc. 
+[rank0]:[E621 02:18:33.680599666 ProcessGroupNCCL.cpp:1589] [PG ID 0 PG GUID 0(default_pg) Rank 0] ProcessGroupNCCL preparing to dump debug info. Include stack trace: 1
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/home/wweligam/svd_v2/trainer.py", line 61, in <module>
+[rank1]:     main(opt)
+[rank1]:   File "/home/wweligam/svd_v2/trainer.py", line 28, in main
+[rank1]:     model.prepare()
+[rank1]:   File "/home/wweligam/svd_v2/models/base_model.py", line 315, in prepare
+[rank1]:     self.models[i] = self.accelerator.prepare(self.models[i])
+[rank1]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1329, in prepare
+[rank1]:     result = tuple(
+[rank1]:              ^^^^^^
+[rank1]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1330, in <genexpr>
+[rank1]:     self._prepare_one(obj, first_pass=True, device_placement=d) for obj, d in zip(args, device_placement)
+[rank1]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1205, in _prepare_one
+[rank1]:     return self.prepare_model(obj, device_placement=device_placement)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1459, in prepare_model
+[rank1]:     model = torch.nn.parallel.DistributedDataParallel(
+[rank1]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 845, in __init__
+[rank1]:     _verify_param_shape_across_processes(self.process_group, parameters)
+[rank1]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/distributed/utils.py", line 281, in _verify_param_shape_across_processes
+[rank1]:     return dist._verify_params_across_processes(process_group, tensors, logger)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: RuntimeError: DDP expects same model across all ranks, but Rank 1 has 22 params, while rank 0 has inconsistent 0 params.
+[rank1]:[E621 02:19:32.842524717 ProcessGroupNCCL.cpp:746] [Rank 1] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank1]:[E621 02:19:32.842549633 ProcessGroupNCCL.cpp:760] [Rank 1] To avoid data inconsistency, we are taking the entire process down.
+[rank1]:[E621 02:19:32.844005803 ProcessGroupNCCL.cpp:2068] [PG ID 0 PG GUID 0(default_pg) Rank 1] Process group watchdog thread terminated with exception: [Rank 1] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=1, OpType=ALLGATHER, NumelIn=1, NumelOut=2, Timeout(ms)=600000) ran for 600007 milliseconds before timing out.
+Exception raised from checkTimeout at /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:688 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x149ed1686eb0 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x247 (0x149ed25ed147 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #2: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1591 (0x149ed25f0b61 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #3: c10d::ProcessGroupNCCL::Watchdog::run() + 0xd2 (0x149ed25f1ec2 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdbbf4 (0x149f35d7dbf4 in /home/wweligam/home_env/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x8b2ea (0x149f396692ea in /lib64/libc.so.6)
+frame #6: <unknown function> + 0x1103c0 (0x149f396ee3c0 in /lib64/libc.so.6)
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/wweligam/svd_v2/trainer.py", line 61, in <module>
+[rank0]:     main(opt)
+[rank0]:   File "/home/wweligam/svd_v2/trainer.py", line 28, in main
+[rank0]:     model.prepare()
+[rank0]:   File "/home/wweligam/svd_v2/models/base_model.py", line 315, in prepare
+[rank0]:     self.models[i] = self.accelerator.prepare(self.models[i])
+[rank0]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1329, in prepare
+[rank0]:     result = tuple(
+[rank0]:              ^^^^^^
+[rank0]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1330, in <genexpr>
+[rank0]:     self._prepare_one(obj, first_pass=True, device_placement=d) for obj, d in zip(args, device_placement)
+[rank0]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1205, in _prepare_one
+[rank0]:     return self.prepare_model(obj, device_placement=device_placement)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/accelerator.py", line 1459, in prepare_model
+[rank0]:     model = torch.nn.parallel.DistributedDataParallel(
+[rank0]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 845, in __init__
+[rank0]:     _verify_param_shape_across_processes(self.process_group, parameters)
+[rank0]:   File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/distributed/utils.py", line 281, in _verify_param_shape_across_processes
+[rank0]:     return dist._verify_params_across_processes(process_group, tensors, logger)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: RuntimeError: DDP expects same model across all ranks, but Rank 0 has 22 params, while rank 1 has inconsistent 0 params.
+COMET INFO: ---------------------------------------------------------------------------------------
+COMET INFO: Comet.ml Experiment Summary
+COMET INFO: ---------------------------------------------------------------------------------------
+COMET INFO:   Data:
+COMET INFO:     display_summary_level : 1
+COMET INFO:     name                  : ContextFluxBaselineJEPA_2026_06_21_02_03_21
+COMET INFO:     url                   : https://www.comet.com/harshana95/motion/d024cb74b2a1476595098a62d19ce7fa
+COMET INFO:   Others:
+COMET INFO:     Name : ContextFluxBaselineJEPA_2026_06_21_02_03_21
+COMET INFO:   Uploads:
+COMET INFO:     asset                        : 1 (6.77 KB)
+COMET INFO:     conda-environment-definition : 1
+COMET INFO:     conda-info                   : 1
+COMET INFO:     conda-specification          : 1
+COMET INFO:     environment details          : 1
+COMET INFO:     filename                     : 1
+COMET INFO:     git metadata                 : 1
+COMET INFO:     git-patch (uncompressed)     : 1 (55.74 KB)
+COMET INFO:     installed packages           : 1
+COMET INFO:     source_code                  : 2 (40.88 KB)
+COMET INFO: 
+[rank0]:[E621 02:19:32.326203050 ProcessGroupNCCL.cpp:746] [Rank 0] Some NCCL operations have failed or timed out. Due to the asynchronous nature of CUDA kernels, subsequent GPU operations might run on corrupted/incomplete data.
+[rank0]:[E621 02:19:32.326226714 ProcessGroupNCCL.cpp:760] [Rank 0] To avoid data inconsistency, we are taking the entire process down.
+[rank0]:[E621 02:19:32.326937632 ProcessGroupNCCL.cpp:2068] [PG ID 0 PG GUID 0(default_pg) Rank 0] Process group watchdog thread terminated with exception: [Rank 0] Watchdog caught collective operation timeout: WorkNCCL(SeqNum=1, OpType=ALLGATHER, NumelIn=1, NumelOut=2, Timeout(ms)=600000) ran for 600098 milliseconds before timing out.
+Exception raised from checkTimeout at /pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:688 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x148845435eb0 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: c10d::ProcessGroupNCCL::WorkNCCL::checkTimeout(std::optional<std::chrono::duration<long, std::ratio<1l, 1000l> > >) + 0x247 (0x14884639c147 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #2: c10d::ProcessGroupNCCL::Watchdog::runLoop() + 0x1591 (0x14884639fb61 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #3: c10d::ProcessGroupNCCL::Watchdog::run() + 0xd2 (0x1488463a0ec2 in /home/wweligam/home_env/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #4: <unknown function> + 0xdbbf4 (0x1488a9b2dbf4 in /home/wweligam/home_env/bin/../lib/libstdc++.so.6)
+frame #5: <unknown function> + 0x8b2ea (0x1488ad4192ea in /lib64/libc.so.6)
+frame #6: <unknown function> + 0x1103c0 (0x1488ad49e3c0 in /lib64/libc.so.6)
+
+W0621 02:19:37.518000 1270100 site-packages/torch/distributed/elastic/multiprocessing/api.py:900] Sending process 1270179 closing signal SIGTERM
+E0621 02:19:38.535000 1270100 site-packages/torch/distributed/elastic/multiprocessing/api.py:874] failed (exitcode: -6) local_rank: 1 (pid: 1270180) of binary: /home/wweligam/home_env/bin/python3
+Traceback (most recent call last):
+  File "/home/wweligam/.local/bin/accelerate", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/commands/accelerate_cli.py", line 48, in main
+    args.func(args)
+  File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/commands/launch.py", line 1159, in launch_command
+    multi_gpu_launcher(args)
+  File "/home/wweligam/home_env/lib/python3.11/site-packages/accelerate/commands/launch.py", line 793, in multi_gpu_launcher
+    distrib_run.run(args)
+  File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/distributed/run.py", line 892, in run
+    elastic_launch(
+  File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 143, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/wweligam/home_env/lib/python3.11/site-packages/torch/distributed/launcher/api.py", line 277, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+========================================================
+trainer.py FAILED
+--------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+--------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-06-21_02:19:37
+  host      : gilbreth-k014.rcac.purdue.edu
+  rank      : 1 (local_rank: 1)
+  exitcode  : -6 (pid: 1270180)
+  error_file: <N/A>
+  traceback : Signal 6 (SIGABRT) received by PID 1270180
+========================================================

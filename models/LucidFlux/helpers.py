@@ -89,6 +89,33 @@ def prepare_image_latents(
     return image_latents, image_latent_ids
 
 
+def pack_projector_vae_tokens(
+    pred_vae: torch.Tensor,
+    flux2_pipe_cls,
+    lat_h: int,
+    lat_w: int,
+    in_channels: int,
+    batch_size: int,
+    device,
+    dtype,
+):
+    """Pack dual-head VAE projector tokens and build matching image latent ids."""
+    expected = lat_h * lat_w
+    if pred_vae.shape[1] != expected:
+        raise ValueError(
+            f"pred_vae has {pred_vae.shape[1]} slots, expected {expected} ({lat_h}x{lat_w})"
+        )
+    vae_latents = pred_vae.to(device=device, dtype=dtype)
+    dummy = torch.zeros(1, in_channels, lat_h, lat_w, device=device, dtype=dtype)
+    image_latent_ids = flux2_pipe_cls._prepare_image_ids([dummy])
+    if image_latent_ids.ndim == 2:
+        image_latent_ids = image_latent_ids.unsqueeze(0)
+    image_latent_ids = image_latent_ids.repeat(batch_size, 1, 1).to(
+        device=device, dtype=dtype
+    )
+    return vae_latents, image_latent_ids
+
+
 def get_latent_token_layout(
     crop_size: int,
     vae: torch.nn.Module,
