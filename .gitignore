@@ -176,6 +176,7 @@ cython_debug/
 *.png
 *.jpg
 *.tiff
+*.gif
 *.jpeg
 *.json
 *.pt
