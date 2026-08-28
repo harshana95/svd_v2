@@ -1,4 +1,5 @@
 import PIL
+from PIL import Image
 import einops
 import kornia
 import numpy as np
@@ -203,7 +204,142 @@ class crop_random:
 
     def __call__(self, sample):
         return  self.crop(sample)
-    
+
+
+class crop_random_aspect:
+    """Random-resized-crop: sample a random area fraction and aspect ratio, crop
+    that region at a random position, then resize to a fixed (h, w) output —
+    same idea as torchvision's RandomResizedCrop. The output shape is always
+    (h, w) regardless of the sampled aspect ratio, so rows stay stackable by
+    the default DataLoader collate_fn even though the dataset .map() pipeline
+    can pick a different aspect ratio for each map batch (see crop_random for
+    why that matters: shuffling could otherwise combine differently-shaped
+    rows into one batch).
+
+    Shares one randomly sampled region across the keys processed together in
+    a single call (e.g. gt/blur), matching crop_random's convention so paired
+    images stay aligned.
+    """
+    def __init__(self, h, w, scale=(0.5, 1.0), ratio=(0.75, 1.3333)):
+        self.h = h
+        self.w = w
+        self.scale = scale
+        self.ratio = ratio
+        self._batch_params = None
+
+    def start_batch(self, sample=None, keys=None):
+        self._batch_params = None
+
+    def end_batch(self):
+        self._batch_params = None
+
+    def _sample_params(self, image):
+        img_h, img_w = image.shape[-2], image.shape[-1]
+        area = img_h * img_w
+        log_ratio = (np.log(self.ratio[0]), np.log(self.ratio[1]))
+        for _ in range(10):
+            target_area = area * np.random.uniform(*self.scale)
+            aspect = np.exp(np.random.uniform(*log_ratio))
+            crop_w = int(round(np.sqrt(target_area * aspect)))
+            crop_h = int(round(np.sqrt(target_area / aspect)))
+            if 0 < crop_w <= img_w and 0 < crop_h <= img_h:
+                top = np.random.randint(0, img_h - crop_h + 1)
+                left = np.random.randint(0, img_w - crop_w + 1)
+                return top, left, crop_h, crop_w
+        # Fallback: largest centered square that fits (e.g. source smaller than
+        # the sampled area, or an extreme aspect ratio draw).
+        side = min(img_h, img_w)
+        top = (img_h - side) // 2
+        left = (img_w - side) // 2
+        return top, left, side, side
+
+    def crop(self, image):
+        if self._batch_params is None:
+            self._batch_params = self._sample_params(image)
+        top, left, crop_h, crop_w = self._batch_params
+        img_h, img_w = image.shape[-2], image.shape[-1]
+        top = min(top, max(0, img_h - crop_h))
+        left = min(left, max(0, img_w - crop_w))
+        crop_h = min(crop_h, img_h)
+        crop_w = min(crop_w, img_w)
+        cropped = image[..., top:top + crop_h, left:left + crop_w]
+        if crop_h == self.h and crop_w == self.w:
+            return cropped
+
+        # Resize via PIL rather than F.interpolate: torch's threaded CPU kernels
+        # deadlock inside HF datasets.map(num_proc>1) worker processes forked
+        # from a process that already initialized CUDA (observed as a full
+        # hang — zero worker CPU, zero cache writes — when this used
+        # F.interpolate directly).
+        channels = cropped.shape[0]
+        arr = (cropped.clamp(0, 1).permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)
+        mode = "L" if channels == 1 else "RGB"
+        pil_img = Image.fromarray(arr[..., 0] if channels == 1 else arr[..., :3], mode=mode)
+        pil_img = pil_img.resize((self.w, self.h), resample=Image.BICUBIC)
+        resized = torch.from_numpy(np.array(pil_img)).to(torch.float32) / 255.0
+        if resized.ndim == 2:
+            resized = resized.unsqueeze(-1)
+        return resized.permute(2, 0, 1)
+
+    def __call__(self, sample):
+        return self.crop(sample)
+
+
+def random_aspect_crop_collate(batch, keys, area_h=512, area_w=512, scale=(0.5, 1.0), ratio=(0.75, 1.3333),
+                                round_to=16, mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)):
+    """DataLoader collate_fn: sample one (crop_h, crop_w) — a fixed area budget
+    and a random aspect ratio — for the whole batch, then randomly crop each
+    sample straight out of its own full-resolution *PIL* image at that shape
+    (no resize) before converting to a normalized tensor. The aspect
+    ratio/size is fixed within this batch (needed to stack into one tensor)
+    but resampled fresh for the next one, so different training steps really
+    do see different resolutions.
+
+    Operates on raw PIL images (the dataset should have no to_tensor/crop/
+    normalize .map() transform of its own — see the comment on
+    datasets.train.transforms in the yml) rather than pre-decoded tensors:
+    cropping the PIL image first and only then converting means the full-
+    resolution image is never materialized as a tensor at all. Precaching
+    full 1920x1080 float32 tensors for every row (156,980 with repeat: 20)
+    OOM-killed dataset construction even with num_proc and writer_batch_size
+    turned way down — the fix wasn't tuning those further, it was to stop
+    doing that up front and crop+decode lazily per batch instead.
+
+    `keys` are cropped at the *same* region within each sample (e.g. gt/lq),
+    so paired images stay aligned; other keys pass through `default_collate`
+    unchanged.
+    """
+    base_area = area_h * area_w
+    log_ratio = (np.log(ratio[0]), np.log(ratio[1]))
+    target_area = base_area * np.random.uniform(*scale)
+    aspect = np.exp(np.random.uniform(*log_ratio))
+    crop_w = max(round_to, int(round(np.sqrt(target_area * aspect) / round_to)) * round_to)
+    crop_h = max(round_to, int(round(np.sqrt(target_area / aspect) / round_to)) * round_to)
+
+    # Clamp to the smallest source image in the batch so every sample can be
+    # cropped to the same final shape (needed to stack into one tensor).
+    # PIL Image.size is (width, height).
+    min_w = min(sample[k].size[0] for sample in batch for k in keys)
+    min_h = min(sample[k].size[1] for sample in batch for k in keys)
+    crop_h = min(crop_h, (max(min_h, round_to) // round_to) * round_to)
+    crop_w = min(crop_w, (max(min_w, round_to) // round_to) * round_to)
+
+    to_tensor_fn = to_tensor()
+    normalize_fn = normalize(mean=list(mean), std=list(std))
+
+    cropped_batch = []
+    for sample in batch:
+        img_w, img_h = sample[keys[0]].size
+        top = np.random.randint(0, img_h - crop_h + 1) if img_h > crop_h else 0
+        left = np.random.randint(0, img_w - crop_w + 1) if img_w > crop_w else 0
+        out_sample = dict(sample)
+        for k in keys:
+            cropped_pil = sample[k].crop((left, top, left + crop_w, top + crop_h))
+            out_sample[k] = normalize_fn(to_tensor_fn(cropped_pil))
+        cropped_batch.append(out_sample)
+
+    return torch.utils.data.default_collate(cropped_batch)
+
 
 class select_channels:
     def __init__(self, channels):

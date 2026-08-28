@@ -74,13 +74,17 @@ class HuggingFaceDataset(data.Dataset):
         post_transforms = transforms.Compose(post_transforms)
 
         # adding batch size here will iterate through rows one-by-one and apply to the table as batches
-        dataset = dataset.map(all_transforms, 
+        # writer_batch_size examples get buffered in memory per worker before an Arrow
+        # flush, so it needs to scale down for pipelines that no longer crop/resize
+        # images to a small fixed size before caching (e.g. a per-batch crop applied
+        # later in a collate_fn) — 3000 buffered 1920x1080 float32 pairs is ~150GB.
+        dataset = dataset.map(all_transforms,
                               num_proc=opt.num_proc if opt.num_proc is not None else 4, # if stuck use accelerate launch instead of python to run the script
                               batched=True,
                               batch_size=opt.map_batch_size if opt.map_batch_size is not None else 4,
-                              load_from_cache_file=False if opt.skip_cache else True, 
+                              load_from_cache_file=False if opt.skip_cache else True,
                               keep_in_memory=False,
-                              writer_batch_size=3000)
+                              writer_batch_size=opt.get('writer_batch_size', 3000))
         dataset.set_format('pt')
         if post_proccess:
             # batch before applying transforms. TODO: meed to perform unbatch after this transform

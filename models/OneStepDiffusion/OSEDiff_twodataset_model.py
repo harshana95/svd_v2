@@ -28,9 +28,53 @@ from safetensors.torch import load_file
 
 # todo Extend from OSEDiff_model
 class OSEDiff_twodataset_model(OSEDiff_onedataset_model, TwoDatasetBasemodel):
+    RESUME_WEIGHT_NOISE_STD = 2e-2
+    RESUME_WEIGHT_NOISE_SEED = 42
+
     def __init__(self, opt, logger):
         super(OSEDiff_twodataset_model, self).__init__(opt, logger)
-        
+
+    def _iter_resume_noise_modules(self):
+        modules = [
+            ("vae", self.vae),
+            ("unet", self.unet),
+            ("unet_update", self.unet_update),
+        ]
+        if self.use_adapter:
+            modules.append(("t2iadapter", self.t2iadapter))
+        return [(name, self.accelerator.unwrap_model(model)) for name, model in modules]
+
+    def after_resume_checkpoint(self, load_path):
+        return
+
+        rng_state = torch.random.get_rng_state()
+        cuda_rng_states = None
+        if torch.cuda.is_available():
+            cuda_rng_states = torch.cuda.get_rng_state_all()
+        torch.manual_seed(self.RESUME_WEIGHT_NOISE_SEED)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.RESUME_WEIGHT_NOISE_SEED)
+
+        breakdown = {}
+        with torch.no_grad():
+            for name, model in self._iter_resume_noise_modules():
+                count = 0
+                for param in model.parameters():
+                    if param.requires_grad:
+                        param.add_(torch.randn_like(param) * self.RESUME_WEIGHT_NOISE_STD)
+                        count += 1
+                breakdown[name] = count
+
+        torch.random.set_rng_state(rng_state)
+        if cuda_rng_states is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_states)
+
+        breakdown_str = ", ".join(f"{name}={count}" for name, count in breakdown.items())
+        self.logger.info(
+            f"Added Gaussian noise (std={self.RESUME_WEIGHT_NOISE_STD}) from checkpoint "
+            f"{load_path}. Perturbed tensors: {breakdown_str}"
+        )
+
     def feed_data(self, data, is_train=True):
         self.sample = data
         gt_key = self.dataloader.dataset.gt_key if is_train else self.test_dataloader.dataset.gt_key

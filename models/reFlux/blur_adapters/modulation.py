@@ -1,0 +1,78 @@
+"""Timestep-Layer Adaptive Modulation Psi(t, ell)."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+
+
+@dataclass
+class BlockModulation:
+    alpha_pga: torch.Tensor
+    beta_pga: torch.Tensor
+    alpha_pcm: torch.Tensor
+    beta_pcm: torch.Tensor
+    n_spec: torch.Tensor
+    lam: torch.Tensor
+
+
+def _sinusoidal(t: torch.Tensor, dim: int) -> torch.Tensor:
+    half = dim // 2
+    freqs = torch.exp(
+        -math.log(10000.0)
+        * torch.arange(half, device=t.device, dtype=torch.float32)
+        / max(half - 1, 1)
+    )
+    args = t.float()[:, None] * freqs[None, :] * 1000.0
+    emb = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+    if dim % 2:
+        emb = torch.cat([emb, torch.zeros_like(emb[:, :1])], dim=-1)
+    return emb
+
+
+class TimestepLayerModulation(nn.Module):
+    def __init__(
+        self,
+        num_layers: int,
+        embed_dim: int = 256,
+        hidden_dim: int = 512,
+        beta_scale: float = 0.1,
+        alpha_pcm_scale: float = 0.5,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.embed_dim = embed_dim
+        self.beta_scale = beta_scale
+        self.alpha_pcm_scale = alpha_pcm_scale
+
+        self.t_proj = nn.Linear(embed_dim, embed_dim)
+        self.layer_embed = nn.Embedding(num_layers, embed_dim)
+        self.trunk = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(embed_dim, hidden_dim),
+            nn.SiLU(),
+        )
+        self.head = nn.Linear(hidden_dim, 6)
+        nn.init.zeros_(self.head.weight)
+        nn.init.zeros_(self.head.bias)
+
+    def forward(self, t: torch.Tensor, ell: int) -> BlockModulation:
+        b = t.shape[0]
+        te = self.t_proj(_sinusoidal(t, self.embed_dim))
+        le = self.layer_embed(
+            torch.full((b,), int(ell), device=t.device, dtype=torch.long)
+        )
+        h = self.trunk(te + le)
+        raw = self.head(h)
+        a_pga, b_pga, a_pcm, b_pcm, n_spec, lam = raw.split(1, dim=-1)
+        return BlockModulation(
+            alpha_pga=torch.nn.functional.softplus(a_pga),
+            beta_pga=torch.tanh(b_pga) * self.beta_scale,
+            alpha_pcm=1.0 + self.alpha_pcm_scale * torch.tanh(a_pcm),
+            beta_pcm=torch.tanh(b_pcm) * self.beta_scale,
+            n_spec=torch.nn.functional.softplus(n_spec),
+            lam=torch.sigmoid(lam),
+        )

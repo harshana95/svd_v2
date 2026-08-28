@@ -60,10 +60,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models.LucidFlux.jepa_helpers import (
     extract_vjepa_tokens, load_vjepa2_model, vjepa_from_unit_tensor,
 )
-from models.LucidFlux.dino_helpers import (
+from models.reFlux.dino_helpers import (
     extract_dino_tokens, load_dinov2_model,
 )
-from models.LucidFlux.clip_helpers import (
+from models.reFlux.clip_helpers import (
     clip_from_unit_tensor, extract_clip_tokens, load_clip_model,
 )
 

@@ -16,7 +16,7 @@ from tqdm import tqdm
 from models.base_model import BaseModel
 from utils import log_image, log_metrics
 
-from .helpers import (
+from models.LucidFlux.helpers import (
     PROMPT,
     calculate_shift,
     decode_latents_flux,
@@ -41,7 +41,7 @@ from .dino_helpers import (
     get_dino_num_patches,
     load_dinov2_model,
 )
-from .jepa_helpers import (
+from models.LucidFlux.jepa_helpers import (
     extract_vjepa_tokens,
     extract_vjepa_tokens_multilayer,
     get_vjepa_feature_dim,
@@ -69,7 +69,7 @@ from .cross_attn_projector import (
     resolve_transformer_context_dim,
     resolve_vjepa_projector_slots,
 )
-from .src.flux.lucidflux import (
+from models.LucidFlux.src.flux.lucidflux import (
     load_precomputed_embeddings,
     load_swinir,
 )

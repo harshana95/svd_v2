@@ -38,13 +38,13 @@ from .dino_helpers import (
     get_dino_feature_dim,
     load_dinov2_model,
 )
-from .helpers import (
+from models.LucidFlux.helpers import (
     decode_packed_vae_tokens,
     encode_vae_packed_tokens,
     get_flux2_pipeline_class,
     get_latent_token_layout,
 )
-from .jepa_helpers import (
+from models.LucidFlux.jepa_helpers import (
     extract_vjepa_tokens,
     extract_vjepa_tokens_multilayer,
     get_vjepa_feature_dim,
@@ -60,7 +60,7 @@ from .vljepa_helpers import (
     preprocess_vljepa_image,
     tokenize_vljepa_query,
 )
-from .src.flux.lucidflux import load_swinir
+from models.LucidFlux.src.flux.lucidflux import load_swinir
 
 
 def _cfg(opt, key, default=None):

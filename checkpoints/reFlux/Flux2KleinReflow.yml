@@ -1,0 +1,152 @@
+# Flux2KleinReflow: rectified-flow (ReFlow) distillation of FLUX.2-klein-4B for
+# image restoration. The frozen teacher is rolled out num_teacher_steps to build
+# a self-consistent (noise, output) pair; the student is trained with a plain
+# flow-matching loss on the straight line between that pair, plus a pixel-anchor
+# loss (L2 + LPIPS) computed from the student's own num_student_steps rollout
+# against the real GT, plus an optional conditional GAN loss.
+# Targets a 2-step student sampler (num_student_steps) rather than 1-step, since
+# a single reflow round straightens but does not perfectly linearize the ODE.
+
+name: Motion
+model_type: Flux2KleinReflow_model
+tracker_project_name: Motion
+experiment_key: Flux2KleinReflow
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# FLUX.2-klein-4B backbone
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+# Precomputed null-text embeddings (reuse from baseline if available)
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+
+    split: train
+    trust_remote_code: true
+
+    repeat: 20
+    num_proc: 32
+    map_batch_size: 16
+
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop_random:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: validation
+    trust_remote_code: true
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  # Student LoRA settings
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+  # ReFlow step counts — teacher builds pairs over num_teacher_steps (no_grad,
+  # expensive but cheap in aggregate since fp16 + no_grad); student trains and
+  # samples with num_student_steps (4 by default, gradient kept on the last step
+  # only so the pixel-anchor loss doesn't need to hold activations for all 4).
+  num_teacher_steps: 8
+  num_student_steps: 2
+
+  # Loss weights — set lambda_gan: 0.0 to disable the discriminator branch.
+  lambda_reflow: 1.0
+  lambda_l2: 1.0
+  lambda_lpips: 1.0
+  lambda_gan: 0.1
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 0.5
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 2      # matches train.num_student_steps
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

@@ -1,0 +1,172 @@
+# Flux2KleinReflowT2I: rectified-flow (ReFlow) distillation of FLUX.2-klein-4B
+# for pure text-to-image generation (no LQ/reference-image conditioning, no
+# blur). The frozen teacher is rolled out num_teacher_steps from noise to
+# build a self-consistent (noise, output) pair conditioned on real captions;
+# the student is trained with a flow-matching loss on the straight line
+# between that pair, plus a pixel-anchor loss (L2 + LPIPS) computed from the
+# student's own num_student_steps rollout against a real photo.
+# Targets a 2-step student sampler (bumped from 1 after a 1-step, no-GAN run
+# collapsed to a near-uniform blurry output). GAN loss re-enabled with an
+# unconditional discriminator (input_nc=3, no LQ image to condition on) to
+# add adversarial pressure against exactly that collapse; see model docstring.
+
+name: T2I
+model_type: Flux2KleinReflowT2I_model
+tracker_project_name: T2I
+experiment_key: Flux2KleinReflowT2I
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# FLUX.2-klein-4B backbone
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: nlphuji/flickr30k
+    split: test              # the only HF split; train/val carved out below by split_range
+    split_range: [0, 95]
+
+    repeat: 1
+    # num_proc>1 forks dataset.map workers *after* the model is already on the
+    # GPU (see trainer.py: create_model() runs before setup_dataloaders()),
+    # which can deadlock on an inherited lock from a background CUDA/thread-pool
+    # thread that didn't survive fork(). Single-process avoids the hazard;
+    # it's a one-time cost since the mapped result is cached to disk.
+    num_proc: 1
+    map_batch_size: 16
+
+    use_shuffle: true
+    gt_key: image
+    lq_key: image  # unused by this model; must be a string, see hf_dataset.py setup_dataset
+
+    common_transforms_keys: [image]
+    transforms:
+      to_tensor:
+      # flickr30k images are natively <=500px on their long side, smaller than
+      # the 512 target on most samples — plain crop_random passes undersized
+      # images through unchanged (see crop_random._sample_indices), producing
+      # variable shapes that fail to stack in the default collate. crop_random_aspect
+      # always resizes to (h, w), so it's size-robust regardless of source resolution.
+      crop_random_aspect:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val:
+    type: HuggingFaceDataset
+    name: nlphuji/flickr30k
+    split: test
+    split_range: [95, 100]
+    num_proc: 1
+
+    use_shuffle: false
+    gt_key: image
+    lq_key: image  # unused by this model; must be a string, see hf_dataset.py setup_dataset
+
+    common_transforms_keys: [image]
+    transforms:
+      to_tensor:
+      # deterministic: scale/ratio pinned to 1.0 collapses this to a fixed
+      # centered-square-crop-then-resize (see crop_random_aspect._sample_params
+      # fallback) instead of train's randomized crop.
+      crop_random_aspect:
+        h: 512
+        w: 512
+        scale: [1.0, 1.0]
+        ratio: [1.0, 1.0]
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  # Student LoRA settings
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+  # ReFlow step counts — teacher builds pairs over num_teacher_steps (no_grad,
+  # expensive but cheap in aggregate since fp16 + no_grad); student trains and
+  # samples with num_student_steps.
+  num_teacher_steps: 8
+  num_student_steps: 2
+
+  # Output resolution for inference when no GT image is available to infer
+  # size from (forwardpass() defaults). Training itself infers lat_h/lat_w
+  # from the GT crop shape directly.
+  image_h: 512
+  image_w: 512
+
+  # Loss weights — set lambda_gan: 0.0 to disable the discriminator branch.
+  lambda_reflow: 1.0
+  lambda_l2: 1.0
+  lambda_lpips: 1.0
+  lambda_gan: 0.1
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 0.5
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+
+  max_train_steps: 30000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 2      # matches train.num_student_steps
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

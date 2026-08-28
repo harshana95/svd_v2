@@ -67,27 +67,65 @@ def load_model_hook(models, input_dir):
 
         # load diffusers style into model
         try:
-            try:
-                c, _ = find_network_class(class_name)
-            except ValueError as e:  # class is not written by us. Try to load from diffusers
-                m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
-                c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found    
-            
-            assert c is not None
-            if hasattr(c, 'config_class'):
-                assert c.config_class is not None
-            else:
-                print(f"********* Class {class_name} does not have a config_class") 
-
             if "PeftModel" in class_name:
-                model = peft.PeftModel.from_pretrained(model.base_model.model, ckpt_dir, is_trainable=True)
+                # peft's PeftModel isn't a diffusers/local arch class, so it
+                # can't be resolved via find_network_class or diffusers'
+                # namespace (getattr(diffusers, "PeftModel") raises
+                # AttributeError, not the ValueError the branch below
+                # expects) — handle it before that lookup runs at all.
+                #
+                # Must load in place via set_peft_model_state_dict, NOT
+                # `peft.PeftModel.from_pretrained(model.base_model.model, ...)`
+                # — that call was confirmed (empirically, via
+                # `id(param_before) != id(param_after)`) to construct brand
+                # new nn.Parameter objects for every LoRA weight, silently
+                # replacing the ones already injected into the shared base
+                # transformer. Any optimizer built before this resume (i.e.
+                # every optimizer in this codebase, since setup_optimizers()
+                # always runs during prepare(), before train() ever resumes a
+                # checkpoint) still holds `param_groups[...]['params']`
+                # referencing the OLD, now-orphaned Parameter objects: the
+                # forward/backward pass runs on the NEW ones (so losses and
+                # saved checkpoints look completely normal), but
+                # optimizer.step() reads .grad from the stale objects, which
+                # is always None post-resume, so AdamW silently no-ops on
+                # every single call for the rest of that process's lifetime.
+                # Confirmed via direct weight-file checksums across three
+                # independent resumed training lines in this codebase
+                # (Flux2KleinDistill, Flux2KleinDistillVJEPA,
+                # Flux2KleinHybrid): every "continued" checkpoint was
+                # byte-identical to the checkpoint it resumed from, despite
+                # 20,000+ further training steps and varying hyperparameters
+                # (including learning rate) — see the
+                # peft_resume_optimizer_disconnect memory note.
+                # set_peft_model_state_dict updates the *existing* Parameter
+                # objects' data in place (verified: `id(param) unchanged`,
+                # values correctly overwritten), keeping every already-built
+                # optimizer's references valid.
+                from peft.utils import set_peft_model_state_dict
+                combined_state_dict = {}
+                for file_path in glob.glob(os.path.join(ckpt_dir, "*.safetensors")):
+                    combined_state_dict.update(load_file(file_path))
+                set_peft_model_state_dict(model, combined_state_dict, adapter_name="default")
             else:
+                try:
+                    c, _ = find_network_class(class_name)
+                except ValueError as e:  # class is not written by us. Try to load from diffusers
+                    m = importlib.import_module('diffusers') # load the module, will raise ImportError if module cannot be loaded
+                    c = getattr(m, class_name)  # get the class, will raise AttributeError if class cannot be found
+
+                assert c is not None
+                if hasattr(c, 'config_class'):
+                    assert c.config_class is not None
+                else:
+                    print(f"********* Class {class_name} does not have a config_class")
+
                 combined_state_dict = {}
                 for file_path in glob.glob(os.path.join(ckpt_dir, "*.safetensors")):
                     state_dict_part = load_file(file_path)
                     combined_state_dict.update(state_dict_part)
                 model.load_state_dict(combined_state_dict)
-                
+
         except Exception as e:
             # Fallback: load plain torch checkpoint produced by save_model_hook
             try:
@@ -118,8 +156,15 @@ class BaseModel():
         if not self.is_train:
             opt['name'] = 'infer'
             opt['tracker_project_name'] = 'infer'
-        self.experiment_name = opt.experiment_key + f"{opt.comment if opt.comment else ''}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
-        self.accelerator = initialize(opt, logger, self.experiment_name)
+        use_same_dir = bool(opt.path.get('use_same_dir', False))
+        resume_from_checkpoint = opt.path.get('resume_from_checkpoint')
+        resume_from_path = opt.path.get('resume_from_path')
+        if use_same_dir and resume_from_checkpoint and resume_from_path:
+            self.experiment_name = os.path.basename(os.path.normpath(resume_from_path))
+            self.accelerator = initialize(opt, logger, self.experiment_name, experiments_root=resume_from_path)
+        else:
+            self.experiment_name = opt.experiment_key + f"{opt.comment if opt.comment else ''}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
+            self.accelerator = initialize(opt, logger, self.experiment_name)
         logger.info(opt)
         self.opt = opt
         self.logger = logger
@@ -429,6 +474,9 @@ class BaseModel():
     def load_other_parameters(self, path):
         pass
 
+    def after_resume_checkpoint(self, load_path):
+        pass
+
     def forwardpass(self, *args, **kwargs):
         pass
 
@@ -538,6 +586,7 @@ class BaseModel():
                 # Remove incompatible entries so Adam re-initializes them lazily.
                 self._sanitize_optimizer_state_shapes()
                 self.load_other_parameters(load_path)
+                self.after_resume_checkpoint(load_path)
                 self.global_step = int(path.split("-")[1])
 
                 initial_global_step = self.global_step-1

@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 from .clip_helpers import get_clip_num_patches
 from .dino_helpers import get_dino_num_patches
-from .jepa_helpers import get_vjepa_num_patches
+from models.LucidFlux.jepa_helpers import get_vjepa_num_patches
 
 logger = logging.getLogger(__name__)
 

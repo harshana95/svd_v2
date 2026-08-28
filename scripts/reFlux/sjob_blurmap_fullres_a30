@@ -1,0 +1,39 @@
+#!/bin/bash
+# Full-resolution inference smoke test for ContextFluxBlurMap on an A30 (24 GB).
+# Answers one question: does a native 1280x720 single pass fit, or is tiling required?
+# An OOM here does NOT prove it OOMs on an A100-80GB -- rerun there before concluding.
+#SBATCH -p a30
+#SBATCH -A stanchan
+#SBATCH --qos=standby
+#SBATCH -N 1
+#SBATCH -n 16
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=64G
+#SBATCH --time=2:00:00
+#SBATCH --job-name bm_fullres
+#SBATCH -o logs/slurm-%x-%j.out
+#SBATCH -e logs/slurm-%x-%j.err
+
+set -uo pipefail
+cd /home/wweligam/svd_v2
+mkdir -p logs
+
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/wweligam/home_env
+
+export TORCH_HOME=/depot/chan129/users/harshana/weights/torch_hub
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+
+python trainer.py -opt ./checkpoints/reFlux/ContextFluxBlurMap_fullres_eval.yml -infer
+rc=$?
+echo "=== exit code: $rc ==="
+if [ $rc -ne 0 ]; then
+  echo "If this was a CUDA OOM, the fallback is tiling:"
+  echo "  python infer_fullres.py --config checkpoints/reFlux/ContextFluxBlurMap.yml \\"
+  echo "    --resume-from-path /depot/chan129/users/harshana/backups/reFlux_2026_08_27/ContextFluxBlurMap_2026_07_12_02_43_19 \\"
+  echo "    --checkpoint checkpoint-50000 --input-dir /depot/chan129/users/harshana/eval_sets/gopro_test \\"
+  echo "    --out-dir results/blurmap_gopro --tile --tile-size 512 --max-images 3 --metrics"
+fi
+exit $rc

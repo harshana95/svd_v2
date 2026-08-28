@@ -1,0 +1,199 @@
+# Continuous Trajectory Modeling via Implicit Neural Representations (INRs).
+# See models/ContinuousTrajectory/README.md for the theory and design notes.
+#
+# Run: python trainer.py -opt checkpoints/ContinuousTrajectory/TrajectoryINR_base.yml -comment my_run
+# Or:  accelerate launch trainer.py -opt checkpoints/ContinuousTrajectory/TrajectoryINR_base.yml -comment my_run
+#
+name: ContinuousTrajectory
+model_type: TrajectoryINR_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 10
+mixed_precision: !!str no   # homography inverse + sin/cos math is untested under bf16/fp16 -- start in fp32
+allow_tf32: true
+tracker_project_name: ContinuousTrajectory
+experiment_key: TrajectoryINR_base
+
+# network structures
+network:
+  type: TrajectoryINR
+  in_channels: 3
+  out_channels: 3
+  base_channels: 32
+  latent_dim: 256
+  siren_hidden_dim: 256
+  siren_num_layers: 5
+  siren_omega_0: 30.0
+  max_rotation_deg: 8.0     # bound on |rotation| at any t, for physical plausibility + training stability
+  max_translation: 0.15     # bound on |T/d| at any t (normalized by focal length)
+  num_time_samples: 32      # number of stratified t-samples per forward pass during training
+  focal_px: ~               # null -> defaults to max(H, W) pixels
+
+datasets:
+  train:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [0, 99]
+    is_train: true
+    global_blur: true
+    return_meta: false   # set true + meta_include_kernel to also log the GT trajectory (Ms) for validation-only comparisons
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 1   # num_proc > 1 forks HF datasets.map() workers after this process's CUDA context exists -> observed hang (see below); mirrors the documented num_proc=1 fix for the same class of bug elsewhere in this environment
+    num_worker_per_gpu: 0   # GPU-SAM + per-image mask caching (dataset/synth_motionblur_dataset.py) measured faster than CPU-SAM + multi-worker -- see that file's notes
+    use_shuffle: true
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+      resize:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    # The original /scratch/.../foreground_images/foreground/ (RGBA, precomputed
+    # masks in alpha) is empty on this cluster -- scratch-purged. Using a plain
+    # photo pool instead; synth_motionblur_dataset.py runs SAM per-item to get
+    # the mask when the foreground image has no alpha channel.
+    #
+    # NOTE: flickr30k source images are ~333-500px, far smaller than the
+    # 1024x1024 `crop` used elsewhere in this file -- crop_arr() PADS with
+    # black rather than upsampling when the source is smaller than the
+    # target, so a crop step here left ~85% of every foreground frame pure
+    # black. SAM's foreground point-prompt is a uniformly random pixel, so it
+    # then overwhelmingly segmented that black padding as "the object",
+    # inverting the composite (mask=black-region pastes in black; the actual
+    # photo's footprint got replaced by background instead). Using a direct
+    # resize (stretches to fill the target, no padding) instead of crop+resize
+    # fixes this.
+    foreground_dataset:
+      name: /depot/chan129/users/harshana/Datasets/Deconvolution/flickr30k_images/
+      split: train
+      split_range: [1, 21]   # ~6.3k of the 31.7k images -- plenty of foreground diversity while keeping the one-time num_proc=1 preprocessing pass to a reasonable ~20min instead of ~1.5h
+      num_proc: 1            # see note under datasets.train.num_proc
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        resize:
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+  val:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [99, 100]
+    is_train: false
+    global_blur: true
+    return_meta: false
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 1
+    num_worker_per_gpu: 0   # see note under datasets.train
+    use_shuffle: false
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+      resize:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    foreground_dataset:
+      name: /depot/chan129/users/harshana/Datasets/Deconvolution/flickr30k_images/
+      split: train
+      split_range: [0, 1]
+      num_proc: 1   # see note under datasets.train.num_proc
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        resize:   # direct resize, no crop -- see note under datasets.train.foreground_dataset
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 2e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 500
+    lr_num_cycles: 3
+    lr_power: 1.0
+
+  # loss/lambda history: 1*L1 sharp + equal lambda_sharp/lambda_reblur (both
+  # 1.0) let the model settle into a degenerate fixed point -- x_hat ~= the
+  # blurry input with a near-identity trajectory, which trivially drives
+  # loss_reblur towards 0 while only partially paying the (blur-insensitive)
+  # L1 sharp penalty. Confirmed via saved validation images: sharp was ~3x
+  # closer (L1) to the blurry input than to GT. Fix: weight sharp supervision
+  # much more heavily, and add a gradient-domain term (L1GradientLoss) that
+  # directly penalizes remaining blur, which plain L1 barely notices.
+  loss: 1*L1|2*L1GradientLoss   # supervises the recovered sharp image x_hat (skipped if a batch has no GT)
+  reblur_loss: 1*L1              # self-supervised consistency term (always available) -- de-weighted below so it can no longer dominate
+  lambda_sharp: 5.0
+  lambda_reblur: 0.2
+  lambda_smooth: 0.01       # weight on the trajectory-smoothness prior, see TrajectoryINR_model.py
+  num_time_samples_val: 64  # denser sampling for smoother reconstructions at validation time
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 8
+
+  max_train_steps: 30000
+  validation_steps: 500
+  checkpointing_steps: 500
+  checkpoints_total_limit: 2
+
+  patched: false   # must stay false -- see TrajectoryINR_model.py docstring
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 1
+  max_val_steps: 10
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

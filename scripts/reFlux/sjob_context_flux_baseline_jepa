@@ -26,4 +26,4 @@ fi
 accelerate launch \
   --num_processes 2 \
   --mixed_precision bf16 \
-  trainer.py -opt ./checkpoints/Flux/ContextFluxBaselineJEPA.yml
+  trainer.py -opt ./checkpoints/reFlux/ContextFluxBaselineJEPA.yml

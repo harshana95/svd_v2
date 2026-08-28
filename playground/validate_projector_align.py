@@ -18,7 +18,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
         "-opt",
-        default="checkpoints/Flux/ContextProjectorAlign_JEPA.yml",
+        default="checkpoints/reFlux/ContextProjectorAlign_JEPA.yml",
         help="Training config YAML",
     )
     p.add_argument("--max-train-steps", type=int, default=2)
@@ -68,7 +68,7 @@ def main():
         print(f"[FAIL] {name}: {err}")
 
     if args.projector_only:
-        from models.LucidFlux.cross_attn_projector import (
+        from models.reFlux.cross_attn_projector import (
             DualHeadPatchCrossAttnProjector,
             PatchCrossAttnProjector,
             VaeToTextTargetBridge,
@@ -76,10 +76,10 @@ def main():
             load_jepa_projector_weights,
             resample_text_tokens,
         )
-        from models.LucidFlux.dino_helpers import get_dino_num_patches
+        from models.reFlux.dino_helpers import get_dino_num_patches
         from models.LucidFlux.helpers import pack_projector_vae_tokens
         from models.LucidFlux.jepa_helpers import get_vjepa_num_patches
-        from models.LucidFlux.vljepa_helpers import VLJEPA_EMBED_DIM
+        from models.reFlux.vljepa_helpers import VLJEPA_EMBED_DIM
 
         text_dim = 7680
         lat_h = lat_w = 32

@@ -1,0 +1,130 @@
+# D-JEPA baseline (https://arxiv.org/abs/2410.03755, ICLR 2025).
+#
+# Loads the official pretrained ImageNet generator (frozen, no training here)
+# and runs it as a training-free SDEdit-style restoration baseline -- see
+# models/Baselines/DJEPA/README.md for how that adaptation works and why.
+#
+# Run inference only (this baseline has nothing to train):
+#   python trainer.py -opt checkpoints/Baselines/DJEPA_base.yml -infer
+#
+# First run downloads ~1.7GB (djepa_base.pth, via huggingface_hub -- lands in
+# the normal HF cache) and ~266MB (kl16.ckpt, from MAR's Dropbox link -- lands
+# in djepa_cache_dir). Gilbreth compute nodes usually have no internet access:
+# either run once on a login node to warm the caches, or pre-download both and
+# point djepa_checkpoint_path / djepa_vae_ckpt_path at local copies.
+
+name: Baselines
+model_type: DJEPA_model
+tracker_project_name: Baselines
+experiment_key: DJEPA_base_SDEdit
+
+is_train: false
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: !!str no
+allow_tf32: true
+
+# --- D-JEPA setup ---
+djepa_variant: base            # base (212M) | large (687M) | huge (1.4B)
+djepa_img_size: 256            # fixed by the released checkpoints' learned positional embeddings
+djepa_use_ema: true            # evaluate() in the official repo always uses the EMA weights
+
+# Leave ~ to auto-download (see header above); set to a local path to use a
+# pre-staged copy instead (required if the compute node has no internet).
+djepa_checkpoint_path: ~
+djepa_vae_ckpt_path: ~
+djepa_cache_dir: ~             # defaults to ~/.cache/djepa
+
+datasets:
+  train:
+    # Unused (is_train: false), but setup_dataloaders() always builds it.
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: train
+    num_proc: 1
+    map_batch_size: 16
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    gt_key: gt
+    lq_key: blur
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 256
+        w: 256
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val:
+    type: HuggingFaceDataset
+    name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
+    split: validation
+    num_proc: 1
+    map_batch_size: 16
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 256
+        w: 256
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+# Present because BaseModel reads these fields regardless of is_train; none of
+# it is exercised here since DJEPA_model has no trainable parameters/optimizer.
+train:
+  gradient_accumulation_steps: 1
+  num_train_epochs: 0
+  batch_size: 4
+  max_train_steps: 0
+  validation_steps: 1
+  checkpointing_steps: 1000000
+  checkpoints_total_limit: 1
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 4
+  max_val_steps: 50
+
+  # --- SDEdit-style restoration knobs (see djepa_wrapper.sdedit_sample_tokens) ---
+  djepa_strength: 0.6            # (0, 1]: 0 -> pass the LQ through almost unchanged, 1 -> ignore it, generate from scratch
+  djepa_num_iter: 64             # autoregressive unmasking iterations (paper default for evaluate())
+  djepa_cfg_scale: 1.0           # classifier-free guidance scale (1.0 = disabled)
+  djepa_cfg_schedule: linear     # linear | constant
+  djepa_temperature: 1.0         # per-token diffusion-loss sampling temperature
+  djepa_time_shifting_factor: 1.0
+  djepa_class_label: ~           # set an ImageNet class id (0-999) to condition generation, ~ for unconditional
+  djepa_vae_encode_mode: mode    # mode | sample -- how the LQ image is encoded into VAE latent space
+  djepa_progress: false          # tqdm progress bar per image during sampling (noisy in logs)
+
+  metrics:
+    psnr:
+      crop: 30
+    ssim:
+      crop: 30
+    mse:
+      crop: 30

@@ -1,0 +1,11 @@
+# LumaFlux dependencies (all present in the Gilbreth `home_env` conda env).
+torch>=2.4
+diffusers>=0.31
+transformers>=4.45
+accelerate>=0.34
+safetensors
+einops
+imageio
+numpy
+pyyaml
+pillow

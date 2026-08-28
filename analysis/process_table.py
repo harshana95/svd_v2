@@ -1,6 +1,6 @@
 import re
 
-def highlight_best_and_second(latex_table, best_cmd=r"\RB", second_best_cmd=r"\BB", third_best_cmd=r"\TB", by_section=True):
+def highlight_best_and_second(latex_table, best_cmd=r"\colorbox{red!20}", second_best_cmd=r"\colorbox{magenta!15}", third_best_cmd=r"\colorbox{yellow!10}", by_section=True):
     """
     by_section: If True (default), treat each block between \\hline/\\bottomrule separately.
                 If False, treat the whole table as one block for best/second-best per column.
@@ -128,17 +128,18 @@ def highlight_best_and_second(latex_table, best_cmd=r"\RB", second_best_cmd=r"\B
 # --- Example Usage ---
 table_code = r"""
 \toprule
-    \textbf{Method} & \textbf{PSNR$\uparrow$} & \textbf{SSIM$\uparrow$} & \textbf{LPIPS$\downarrow$} & \textbf{DISTS$\downarrow$} & \textbf{FID$\downarrow$} & \textbf{NIQE$\downarrow$} & \textbf{MUSIQ$\uparrow$} & \textbf{MANIQA$\uparrow$} & \textbf{CLIPIQA$\uparrow$}  \\ \hline
-    Yang \emph{et al.}~\cite{parfocal} & 15.0096 & 0.4429 & 0.5428 & 0.3385 & 192.3649 & 5.9950 & 37.0225 & 0.2027 & 0.2403 \\
-    Tseng \emph{et al.}~\cite{Tseng2021NeuralNanoOptics} & 24.5606 & 0.8032 & 0.3010 & 0.1937 & 124.9688 & 4.7498 & 46.9808 & 0.2378 & 0.3925 \\
-    Pinilla \emph{et al.}~\cite{Pinilla2023} & 24.5414 & 0.7069 & 0.3867 & 0.2112 & 163.5929 & 5.2301 & 35.2180 & 0.2091 & 0.2659 \\
-    Ours  & 21.9542 & 0.6294 & 0.2042 & 0.1397 & 108.9117 & 3.9841 & 61.0900 & 0.3747 & 0.5121\\
+    \textbf{Method} & \textbf{PSNR$\uparrow$} & \textbf{SSIM$\uparrow$} & \textbf{LPIPS$\downarrow$} & \textbf{DISTS$\downarrow$} & \textbf{FID$\downarrow$} & \textbf{NIQE$\downarrow$} & \textbf{MUSIQ$\uparrow$} & \textbf{MANIQA$\uparrow$} & \textbf{CLIPIQA$\uparrow$} & \textbf{$\Delta E\downarrow$}  \\ \hline
+Null prompt     & 22.0073 & 0.6384 & 0.2084 & 0.1286 & 74.5682 & 4.0055 & 62.4912 & 0.401  & 0.5243 & 7.3373 \\
+DAPE+RAM (1.4B) & 22.0628 & 0.6402 & 0.2066 & 0.1274 & 70.33   & 4.0269 & 62.6077 & 0.4047 & 0.5089 & 7.296  \\
+Gemma (4B)      & 21.7278 & 0.6306 & 0.2092 & 0.1281 & 73.3891 & 3.9457 & 63.1069 & 0.4054 & 0.52   & 7.5338 \\
+Qwen (8B)       & 22.0508 & 0.6428 & 0.2074 & 0.1276 & 72.2598 & 4.0031 & 62.2831 & 0.4013 & 0.5101 & 7.273  \\
+Florence (0.7B) & 21.9399 & 0.6369 & 0.2066 & 0.1273 & 71.4014 & 3.9683 & 62.8393 & 0.4058 & 0.5057 & 7.3827
 \bottomrule
 """
 # GAN (NAFNet) \cite{chen2022nafnet} &  \RB{38.13}   & \BB{0.9500}  &   \RB{0.0632} &  \RB{0.0319}      & \RB{6.97}     &  \RB{4.7797}    & \RB{39.25}   &   \RB{0.3750}  &  0.4396 \\
 #     GAN (SwinU) \cite{liu2021swin}    & \BB{36.04}  & 0.9471  & \BB{0.0837}   & \BB{0.0549}   & \BB{11.83}  & 5.6657  & 38.04 & 0.3468  & 0.3896 \\
 
 # By default, each block between \hline is processed separately (by_section=True)
-print(highlight_best_and_second(table_code))
+# print(highlight_best_and_second(table_code))
 # To treat the whole table as one block for best/second per column:
 print(highlight_best_and_second(table_code, by_section=False))

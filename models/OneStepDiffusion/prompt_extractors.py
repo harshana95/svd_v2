@@ -102,7 +102,7 @@ class ChatVLMExtractor(BasePromptExtractor):
     def _ensure_loaded(self):
         if self._captioner is not None:
             return
-        from models.LucidFlux.caption_helpers import ImageCaptioner
+        from models.reFlux.caption_helpers import ImageCaptioner
 
         self._captioner = ImageCaptioner(
             model_name=self.model_name,
@@ -148,7 +148,7 @@ class FlorenceExtractor(BasePromptExtractor):
         self._model.eval()
 
     def get_captions(self, images, bsz):
-        from models.LucidFlux.caption_helpers import tensor_to_pil
+        from models.reFlux.caption_helpers import tensor_to_pil
 
         self._ensure_loaded()
         images_01 = images * 0.5 + 0.5

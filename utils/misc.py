@@ -69,13 +69,16 @@ def get_basename(p):
         tmp = os.path.basename(p)
     return tmp
 
-def initialize(args, logger, experiment_name):
+def initialize(args, logger, experiment_name, experiments_root=None):
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
             " Please use `huggingface-cli login` to authenticate with the Hub."
         )
-    args.path.experiments_root = os.path.join(args.path.root, args.name, experiment_name)
+    if experiments_root is not None:
+        args.path.experiments_root = os.path.normpath(experiments_root)
+    else:
+        args.path.experiments_root = os.path.join(args.path.root, args.name, experiment_name)
     logging_dir = os.path.join(args.path.experiments_root, args.path.logging_dir)
 
     accelerator_project_config = ProjectConfiguration(project_dir=args.path.experiments_root,
@@ -396,10 +399,12 @@ def calculate_ssim(img1, img2, crop=30):
     img1 = cv2.resize(img1, (256,256))
     img2 = cv2.resize(img2, (256,256))
     # Compute SSIM between the two images
+    # data_range is required by newer skimage (>=0.19) for floating-point input;
+    # every caller in this codebase passes images normalized to [0, 1].
     if crop is None:
-        ssim_value, ssim_map = ssim(img1, img2, full=True, win_size=7)
+        ssim_value, ssim_map = ssim(img1, img2, full=True, win_size=7, data_range=1.0)
     else:
-        ssim_value, ssim_map = ssim(img1[crop:-crop, crop:-crop], img2[crop:-crop, crop:-crop], full=True, win_size=7)
+        ssim_value, ssim_map = ssim(img1[crop:-crop, crop:-crop], img2[crop:-crop, crop:-crop], full=True, win_size=7, data_range=1.0)
     return ssim_value, ssim_map
 
 # Convert the figure to a NumPy array

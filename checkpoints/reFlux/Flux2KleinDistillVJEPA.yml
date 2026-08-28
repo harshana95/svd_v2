@@ -1,0 +1,227 @@
+# Flux2KleinDistillVJEPA: Flux2KleinDistill.yml's recipe (one-step/multi-step
+# distillation of FLUX.2-klein-4B for image restoration: pixel supervision +
+# feature-similarity loss + pixel/feature-space GAN), with V-JEPA 2.1
+# (facebookresearch/vjepa2, vjepa2_1_vit_large_384) as the frozen encoder
+# behind loss_dino/net_d_dino (feature_encoder: vjepa2), PLUS V-JEPA used a
+# second way: use_vjepa_condition: true projects the LQ image's V-JEPA patch
+# tokens through a learned-query cross-attention projector
+# (vjepa_projector, see cross_attn_projector.PatchCrossAttnProjector) into
+# extra txt-sequence conditioning tokens, concatenated onto the null-text
+# embeddings the transformer already sees — on top of the existing
+# VAE-latent LQ conditioning already concatenated into the img stream. Same
+# mechanism ContextFluxBaseline_model.py uses for its *ContextFluxBaselineJEPA
+# configs, ported into the distillation training loop here. See
+# Flux2KleinDistill_model.py's _prepare_conditioning/use_vjepa_condition.
+#
+# Originally started fresh rather than resuming from Flux2KleinDistill's
+# checkpoint-50000+: net_d_dino is a discriminator over the *specific*
+# feature space it was trained against, so a checkpoint trained against
+# DINOv2 features isn't a meaningful warm start once the encoder underneath
+# it changes to V-JEPA 2.1 (and the resume mechanism loads
+# transformer/net_d/net_d_dino as one unit — there's no way to resume the
+# LoRA generator alone).
+#
+# PHASE 2 (current state): resuming from this same experiment's own
+# checkpoint-20000, num_student_steps bumped 1 -> 4. Phase 1 (K=1, 20k
+# steps from a cold LoRA) completed cleanly: no crashes, PSNR up to 38.97dB,
+# stable non-collapsed losses throughout. Two earlier *fresh-start* attempts
+# at K=4 (with and without the V-JEPA loss branch enabled) both collapsed
+# the generator to pure noise by step 4-10k, with no NaN/Inf and no
+# discriminator blow-up — ruling out V-JEPA specifically and pointing at
+# cold K=4 itself: Flux2KleinDistill.yml's own K=4 recipe was only ever
+# validated as a *continuation* after 50k steps of K=1 training, never from
+# a cold LoRA; with grad_last_step_only=True, a cold K=4 rollout's first 3
+# (no_grad, untrained-LoRA) steps likely produce an off-distribution latent
+# that the single gradient-connected final step can't sensibly correct,
+# which K=1 never has to deal with at init. Phase 1's now-trained LoRA
+# should avoid that failure mode — mirrors Flux2KleinDistill's own actual
+# history (50k at K=1, then switched to K=4).
+
+name: Motion
+model_type: Flux2KleinDistill_model
+tracker_project_name: Motion
+experiment_key: Flux2KleinDistillVJEPA
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# FLUX.2-klein-4B backbone
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+# Precomputed null-text embeddings (reuse from baseline if available)
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+# V-JEPA 2.1 feature encoder (frozen, gradient flows to the student only) in
+# place of DINOv2 — see Flux2KleinDistill_model.py.
+feature_encoder: vjepa2
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: true
+vjepa_checkpoint_path: ~
+
+# Also route V-JEPA through a trainable projector into extra FLUX text-
+# conditioning tokens (see file header + _prepare_conditioning). Requires
+# feature_encoder: vjepa2 above (reuses that encoder, doesn't load a second
+# one). vjepa_condition_num_slots left unset -> defaults to the encoder's
+# native patch-grid size (resolve_vjepa_projector_slots).
+use_vjepa_condition: true
+vjepa_condition_num_slots: ~
+vjepa_projector_hidden: 2048
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+
+    split: train
+    trust_remote_code: true
+
+    repeat: 20
+    num_proc: 32
+
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+
+    # No `transforms:` block: source images are 1920x1080, and caching them
+    # through a .map() pipeline (even just to_tensor+normalize, no crop) means
+    # materializing every one of the 156,980 (after repeat: 20) rows as a
+    # float32 tensor up front — that OOM-killed dataset construction even
+    # after cutting num_proc and writer_batch_size way down. Leaving
+    # `transforms:` unset makes HuggingFaceDataset skip .map() entirely, so
+    # rows stay as lazily-decoded PIL images; crop + to_tensor + normalize all
+    # happen together in random_aspect_crop_collate (Flux2KleinDistill_model.py
+    # setup_dataloaders) at batch-collation time instead — same idea as
+    # before (fixed aspect ratio per batch, varies across batches, no resize),
+    # just cropping the PIL image before ever converting it to a tensor so the
+    # full resolution is never materialized.
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: validation
+    trust_remote_code: true
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  # Resume weights (transformer LoRA + both discriminators + vjepa_projector)
+  # from phase 1's completed 20k-step run, then continue under the K=4
+  # recipe. Writes to a fresh timestamped experiment dir (use_same_dir not
+  # set) so phase 1 and phase 2's logs/images/comet experiments stay
+  # separate for comparison. global_step resumes at 20000, hence
+  # train.max_train_steps below is raised past that.
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/Flux2KleinDistillVJEPA_2026_07_26_17_45_23
+  resume_from_checkpoint: latest
+
+train:
+  # Student LoRA settings
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+  # Random-aspect-ratio crop, applied per training batch in a custom collate_fn
+  # (fixed within a batch, resampled for the next one) — see setup_dataloaders
+  # in Flux2KleinDistill_model.py. crop_area_h/w set the pixel budget (h*w);
+  # the sampled aspect ratio then determines the actual crop height/width, no
+  # resize afterward, so different batches really do get different resolutions.
+  crop_area_h: 512
+  crop_area_w: 512
+  crop_scale: [0.5, 1.0]
+  crop_ratio: [0.75, 1.3333]
+
+  # K=4 now that phase 1 (K=1) has trained the LoRA past init — see file header.
+  num_student_steps: 4
+
+  # Loss weights — set lambda_dino/lambda_gan/lambda_gan_dino: 0.0 to disable any of them
+  lambda_l2: 1.0
+  lambda_lpips: 1.0
+  lambda_dino: 1.0
+  # Stable value carried over from Flux2KleinDistill.yml (lowered from 0.1
+  # after a discriminator-overpowers-generator collapse there — see that
+  # file's comments). Starting a new encoder ablation at the already-known
+  # stable weight rather than re-discovering it.
+  lambda_gan: 0.02
+  # Second discriminator operating on the feature encoder's patch tokens
+  # (V-JEPA 2.1 here, see DinoPatchDiscriminator) instead of pixels.
+  lambda_gan_dino: 0.02
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 5e-5
+    # Discriminator learning rate, separate from the generator's — see
+    # Flux2KleinDistill.yml for why (keeps the tiny LoRA generator from being
+    # overpowered by faster-adapting discriminators).
+    d_learning_rate: !!float 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 0.5
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+
+  # Resuming at global_step 20000 (see path.resume_from_checkpoint above) —
+  # 20k more steps under the K=4 recipe, matching the scale of the K=1
+  # phase this continues from.
+  max_train_steps: 40000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 10
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 4      # matches train.num_student_steps
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

@@ -1,0 +1,239 @@
+# Flux2KleinHybrid: hybrid trajectory + adversarial + perceptual distillation
+# of FLUX.2-klein-4B for image restoration. See Flux2KleinHybrid_model.py's
+# module docstring for the full motivation: the three previously-tuned K=4
+# recipes (DINO-adversarial 25.72dB, DINO-fidelity-only 25.82dB, V-JEPA-
+# conditioned 24.88dB — see playground/eval_klein_checkpoints.py) all plateaued
+# within ~1dB of each other despite different perceptual/adversarial feature
+# encoders, so the encoder choice wasn't the bottleneck. This model adds a
+# genuinely different training signal on top of the best-known-stable Distill
+# recipe: Flux2KleinReflow_model.py's frozen-teacher rectified-flow
+# trajectory-consistency loss (retrains the ODE trajectory itself, not just
+# the K-step student's final output vs GT). Standalone Reflow (old,
+# un-tuned GAN hyperparameters, 50k steps) scored 23.81dB — worse than all
+# three Distill variants — but that run predates the discriminator-LR-
+# separation and GAN-weight-tuning fixes discovered in the Distill line, so
+# it's not a clean ablation of the reflow objective; see
+# klein_reflow_baseline_and_hybrid memory note. This config keeps every
+# Distill-line stability fix (separate d_learning_rate, lambda_gan: 0.02,
+# lambda_gan_dino: 0.02) and adds the reflow loss on top rather than
+# reusing Reflow's own weaker settings.
+#
+# PHASE 1 (K=1 cold-start warm-up from a fresh LoRA, 20k steps) completed
+# cleanly: no collapse, no NaN, loss_all fell from ~3.0 to ~1.3, loss_reflow
+# from ~0.2 to ~0.02. Same-protocol eval (playground/eval_klein_checkpoints.py,
+# 512-crop pass) scored this checkpoint-20000 at PSNR=26.46+-3.76dB — the
+# best of all five checkpoints compared, ahead of the previous best
+# (DINO_fidelity_only_K4, 25.82dB), though within the eval set's ~3dB noise
+# band (n=11, see klein_distill_evaluation_caveats memory note).
+#
+# PHASE 2, attempt 1 (2026-07-30, learning_rate: 2e-4): resumed from
+# checkpoint-20000 with num_student_steps bumped 1 -> 4, generator LR bumped
+# 4x (5e-5 -> 2e-4, see Flux2KleinHybrid_model.py's after_resume_checkpoint)
+# after training-time loss looked slow. Ran cleanly to checkpoint-40000 --
+# no collapse, no NaN, loss_all fell 1.72->0.95 -- but the same-protocol eval
+# told a different story: PSNR=24.03dB (512-crop) / 24.13dB (full-res), a
+# 2.4-3.3dB REGRESSION from the K=1 checkpoint it started from. Confirmed
+# reproducible (an independent parallel run of this exact config/resume/seed
+# landed on the bit-identical eval result — see klein_reflow_baseline_and_hybrid
+# memory note for why that's a determinism artifact, not extra statistical
+# confirmation; the regression itself was independently confirmed via two
+# different eval protocols instead). Healthy-looking loss curves were not a
+# reliable signal here — do not trust loss_all trending down as evidence of
+# improving output quality without a same-protocol eval to back it up.
+#
+# PHASE 2, attempt 2 (current state): same resume/K=4, generator LR reverted
+# to the original, proven-stable 5e-5 (matching what every other successful
+# K=1->K=4 transition in this codebase -- Distill, VJEPA -- actually used).
+# Testing whether attempt 1's regression was specifically an LR-bump problem
+# or a K=4-for-this-recipe problem.
+#
+# Do not start num_student_steps: 4 from a cold LoRA — a cold LoRA's
+# multi-step anchor rollout (grad_last_step_only=True) reliably collapses to
+# noise within 4-10k steps, confirmed twice in the Distill line regardless of
+# feature encoder (see klein_distill_k4_coldstart memory note). Phase 1's
+# now-trained LoRA should avoid that failure mode.
+
+name: Motion
+model_type: Flux2KleinHybrid_model
+tracker_project_name: Motion
+experiment_key: Flux2KleinHybrid
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# FLUX.2-klein-4B backbone
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+# Precomputed null-text embeddings (reuse from the Distill line if available)
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+# DINOv2 feature-similarity loss + feature-space GAN (frozen encoder). Set
+# feature_encoder: vjepa2 to swap in V-JEPA 2.1 instead (see
+# Flux2KleinDistillVJEPA.yml) — DINOv2 default here since it scored
+# marginally higher than the V-JEPA-conditioned variant (25.72-25.82dB vs
+# 24.88dB) in the same-protocol eval.
+dino_model_name: facebook/dinov2-large
+dino_image_size: 518
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+
+    split: train
+    trust_remote_code: true
+
+    repeat: 20
+    num_proc: 32
+
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+
+    # No `transforms:` block — see Flux2KleinDistill.yml for why: source
+    # images are 1920x1080, and caching them through a .map() pipeline OOM-
+    # killed dataset construction even without a crop. crop + to_tensor +
+    # normalize all happen together in random_aspect_crop_collate (see
+    # Flux2KleinHybrid_model.py setup_dataloaders) at batch-collation time
+    # instead, so the full resolution is never materialized.
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: validation
+    trust_remote_code: true
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  # PHASE 2 attempt 3 (with the base_model.py PeftModel-resume fix, see
+  # peft_resume_optimizer_disconnect memory note) got interrupted by its
+  # Slurm job's 7-day walltime timeout at checkpoint-26000/40000 (2026-08-01,
+  # job 11380021) -- not a training failure, just ran out of allocation time.
+  # Pointed at that run's own experiment dir (not phase 1's anymore) so this
+  # continues from checkpoint-26000 rather than restarting K=4 from scratch.
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/Flux2KleinHybrid_2026_08_01_06_42_11
+  resume_from_checkpoint: latest
+
+train:
+  # Student LoRA settings
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+  # Random-aspect-ratio crop, applied per training batch in a custom
+  # collate_fn — see Flux2KleinDistill.yml for details. crop_area_h/w set
+  # the pixel budget (h*w); the sampled aspect ratio then determines the
+  # actual crop height/width, no resize afterward.
+  crop_area_h: 512
+  crop_area_w: 512
+  crop_scale: [0.5, 1.0]
+  crop_ratio: [0.75, 1.3333]
+
+  # Frozen-teacher rollout length for building each step's reflow (noise,
+  # output) pair — matches Flux2KleinReflow.yml's default.
+  num_teacher_steps: 8
+  # PHASE 2: K=4 now that phase 1 (K=1) has trained the LoRA past init — see
+  # file header.
+  num_student_steps: 4
+
+  # Loss weights — set any lambda_*: 0.0 to disable that branch.
+  lambda_reflow: 1.0
+  lambda_l2: 1.0
+  lambda_lpips: 1.0
+  lambda_dino: 1.0
+  # Proven-stable values carried over from the Distill line (lowered from an
+  # initial 0.1 there after a discriminator-overpowers-generator collapse —
+  # see Flux2KleinDistill.yml). Starting this new recipe at the
+  # already-known-stable weight rather than re-discovering it.
+  lambda_gan: 0.02
+  lambda_gan_dino: 0.02
+
+  optim:
+    type: adamw
+    scale_lr: false
+    # Reverted to the original, proven-stable 5e-5 after a 4x bump (2e-4)
+    # backfired: attempt 1's K=4 run at 2e-4 trained cleanly (healthy loss
+    # curves throughout, no collapse) but scored a 2.4-3.3dB PSNR REGRESSION
+    # from the K=1 checkpoint it resumed from -- see this file's header and
+    # klein_reflow_baseline_and_hybrid memory note. Loss trending down was
+    # not a reliable signal of improving quality here. Only the generator LR
+    # moves — see Flux2KleinHybrid_model.py's after_resume_checkpoint, which
+    # re-applies this value on every resume (accelerate's save_state/
+    # load_state restores the *checkpointed* LR otherwise, silently ignoring
+    # this field).
+    learning_rate: !!float 5e-5
+    # Separate discriminator LR — see Flux2KleinDistill.yml / module
+    # docstring for why (keeps the tiny LoRA generator from being overpowered
+    # by faster-adapting discriminators).
+    d_learning_rate: !!float 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 0.5
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+
+  # Resuming at global_step 20000 (see path.resume_from_checkpoint above) —
+  # 20k more steps under the K=4 recipe, matching the scale of phase 1.
+  max_train_steps: 40000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 10
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 4      # matches train.num_student_steps
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

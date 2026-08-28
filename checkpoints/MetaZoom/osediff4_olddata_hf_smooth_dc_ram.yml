@@ -21,7 +21,7 @@ variant: ~
 use_ema: false
 image_resolution: [512, 512]
 tracker_project_name: MetaZoom
-experiment_key: MetaZoom_OSEDiff_olddata_ram_dape
+experiment_key: MetaZoom_OSEDiff4_olddata_ram_dape
 dataset_1_name: harshana95/quadratic_color_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 dataset_2_name: harshana95/quadratic_mono_psfs_5db_updated_real_hybrid_Flickr2k_gt_v2_PCA_interp_file
 # dataset_1_name: /depot/chan129/users/harshana/Datasets/MetaZoom_New_aligned/1x/
@@ -191,8 +191,9 @@ datasets:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_ram_dape_2026_06_29_01_45_03/
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_our_vsd_2026_03_21_02_18_49/
   resume_from_checkpoint: latest
+  use_same_dir: true
 
 # training settings
 train:
@@ -220,7 +221,7 @@ train:
   concatenate_images: true
   use_image1: true
   lora_finetune: true
-  lora_rank: 128
+  lora_rank: 4
   vae_lora_rank: 4
   use_hf_loss: true
   use_adapter: true

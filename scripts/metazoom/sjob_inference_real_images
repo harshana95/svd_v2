@@ -1,0 +1,18 @@
+#!/bin/sh -l
+
+#SBATCH -p a100-80gb
+#SBATCH --mem=128G
+#SBATCH -n32
+#SBATCH -A stanchan
+#SBATCH --nodes=1
+#SBATCH --gpus-per-node=1
+#SBATCH --time=4:00:00
+#SBATCH --job-name=infer_real
+#SBATCH -o /home/wweligam/svd_v2/logs/inference_real_images-%j.out
+#SBATCH -e /home/wweligam/svd_v2/logs/inference_real_images-%j.err
+
+cd /home/wweligam/svd_v2
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/wweligam/home_env
+
+python trainer.py -infer -opt checkpoints/MetaZoom/inference_real_images.yml

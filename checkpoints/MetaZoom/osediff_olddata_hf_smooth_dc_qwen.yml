@@ -191,8 +191,9 @@ datasets:
 path:
   root: /scratch/gilbreth/wweligam/experiments
   logging_dir: logs
-  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_ram_dape_2026_06_29_01_45_03/
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/MetaZoom_OSEDiff_olddata_qwen_2026_07_01_23_56_37/
   resume_from_checkpoint: latest
+  use_same_dir: true
 
 # training settings
 train:

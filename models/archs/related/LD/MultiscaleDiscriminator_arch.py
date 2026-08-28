@@ -27,9 +27,10 @@ class MultiscaleDiscriminator(BaseNetwork):
     # 
     #    return parser
 
-    def __init__(self):
+    def __init__(self, input_nc=6):
         super().__init__()
         # self.opt = opt
+        self.input_nc = input_nc
 
         for i in range(2):
             subnetD = self.create_single_discriminator()
@@ -37,7 +38,7 @@ class MultiscaleDiscriminator(BaseNetwork):
 
     def create_single_discriminator(self):
         # subarch = opt.netD_subarch
-        netD = NLayerDiscriminator()
+        netD = NLayerDiscriminator(input_nc=self.input_nc)
         return netD
 
     def downsample(self, input):
@@ -68,9 +69,10 @@ class NLayerDiscriminator(BaseNetwork):
     #                        help='# layers in each discriminator')
     #    return parser
 
-    def __init__(self):
+    def __init__(self, input_nc=6):
         super().__init__()
         # self.opt = opt
+        self._input_nc = input_nc
 
         kw = 4
         padw = int(np.ceil((kw - 1.0) / 2))
@@ -98,12 +100,7 @@ class NLayerDiscriminator(BaseNetwork):
             self.add_module('model' + str(n), nn.Sequential(*sequence[n]))
 
     def compute_D_input_nc(self):
-        input_nc = 3 + 3 # opt.output_nc
-        '''if opt.contain_dontcare_label:
-            input_nc += 1
-        if not opt.no_instance:
-            input_nc += 1'''
-        return input_nc
+        return self._input_nc
 
     def forward(self, input):
         results = [input]

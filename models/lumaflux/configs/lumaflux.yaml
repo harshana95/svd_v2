@@ -1,0 +1,54 @@
+# LumaFlux training / inference configuration.
+
+# --- backbone ---
+# Local snapshot dirs (compute nodes are offline; local paths skip the Hub API).
+flux_path: /scratch/gilbreth/wweligam/.cache/hub/hub/models--black-forest-labs--FLUX.1-dev/snapshots/3de623fc3c33e44ffbe2bad470d0f45bccf2eb21
+dtype: bfloat16                 # backbone dtype (adapters always train in fp32)
+gradient_checkpointing: true    # checkpoints frozen FLUX blocks (~constant mem vs resolution)
+guidance_scale: 1.0
+
+# --- adapters (paper modules) ---
+phys_dim: 64
+global_dim: 64
+num_bands: 16
+pga_rank: 8                     # App. D.1: r=8
+rqs_knots: 8                    # App. D.3: K=8
+siglip_name: /scratch/gilbreth/wweligam/.cache/hub/hub/models--google--siglip2-so400m-patch16-512/snapshots/ceea1cba8130d8271436da4828633198c176a775
+siglip_dim: 1152
+mock_siglip: false
+use_real_null: false           # compute real "" T5/CLIP embeds (else zero null token)
+
+# --- data ---
+dataset: paired                # paired | synthetic
+sdr_dir: data/sample/sdr
+hdr_dir: data/sample/hdr
+size: 256
+random_crop: true
+num_workers: 4
+
+# --- optimisation (paper Sec. 6.1) ---
+batch_size: 1
+grad_accum: 1
+lr: 1.0e-4
+adam_betas: [0.9, 0.999]
+weight_decay: 0.0
+max_steps: 200000
+warmup_steps: 5000
+grad_clip: 1.0
+
+# --- loss (Eq. 18) ---
+lambda1: 5.0                    # luma L1
+lambda2: 1.0                    # rgb L1
+lambda3: 0.1                    # spline smoothness
+fm_weight: 0.1                  # optional flow-matching aux (0 = paper-exact)
+
+# --- logging / checkpoints ---
+output_dir: /scratch/gilbreth/wweligam/lumaflux_runs   # home quota is small; write ckpts to scratch
+log_every: 20
+ckpt_every: 5000
+seed: 0
+
+# --- inference ---
+num_steps: 40
+init_from_sdr: false
+sdr_strength: 0.6

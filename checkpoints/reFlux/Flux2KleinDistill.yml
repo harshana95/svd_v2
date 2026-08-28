@@ -1,0 +1,208 @@
+# Flux2KleinDistill: one-step distillation of FLUX.2-klein-4B for image restoration.
+# Student (LoRA) learns to restore images in a single denoising step using pixel
+# supervision (L2 + LPIPS), a DINOv2 feature-similarity loss, and a conditional
+# GAN loss. VSD distribution-matching was dropped after it reproducibly collapsed
+# (loss_kl/loss_gan_d -> ~0, output -> near-black) within a few thousand steps
+# regardless of GAN weighting — see Flux2KleinDistill_model.py's module docstring.
+#
+# DINO used as fidelity loss only, not adversarial: loss_dino (cosine
+# similarity against GT's DINOv2 features) stays on, but lambda_gan_dino is
+# now 0 — net_d_dino (the DINO-feature discriminator) never runs, so DINO
+# no longer backs an adversarial signal, just a perceptual-fidelity one. The
+# pixel-space GAN (net_d/lambda_gan) is untouched; it's a separate mechanism,
+# not DINO-derived.
+
+name: Motion
+model_type: Flux2KleinDistill_model
+tracker_project_name: Motion
+experiment_key: Flux2KleinDistill
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+# FLUX.2-klein-4B backbone
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+# Precomputed null-text embeddings (reuse from baseline if available)
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+# DINOv2 feature-similarity loss (frozen encoder, gradient flows to the student only)
+dino_model_name: facebook/dinov2-large
+dino_image_size: 518
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+
+    split: train
+    trust_remote_code: true
+
+    repeat: 20
+    num_proc: 32
+
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+
+    # No `transforms:` block: source images are 1920x1080, and caching them
+    # through a .map() pipeline (even just to_tensor+normalize, no crop) means
+    # materializing every one of the 156,980 (after repeat: 20) rows as a
+    # float32 tensor up front — that OOM-killed dataset construction even
+    # after cutting num_proc and writer_batch_size way down. Leaving
+    # `transforms:` unset makes HuggingFaceDataset skip .map() entirely, so
+    # rows stay as lazily-decoded PIL images; crop + to_tensor + normalize all
+    # happen together in random_aspect_crop_collate (Flux2KleinDistill_model.py
+    # setup_dataloaders) at batch-collation time instead — same idea as
+    # before (fixed aspect ratio per batch, varies across batches, no resize),
+    # just cropping the PIL image before ever converting it to a tensor so the
+    # full resolution is never materialized.
+
+  val:
+    type: HuggingFaceDataset
+    name: /depot/chan129/data/Deblur_MIOR/
+    split: validation
+    trust_remote_code: true
+
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  # PEFT-resume-optimizer-disconnect fix verification (2026-08-13, see
+  # peft_resume_optimizer_disconnect memory note): the original
+  # Flux2KleinDistill_2026_07_25_16_50_15/checkpoint-70000 ("DINO_adversarial_
+  # K4") resumed from this same checkpoint-50000 K=1 warmup on 2026-07-25,
+  # before the base_model.py PeftModel-resume fix (2026-08-01) — so it (and
+  # the fidelity-only checkpoint-90000 continuation that resumed from it,
+  # confirmed byte-identical) never actually trained past K=1 despite 20k+
+  # logged steps. Re-pointing at the same clean K=1 warmup checkpoint
+  # (confirmed never resumed itself — fresh LoRA, continuous run, so
+  # unaffected by the bug regardless of fix date) to get a genuine postfix
+  # K=4 checkpoint, mirroring what was already done for Flux2KleinHybrid
+  # (see klein_reflow_baseline_and_hybrid memory note).
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/Flux2KleinDistill_2026_07_24_01_49_39
+  resume_from_checkpoint: latest
+
+train:
+  # Student LoRA settings
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+  # Random-aspect-ratio crop, applied per training batch in a custom collate_fn
+  # (fixed within a batch, resampled for the next one) — see setup_dataloaders
+  # in Flux2KleinDistill_model.py. crop_area_h/w set the pixel budget (h*w);
+  # the sampled aspect ratio then determines the actual crop height/width, no
+  # resize afterward, so different batches really do get different resolutions.
+  crop_area_h: 512
+  crop_area_w: 512
+  crop_scale: [0.5, 1.0]
+  crop_ratio: [0.75, 1.3333]
+
+  # Number of Euler steps the student rolls out (gradient kept on the last
+  # step only, see _rollout in Flux2KleinDistill_model.py). Was 1 for the run
+  # being resumed from; outputs were a bit softer than GT and occasionally
+  # hallucinated fine detail (e.g. license plate text) — a single step gives
+  # the model less capacity to resolve detail than the multi-step teacher it
+  # was distilled from.
+  num_student_steps: 4
+
+  # Loss weights — set lambda_dino/lambda_gan/lambda_gan_dino: 0.0 to disable any of them
+  lambda_l2: 1.0
+  lambda_lpips: 1.0
+  lambda_dino: 1.0
+  # Held at the stable 0.02 (lowered from 0.1 after that previously caused a
+  # discriminator-overpowers-generator collapse — discriminator has 5.5M
+  # freely-trainable params vs. the LoRA generator's 12M/3.9B, 0.3% trainable).
+  # Untouched by this run's lambda_gan_dino change below — the pixel
+  # discriminator is a separate mechanism, not DINO-derived. See
+  # d_learning_rate below too.
+  lambda_gan: 0.02
+  # Restored to the original adversarial value (0.02) — reproducing the
+  # "DINO_adversarial_K4" recipe genuinely this time, not the fidelity-only
+  # ablation (see path.resume_from_path above for why).
+  lambda_gan_dino: 0.02
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 5e-5
+    # Discriminator learning rate, separate from the generator's. Previously
+    # unset (fell back to matching the generator's 5e-5), letting the
+    # discriminator adapt far faster than the tiny LoRA generator and win
+    # the adversarial game outright. Slowing it down should keep the game
+    # balanced for longer.
+    d_learning_rate: !!float 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 0.5
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 2
+
+  # Resuming at global_step 50000 (see path.resume_from_path above) — 20k
+  # more steps under the (genuine, postfix) K=4 adversarial recipe, matching
+  # the original attempt's scale (50000 -> 70000).
+  max_train_steps: 70000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  # Raised from 3: that limit pruned the last pre-collapse checkpoint
+  # (10000) within a few checkpoint cycles of the collapse happening,
+  # before anyone could notice and roll back to it.
+  checkpoints_total_limit: 10
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 4      # matches train.num_student_steps
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 5
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

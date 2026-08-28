@@ -1,0 +1,200 @@
+# Continuous Trajectory Modeling via Implicit Neural Representations (INRs).
+# Faster-convergence variant of TrajectoryINR_base.yml -- same architecture,
+# dataset fixes (black-padding resize, num_proc=1, SAM mask caching), and
+# loss weighting (see TrajectoryINR_base.yml's history comments), run in
+# parallel on a second GPU with an updated optimization schedule aimed at
+# reaching low loss faster in wall-clock time:
+#   - learning_rate: 2e-4 -> 5e-4 (2.5x, larger step size)
+#   - lr_warmup_steps: 500 -> 50 (reach full LR almost immediately instead of
+#     spending the first 1.7% of steps ramping up from ~0)
+#   - lr_num_cycles: 3 -> 1 (plain cosine decay -- 3 restarts meant LR jumped
+#     back up to its peak twice more during training, each time disrupting
+#     convergence instead of monotonically decaying)
+#   - batch_size: 8 -> 16 (GPU memory headroom measured at ~20.5GB/80GB with
+#     batch=8; larger batch reduces gradient noise from the stochastic
+#     per-sample blur kernel / trajectory time-sampling / analysis-by-
+#     synthesis reblur loss)
+#
+# Run: python trainer.py -opt checkpoints/ContinuousTrajectory/TrajectoryINR_fastconverge.yml -comment my_run
+#
+name: ContinuousTrajectory
+model_type: TrajectoryINR_model
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 10
+mixed_precision: !!str no   # homography inverse + sin/cos math is untested under bf16/fp16 -- start in fp32
+allow_tf32: true
+tracker_project_name: ContinuousTrajectory
+experiment_key: TrajectoryINR_fastconverge
+
+# network structures
+network:
+  type: TrajectoryINR
+  in_channels: 3
+  out_channels: 3
+  base_channels: 32
+  latent_dim: 256
+  siren_hidden_dim: 256
+  siren_num_layers: 5
+  siren_omega_0: 30.0
+  max_rotation_deg: 8.0     # bound on |rotation| at any t, for physical plausibility + training stability
+  max_translation: 0.15     # bound on |T/d| at any t (normalized by focal length)
+  num_time_samples: 32      # number of stratified t-samples per forward pass during training
+  focal_px: ~               # null -> defaults to max(H, W) pixels
+
+datasets:
+  train:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [0, 99]
+    is_train: true
+    global_blur: true
+    return_meta: false   # set true + meta_include_kernel to also log the GT trajectory (Ms) for validation-only comparisons
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 1   # num_proc > 1 forks HF datasets.map() workers after this process's CUDA context exists -> observed hang; mirrors the documented num_proc=1 fix for the same class of bug elsewhere in this environment
+    num_worker_per_gpu: 0   # GPU-SAM + per-image mask caching (dataset/synth_motionblur_dataset.py) measured faster than CPU-SAM + multi-worker -- see that file's notes
+    use_shuffle: true
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+      resize:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    # The original /scratch/.../foreground_images/foreground/ (RGBA, precomputed
+    # masks in alpha) is empty on this cluster -- scratch-purged. Using a plain
+    # photo pool instead; synth_motionblur_dataset.py runs SAM per-item to get
+    # the mask when the foreground image has no alpha channel.
+    #
+    # flickr30k source images are ~333-500px, far smaller than the 1024x1024
+    # `crop` used elsewhere in this file -- crop_arr() PADS with black rather
+    # than upsampling when the source is smaller than the target, so a crop
+    # step here left ~85% of every foreground frame pure black, which SAM's
+    # random point-prompt then segmented as "the object". Using a direct
+    # resize (no padding) instead of crop+resize fixes this.
+    foreground_dataset:
+      name: /depot/chan129/users/harshana/Datasets/Deconvolution/flickr30k_images/
+      split: train
+      split_range: [1, 21]   # ~6.3k of the 31.7k images -- plenty of foreground diversity while keeping the one-time num_proc=1 preprocessing pass to a reasonable ~20min instead of ~1.5h
+      num_proc: 1            # see note under datasets.train.num_proc
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        resize:
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+  val:
+    type: SyntheticMotionBlurDataset
+    name: /depot/chan129/users/harshana/Datasets/Deconvolution/hybrid_Flickr2k_gt_v2/
+    split: train
+    split_range: [99, 100]
+    is_train: false
+    global_blur: true
+    return_meta: false
+    kernel_size: 64
+    gt_key: image
+    lq_key: blur
+    num_proc: 1
+    num_worker_per_gpu: 0   # see note under datasets.train
+    use_shuffle: false
+    transforms:
+      to_tensor:
+        keys: [gt_key]
+      select_channels:
+        keys: [gt_key]
+        channels: [True, True, True, False]
+      crop:
+        keys: [gt_key]
+        h: 1024
+        w: 1024
+      resize:
+        keys: [gt_key]
+        h: 512
+        w: 512
+    foreground_dataset:
+      name: /depot/chan129/users/harshana/Datasets/Deconvolution/flickr30k_images/
+      split: train
+      split_range: [0, 1]
+      num_proc: 1   # see note under datasets.train.num_proc
+      transforms:
+        to_tensor:
+          keys: [gt_key]
+        resize:   # direct resize, no crop -- see note under datasets.train.foreground_dataset
+          keys: [gt_key]
+          h: 512
+          w: 512
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  optim:
+    scale_lr: false
+    use_8bit_adam: false
+    learning_rate: !!float 5e-4    # 2.5x the base run's 2e-4, for faster convergence
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: cosine_with_restarts
+    lr_warmup_steps: 50    # was 500 -- reach full LR almost immediately
+    lr_num_cycles: 1       # was 3 -- plain decay, no LR restarts disrupting convergence
+    lr_power: 1.0
+
+  loss: 1*L1|2*L1GradientLoss   # supervises the recovered sharp image x_hat (skipped if a batch has no GT)
+  reblur_loss: 1*L1              # self-supervised consistency term (always available)
+  lambda_sharp: 5.0
+  lambda_reblur: 0.2
+  lambda_smooth: 0.01       # weight on the trajectory-smoothness prior, see TrajectoryINR_model.py
+  num_time_samples_val: 64  # denser sampling for smoother reconstructions at validation time
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 16   # was 8 -- GPU memory headroom (~20.5GB/80GB used at batch=8); larger batch reduces gradient noise
+
+  max_train_steps: 30000
+  validation_steps: 500
+  checkpointing_steps: 500
+  checkpoints_total_limit: 2
+
+  patched: false   # must stay false -- see TrajectoryINR_model.py docstring
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 32
+
+val:
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 8
+  batch_size: 1
+  max_val_steps: 10
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

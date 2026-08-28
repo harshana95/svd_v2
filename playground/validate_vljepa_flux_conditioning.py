@@ -18,7 +18,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
         "-opt",
-        default="checkpoints/Flux/ContextFluxBaseline.yml",
+        default="checkpoints/reFlux/ContextFluxBaseline.yml",
         help="Training config YAML",
     )
     p.add_argument("--max-train-steps", type=int, default=2)
@@ -70,10 +70,10 @@ def main():
         print(f"[FAIL] {name}: {err}")
 
     if args.projector_only:
-        from models.LucidFlux.dino_helpers import get_dino_num_patches
+        from models.reFlux.dino_helpers import get_dino_num_patches
         from models.LucidFlux.jepa_helpers import get_vjepa_num_patches
-        from models.LucidFlux.vljepa_helpers import VLJEPA_EMBED_DIM, preprocess_vljepa_image
-        from models.LucidFlux.cross_attn_projector import PatchCrossAttnProjector, VLJEPAProjector
+        from models.reFlux.vljepa_helpers import VLJEPA_EMBED_DIM, preprocess_vljepa_image
+        from models.reFlux.cross_attn_projector import PatchCrossAttnProjector, VLJEPAProjector
 
         seq_dim = 15360
         vljepa_proj = VLJEPAProjector(vljepa_dim=VLJEPA_EMBED_DIM, seq_dim=seq_dim, num_slots=512)

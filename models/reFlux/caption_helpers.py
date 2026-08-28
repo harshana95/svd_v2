@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 
 from .cross_attn_projector import resample_text_tokens
-from .helpers import get_flux2_pipeline_class
+from models.LucidFlux.helpers import get_flux2_pipeline_class
 
 __all__ = [
     "ImageCaptioner",
