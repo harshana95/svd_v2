@@ -1,0 +1,769 @@
+<title>Fourteen Days to ICASSP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  :root{
+    --ground:#e9ecf3;
+    --surface:#ffffff;
+    --surface-2:#f3f5fa;
+    --line:#d2d7e4;
+    --line-soft:#e2e6ef;
+    --text:#161a26;
+    --text-2:#4d5468;
+    --text-3:#767d92;
+    --signal:#33499f;
+    --signal-soft:#e8ecfb;
+    --ok:#1c6b51;
+    --ok-soft:#e0f0ea;
+    --risk:#9c6318;
+    --risk-soft:#f8eddb;
+    --stop:#94303f;
+    --stop-soft:#f8e5e8;
+    --shadow:0 1px 2px rgba(20,26,45,.06), 0 8px 24px -12px rgba(20,26,45,.18);
+    --radius:10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#0d1017;
+      --surface:#161a25;
+      --surface-2:#1d2230;
+      --line:#2c3346;
+      --line-soft:#232936;
+      --text:#e6e9f2;
+      --text-2:#a8afc2;
+      --text-3:#7d8598;
+      --signal:#8fa5f2;
+      --signal-soft:#1c2440;
+      --ok:#6ec4a4;
+      --ok-soft:#132a24;
+      --risk:#d9a45f;
+      --risk-soft:#2b2216;
+      --stop:#e28592;
+      --stop-soft:#2d1a1f;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0d1017;
+    --surface:#161a25;
+    --surface-2:#1d2230;
+    --line:#2c3346;
+    --line-soft:#232936;
+    --text:#e6e9f2;
+    --text-2:#a8afc2;
+    --text-3:#7d8598;
+    --signal:#8fa5f2;
+    --signal-soft:#1c2440;
+    --ok:#6ec4a4;
+    --ok-soft:#132a24;
+    --risk:#d9a45f;
+    --risk-soft:#2b2216;
+    --stop:#e28592;
+    --stop-soft:#2d1a1f;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--ground);
+    color:var(--text);
+    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size:16px;
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 96px;}
+
+  /* ---------- masthead ---------- */
+  .mast{
+    padding:56px 0 28px;
+    border-bottom:2px solid var(--text);
+    margin-bottom:36px;
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:12px;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    color:var(--signal);
+    margin:0 0 14px;
+  }
+  h1{
+    font-family:"Archivo", ui-sans-serif, system-ui, sans-serif;
+    font-weight:700;
+    font-size:clamp(2.2rem,5.5vw,3.4rem);
+    line-height:1.02;
+    letter-spacing:-.025em;
+    text-wrap:balance;
+    margin:0 0 16px;
+  }
+  .standfirst{
+    font-size:1.09rem;
+    color:var(--text-2);
+    max-width:68ch;
+    margin:0;
+  }
+
+  /* ---------- stats ---------- */
+  .stats{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(158px,1fr));
+    gap:1px;
+    background:var(--line);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    overflow:hidden;
+    margin:0 0 44px;
+  }
+  .stat{background:var(--surface);padding:18px 18px 16px;}
+  .stat .n{
+    font-family:"Archivo", sans-serif;
+    font-weight:700;
+    font-size:1.85rem;
+    line-height:1;
+    letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;
+    display:block;
+    margin-bottom:7px;
+  }
+  .stat .k{
+    font-size:.79rem;
+    color:var(--text-3);
+    line-height:1.35;
+    display:block;
+  }
+  .stat.alarm .n{color:var(--stop);}
+  .stat.warn .n{color:var(--risk);}
+  .stat.ok-n .n{color:var(--ok);}
+  .done{
+    background:var(--ok-soft);
+    border:1px solid var(--ok);
+    border-radius:var(--radius);
+    padding:14px 18px;
+    margin-bottom:18px;
+  }
+  .done p{margin:0;font-size:.93rem;color:var(--text-2);}
+  .done strong{color:var(--ok);}
+
+  /* ---------- sections ---------- */
+  section{margin:0 0 52px;}
+  h2{
+    font-family:"Archivo", sans-serif;
+    font-weight:700;
+    font-size:1.55rem;
+    letter-spacing:-.018em;
+    text-wrap:balance;
+    margin:0 0 6px;
+  }
+  .sub{color:var(--text-3);font-size:.94rem;margin:0 0 22px;max-width:66ch;}
+  p{max-width:68ch;}
+  h3{
+    font-family:"Archivo", sans-serif;
+    font-weight:600;
+    font-size:1.02rem;
+    letter-spacing:-.01em;
+    margin:0 0 6px;
+  }
+
+  /* ---------- findings ---------- */
+  .finding{
+    background:var(--surface);
+    border:1px solid var(--line-soft);
+    border-left:3px solid var(--stop);
+    border-radius:var(--radius);
+    padding:18px 20px;
+    margin-bottom:12px;
+    box-shadow:var(--shadow);
+  }
+  .finding.amber{border-left-color:var(--risk);}
+  .finding p{margin:0;color:var(--text-2);font-size:.94rem;}
+  .finding p + p{margin-top:9px;}
+  .fhead{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:7px;}
+  .tag{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:10.5px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:3px 7px;
+    border-radius:4px;
+    background:var(--stop-soft);
+    color:var(--stop);
+    white-space:nowrap;
+  }
+  .tag.amber{background:var(--risk-soft);color:var(--risk);}
+  .tag.ok{background:var(--ok-soft);color:var(--ok);}
+  .tag.sig{background:var(--signal-soft);color:var(--signal);}
+
+  /* ---------- tracks ---------- */
+  .track{
+    background:var(--surface);
+    border:1px solid var(--line-soft);
+    border-radius:var(--radius);
+    margin-bottom:14px;
+    overflow:hidden;
+    box-shadow:var(--shadow);
+  }
+  .track-head{
+    display:flex;
+    gap:14px;
+    align-items:center;
+    padding:15px 20px;
+    background:var(--surface-2);
+    border-bottom:1px solid var(--line-soft);
+    flex-wrap:wrap;
+  }
+  .track-id{
+    font-family:"Archivo", sans-serif;
+    font-weight:700;
+    font-size:1.15rem;
+    width:26px;
+    color:var(--signal);
+    flex:none;
+  }
+  .track-title{font-family:"Archivo",sans-serif;font-weight:600;font-size:1.02rem;flex:1;min-width:190px;}
+  .track-body{padding:16px 20px 18px;}
+  .exp{
+    display:grid;
+    grid-template-columns:76px 1fr;
+    gap:10px 14px;
+    padding:11px 0;
+    border-top:1px dashed var(--line-soft);
+  }
+  .exp:first-child{border-top:none;padding-top:2px;}
+  .exp-id{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:.82rem;
+    font-weight:500;
+    color:var(--signal);
+    padding-top:1px;
+  }
+  .exp-id.is-done{color:var(--ok);}
+  .exp-id.is-done::after{content:" \2713";font-weight:700;}
+  .exp-id.is-cut{color:var(--text-3);text-decoration:line-through;}
+  .exp-id.is-cut::after{content:" \2715";text-decoration:none;display:inline-block;}
+  .exp-body p{margin:0;font-size:.92rem;color:var(--text-2);}
+  .exp-body strong{color:var(--text);font-weight:600;}
+  .meta{
+    display:flex;
+    gap:14px;
+    flex-wrap:wrap;
+    margin-top:7px;
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11.5px;
+    color:var(--text-3);
+  }
+  .meta span::before{content:"";}
+  .meta b{color:var(--text-2);font-weight:500;}
+
+  code{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:.86em;
+    background:var(--surface-2);
+    border:1px solid var(--line-soft);
+    padding:1px 5px;
+    border-radius:4px;
+    word-break:break-word;
+  }
+
+  /* ---------- schedule ---------- */
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);}
+  table{border-collapse:collapse;width:100%;min-width:660px;font-size:.9rem;}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top;}
+  thead th{
+    background:var(--surface-2);
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--text-3);
+    font-weight:500;
+    border-bottom:1px solid var(--line);
+  }
+  tbody tr:last-child td{border-bottom:none;}
+  td.day{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:.83rem;
+    color:var(--text-2);
+    white-space:nowrap;
+    font-variant-numeric:tabular-nums;
+  }
+  td.day b{display:block;color:var(--text);font-weight:600;}
+  .wk{background:var(--signal-soft);}
+  .wk td{
+    font-family:"Archivo",sans-serif;
+    font-weight:600;
+    font-size:.82rem;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--signal);
+    padding:7px 14px;
+  }
+  .gate td{background:var(--risk-soft);}
+  .st{
+    display:inline-block;
+    font-family:"IBM Plex Mono", monospace;
+    font-size:10px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    padding:3px 7px;
+    border-radius:4px;
+    white-space:nowrap;
+    font-weight:500;
+  }
+  .st.run{background:var(--ok-soft);color:var(--ok);}
+  .st.code{background:var(--risk-soft);color:var(--risk);}
+  .st.wait{background:var(--surface-2);color:var(--text-3);border:1px solid var(--line);}
+  .st.gpu{background:var(--stop-soft);color:var(--stop);}
+  .qgrp td{
+    background:var(--signal-soft);
+    font-family:"Archivo",sans-serif;
+    font-weight:600;
+    font-size:.8rem;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+    color:var(--signal);
+    padding:7px 14px;
+  }
+  td.xid{
+    font-family:"IBM Plex Mono", monospace;
+    font-weight:500;
+    color:var(--signal);
+    white-space:nowrap;
+  }
+  .pill{
+    display:inline-block;
+    font-family:"IBM Plex Mono", monospace;
+    font-size:10.5px;
+    padding:2px 6px;
+    border-radius:4px;
+    background:var(--signal-soft);
+    color:var(--signal);
+    margin-right:5px;
+    white-space:nowrap;
+  }
+
+  /* ---------- drop list ---------- */
+  .drop{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:12px;
+  }
+  .drop div{
+    background:var(--surface);
+    border:1px solid var(--line-soft);
+    border-radius:var(--radius);
+    padding:14px 16px;
+  }
+  .drop h3{margin-bottom:4px;font-size:.95rem;}
+  .drop p{margin:0;font-size:.88rem;color:var(--text-3);}
+
+  .callout{
+    background:var(--signal-soft);
+    border:1px solid var(--line-soft);
+    border-radius:var(--radius);
+    padding:20px 22px;
+  }
+  .callout p{margin:0;color:var(--text-2);font-size:.95rem;}
+  .callout p + p{margin-top:10px;}
+  .callout strong{color:var(--text);}
+
+  footer{
+    margin-top:60px;
+    padding-top:20px;
+    border-top:1px solid var(--line);
+    font-size:.84rem;
+    color:var(--text-3);
+    max-width:68ch;
+  }
+  a{color:var(--signal);}
+  @media (max-width:560px){
+    .exp{grid-template-columns:1fr;gap:4px;}
+    .wrap{padding:0 16px 64px;}
+  }
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Experiment plan · Aug 27 – Sep 9, 2026</p>
+  <h1>Fourteen Days to ICASSP</h1>
+  <p class="standfirst">What to run, in what order, for the JEPA-conditioned Flux deblurring paper — planned against the compute and the data that actually survive, not what the directory listings suggested. Executing Day 1 turned up a scratch purge that had already destroyed the trained models, which changes what this paper can claim.</p>
+</header>
+
+<div class="stats">
+  <div class="stat alarm"><span class="n">1 of 7</span><span class="k">runs still has weights — the purge destroyed the rest</span></div>
+  <div class="stat alarm"><span class="n">0</span><span class="k">GPUs allocated right now; 4 jobs queued on the account cap</span></div>
+  <div class="stat warn"><span class="n">2.4d</span><span class="k">per Stage-A run, measured at 10.4 s/it — and it must be redone</span></div>
+  <div class="stat ok-n"><span class="n">1,111</span><span class="k">paired test images now indexed and ready, up from 11</span></div>
+  <div class="stat"><span class="n">13</span><span class="k">days to a frozen PDF, one buffer day after</span></div>
+</div>
+
+<section>
+  <h2>Five findings that reset the ordering</h2>
+  <p class="sub">Verified on the cluster on Aug 27. The first one was found while executing Day 1 and it invalidates the previous audit — including my own, which counted directories instead of weight files.</p>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag">Catastrophic</span><h3>The trained models are gone, not merely at risk</h3></div>
+    <p>Scratch runs a <strong>~45-day rolling purge that deletes weight files but leaves the directory skeletons behind</strong>. A destroyed run still lists <code>checkpoint-46000 / 48000 / 50000</code>, and <code>checkpoint-50000/PatchCrossAttnProjector_1/</code> still exists — as an empty directory. Any audit done with <code>ls</code> reports the run as healthy. Mine did.</p>
+    <p>A weight-file count tells the truth: of seven runs, <strong>six contain zero <code>.bin</code>/<code>.safetensors</code> files</strong>. V-JEPA, DINOv2, CLIP, NoJEPA-LoRA and Layers4 are all destroyed, and so is the Stage-A projector that every two-stage result depends on. Searched depot, home and all other scratch roots: no copies exist. Only <code>ContextFluxBlurMap</code> survived, because it is 45 days old rather than 65 — it was hours from the same fate and is now backed up to depot.</p>
+    <p>The oldest surviving weights anywhere are dated Jul 13, so the boundary is real and it keeps moving: more runs roll off through September. <strong>The encoder comparison no longer exists and cannot be evaluated — it has to be retrained or dropped.</strong></p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag">Resolved</span><h3>The paper had no adequate test set</h3></div>
+    <p><code>Deblur_MIOR</code> holds 7,849 <em>training</em> pairs, but the validation split is <strong>11 paired images</strong>. <code>val_blur</code> (80) and <code>test_blur</code> (75) are blur-only, with no ground truth, so they support no-reference metrics only. Every model was trained on all 7,849 train pairs (~25 passes each), so carving a test split out of train is testing on training data.</p>
+    <p>Prior experience on this cluster put run-to-run noise near ±3 dB on an 11-image split. No encoder comparison would separate on that.</p>
+    <p><strong>Fixed on Day 1.</strong> Regenerating MIOR-style blur was ruled out — the train pairs are named sequentially with no mapping back to source images, so disjointness cannot be proven. Instead the GoPro test split is now indexed as a flat paired set: <strong>1,111 real blur/sharp pairs</strong>, a benchmark reviewers already know, guaranteed disjoint from MIOR training. It lives at <code>/depot/chan129/users/harshana/eval_sets/gopro_test</code> as symlinks (2.7 MB, zero broken links). The cost is a domain shift from synthetic MIOR blur to real camera blur — report it as such.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag">Design flaw</span><h3>The encoder comparison is confounded</h3></div>
+    <p>The headline V-JEPA run is the only one in the family using <code>jepa_projector_heads: both</code> — it feeds the backbone through <em>two</em> pathways (projected text tokens plus pseudo VAE-latent tokens). DINOv2 and CLIP use a single-head text-only projector by architecture, and <code>Layers4</code> and <code>GTSource</code> both use <code>heads: text</code>.</p>
+    <p>So three separate comparisons were contaminated: V-JEPA vs DINO/CLIP, N=1 vs N=4 depth, and LQ vs GT source. A reviewer would have said V-JEPA won because it had an extra conditioning channel.</p>
+    <p>Since those runs no longer exist, this stops being a repair job and becomes a design rule for whatever gets retrained: <strong>hold <code>jepa_projector_heads</code> fixed across every encoder arm</strong>, and treat text-versus-both as its own deliberate ablation rather than an accident of configuration.</p>
+  </div>
+
+  <div class="finding amber">
+    <div class="fhead"><span class="tag ok">Resolved</span><h3>The V-JEPA hub cache was purged, and the LQ rerun is dead</h3></div>
+    <p>The first LQ-align attempt died instantly on <code>FileNotFoundError: /scratch/.../hub/facebookresearch_vjepa2_main/hubconf.py</code> — the same purge took the torch.hub repo directory. It silently re-downloaded four minutes later, which is why the second attempt got as far as it did. <strong>Fixed on Day 1:</strong> the hub repo and the 5.1 GB V-JEPA weights are copied to depot, and job scripts now export <code>TORCH_HOME</code> there with a fail-fast check.</p>
+    <p>The second attempt (17:29) trained 51 steps and was then SIGTERM'd at 17:49 when the interactive allocation ended. It wrote no checkpoints. The LQ-aligned projector does not exist, and at 10.4 s/it a full 20K-step Stage-A run needs 58 hours of uninterrupted GPU. Use batch jobs, not <code>sinteractive</code>, for anything that must survive the night.</p>
+  </div>
+
+  <div class="finding amber">
+    <div class="fhead"><span class="tag amber">Constraint</span><h3>Compute is the binding constraint, and it is shared</h3></div>
+    <p>Both GPU requests sit <code>PENDING</code> on <code>AssocGrpGRES</code> — the <code>stanchan</code> account-wide GRES cap, currently consumed by eight running jobs across five other users. This is not a personal quota you can wait out predictably.</p>
+    <p>The plan below is therefore tiered by GPU dependency rather than by importance alone: Tracks A–D are designed to finish on scraps, and only Track E needs sustained A100 time. Freeing capacity by cancelling labmates' allocations is your call to make, not something to do quietly.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The five tracks</h2>
+  <p class="sub">Ordered by how much GPU they need. Track A is complete; Track B is resolved by the GoPro index; Track D has largely collapsed with the checkpoints, and Track E is no longer optional.</p>
+
+  <div class="done">
+    <p><strong>Day 1 complete (Aug 27).</strong> BlurMap weights and the V-JEPA hub cache are on depot; the stale projector path is fixed to <code>~</code> with a note explaining why; two batch jobs are queued (<code>ctx_alignA</code> for the Stage-A rerun, <code>jepa_analysis</code> on standby); and the 1,111-pair GoPro test set is indexed. Nothing further can be lost to the purge.</p>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id">A</span>
+      <span class="track-title">Unblock and protect ✓</span>
+      <span class="tag ok">Done · Aug 27</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id is-done">A1</span>
+        <div class="exp-body"><p><strong>Restore the V-JEPA torch.hub cache off scratch.</strong> Re-download <code>facebookresearch/vjepa2</code> into depot and point <code>TORCH_HOME</code> there. Nothing in Tracks C–E runs until this is done.</p></div>
+      </div>
+      <div class="exp">
+        <span class="exp-id is-done">A2</span>
+        <div class="exp-body"><p><strong>Back up all six surviving checkpoint sets to depot.</strong> Scratch has already eaten the hub cache and one run family; the checkpoint directories carry suspicious recent mtimes. Copy JEPA, DINO, CLIP, NoJEPA-LoRA, Layers4, BlurMap, plus the Stage-A projector.</p></div>
+      </div>
+      <div class="exp">
+        <span class="exp-id is-done">A3</span>
+        <div class="exp-body"><p><strong>Fix the stale projector path.</strong> <code>ContextFluxBaselineJEPA.yml</code> points at <code>ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000</code>, which no longer exists — only 16K–20K survive. Any relaunch silently falls back to a randomly initialized projector.</p></div>
+      </div>
+      <div class="exp">
+        <span class="exp-id is-done">A4</span>
+        <div class="exp-body"><p><strong>Queue GPU as batch jobs, not interactive.</strong> Submit Track E as <code>sbatch</code> with a 7-day walltime so it survives disconnects, and send Tracks C–D to standby <code>a30</code>/<code>a10</code> — inference and feature extraction do not need an A100-80GB.</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id">B</span>
+      <span class="track-title">Build a test set worth reporting ✓</span>
+      <span class="tag ok">Done · Aug 27</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id is-cut">B1</span>
+        <div class="exp-body">
+          <p><strong>Ruled out on Day 1.</strong> The plan was to generate 200–500 held-out pairs with the repo's synthetic pipeline, but the MIOR training pairs are named sequentially (<code>00001.png</code>…<code>07860.png</code>) with no mapping back to their source images, so disjointness from the 7,849 training pairs cannot be proven. The foreground pool that generation needs had also been purged from scratch. Promoted B3 instead.</p>
+          <div class="meta"><span><b>Superseded by:</b> B3</span><span><b>Reason:</b> provenance unverifiable</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">B2</span>
+        <div class="exp-body">
+          <p><strong>No-reference evaluation on the 155 real blur images</strong> in <code>test_blur</code> and <code>val_blur</code>. NIQE, MUSIQ, CLIP-IQA only — no GT exists — but it is a second, independent axis on genuinely captured blur rather than synthesized blur.</p>
+          <div class="meta"><span><b>Fills:</b> a no-reference column</span><span><b>Cost:</b> inference only</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id is-done">B3</span>
+        <div class="exp-body">
+          <p><strong>Done — promoted from stretch goal to the primary paired test set.</strong> 1,111 real blur/sharp pairs, a benchmark reviewers already know, guaranteed disjoint from MIOR training. Indexed as a flat symlinked set at <code>/depot/chan129/users/harshana/eval_sets/gopro_test</code> — 1,111 gt, 1,111 blur, zero broken links, 2.7 MB. The domain shift from synthetic MIOR blur to real camera blur is real; report it as generalization rather than hiding it.</p>
+          <div class="meta"><span><b>Delivers:</b> 1,111 pairs, up from 11</span><span><b>Built:</b> Aug 27</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id">C</span>
+      <span class="track-title">The analysis — the guaranteed deliverable</span>
+      <span class="tag sig">1 GPU × hours · Days 2–4</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">C1</span>
+        <div class="exp-body">
+          <p><strong>Blur invariance at dataset scale.</strong> Run <code>compare_jepa_features.py</code> and <code>analyze_jepa_svd.py</code> across 200–500 GT/blur pairs for V-JEPA, DINOv2 and CLIP: cosine-similarity distributions, per-component energy ratio σ<sub>lq</sub>/σ<sub>gt</sub>, and subspace alignment. This replaces the current two-image probe and its excluded outlier with real statistics.</p>
+          <div class="meta"><span><b>Fills:</b> Figure 1</span><span><b>Cost:</b> feature extraction, no training</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">C2</span>
+        <div class="exp-body">
+          <p><strong>Resolution robustness at dataset scale.</strong> Extends Table 1 from its single image to a mean ± std across the same pairs at 224/384/512/768 px.</p>
+          <div class="meta"><span><b>Fills:</b> Table 1</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">C3</span>
+        <div class="exp-body">
+          <p><strong>Linear-probe restorability — the experiment that makes the analysis predictive.</strong> For each encoder, fit a light decoder from LQ features back to the GT image and measure reconstruction quality. If the ranking this produces matches the deblurring ranking from the trained models, the paper has a thesis that holds <em>regardless of which encoder wins</em>: blur-robustness of a representation predicts its value as conditioning. That argument survives even a total compute drought.</p>
+          <div class="meta"><span><b>Fills:</b> a new analysis figure and the Discussion</span><span><b>Cost:</b> hours, small model</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id">D</span>
+      <span class="track-title">Evaluate what already exists <span style="font-weight:400;color:var(--text-3)">— mostly gone</span></span>
+      <span class="tag amber">Collapsed · 1 model left</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">D1</span>
+        <div class="exp-body">
+          <p><strong>Build the unified eval driver.</strong> <code>analysis/calculate_metrics.py</code> exists and takes <code>--gt_folder</code>/<code>--pred_folder</code>, but the <code>test_saved_model.py</code> that CLAUDE.md advertises at the repo root does not exist. Something has to load a checkpoint, run a split at a fixed seed and 50 Euler steps, and dump predictions to disk. Write it once, use it for every row.</p>
+          <div class="meta"><span><b>Blocks:</b> D2, D3, D4, E1</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">D2</span>
+        <div class="exp-body">
+          <p><strong>Score the one surviving model.</strong> Only <code>ContextFluxBlurMap</code> has weights, so this is now a single row rather than a comparison table — and it is the architectural variant, not the headline method. Run it through the driver on both GoPro and the 11-image MIOR val to at least establish that the evaluation path works end to end on a real checkpoint.</p>
+          <div class="meta"><span><b>Fills:</b> one row</span><span><b>Was:</b> most of Tables 2 and 3</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id is-cut">D3</span>
+        <div class="exp-body">
+          <p><strong>Dropped — the checkpoint it needed is gone.</strong> The inference-time head ablation required the trained <code>heads: both</code> projector. Its value now transfers to the retrain design: run the head comparison as a planned ablation in Track E rather than recovering it after the fact.</p>
+          <div class="meta"><span><b>Status:</b> folded into E</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">D4</span>
+        <div class="exp-body">
+          <p><strong>Regression baselines.</strong> Check whether the existing <code>NAFNet_2026_02_13</code> and <code>Restormer_2026_02_14</code> checkpoints were trained on this dataset; if not, retrain — both are cheap next to anything Flux-based — and score them through the same driver.</p>
+          <div class="meta"><span><b>Fills:</b> Table 2 baseline rows</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id">E</span>
+      <span class="track-title">Rebuild from zero</span>
+      <span class="tag">Now mandatory · queued</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">E0</span>
+        <div class="exp-body">
+          <p><strong>Stage-A projector rerun — queued as <code>ctx_alignA</code> (job 11619155).</strong> Every two-stage result depends on an aligned projector, and the only one that existed was destroyed. At the measured 10.4 s/it this is ~58 hours. It reads the hub cache from depot and fails fast if it is missing, so it cannot repeat the step-0 death of Aug 26. It is queued rather than running: the account cap is full.</p>
+          <div class="meta"><span><b>Blocks:</b> every Stage-B run</span><span><b>Cost:</b> ~2.4 days, 1 GPU</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">E1</span>
+        <div class="exp-body">
+          <p><strong>One Stage-B run: V-JEPA, N=1, <code>heads: text</code>, LQ source.</strong> With Stage A costing 2.4 days before Stage B even starts, and Stage-B step time still unmeasured, the arithmetic is unforgiving — <strong>2.4 days plus 3 to 6 more consumes the entire remaining window for a single arm.</strong> Measure s/it in the first 15 minutes and abort early rather than discovering on Sep 6 that it will not land.</p>
+          <div class="meta"><span><b>Yields:</b> one arm, not a comparison</span><span><b>Abort if:</b> ETA passes Sep 6</span></div>
+        </div>
+      </div>
+      <div class="exp">
+        <span class="exp-id">E2</span>
+        <div class="exp-body">
+          <p><strong>A second encoder arm — DINOv2, matched configuration.</strong> This is what would make the paper's central claim testable again. It needs a second GPU running fully in parallel with E1, on an account cap that is currently oversubscribed by five other users. Treat it as unlikely, and do not let planning depend on it.</p>
+          <div class="meta"><span><b>Needs:</b> a second concurrent GPU</span><span><b>Likelihood:</b> low</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>The experiment queue</h2>
+  <p class="sub">Every experiment still to run, in dependency order. Phase 1 needs almost no GPU and is where the paper's argument now lives; Phase 3 is where it would have lived before the purge. Start at X1 — it is the one that can run today.</p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Experiment</th><th>What it needs first</th><th>Produces</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr class="qgrp"><td colspan="5">Phase 1 · Analysis — no training, unaffected by the purge</td></tr>
+        <tr>
+          <td class="xid">X1</td>
+          <td><strong>Blur invariance at scale.</strong> V-JEPA vs DINOv2 vs CLIP over 300 GoPro pairs: cosine distributions, per-component energy ratio, subspace alignment.</td>
+          <td>Nothing — the job script works. Resubmit with <code>--export=ALL,PAIRS_GT=&hellip;/gopro_test/gt,PAIRS_BLUR=&hellip;/gopro_test/blur,N_IMAGES=300</code></td>
+          <td>Figure 1</td>
+          <td><span class="st run">run today</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X2</td>
+          <td><strong>Resolution robustness at scale.</strong> 224/384/512/768 px across the dataset, replacing the current single-image table.</td>
+          <td><code>check_jepa_resolutions.py</code> takes one <code>--image</code>; add a directory loop and mean&nbsp;±&nbsp;std</td>
+          <td>Table 1</td>
+          <td><span class="st code">small edit</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X3</td>
+          <td><strong>Linear-probe restorability.</strong> Fit a light decoder from LQ features back to the sharp image, per encoder. Makes the analysis predictive rather than descriptive.</td>
+          <td>New script. Reuse the extraction path from <code>analyze_jepa_svd.py</code></td>
+          <td>The paper's core claim</td>
+          <td><span class="st code">new code</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X4</td>
+          <td><strong>Which V-JEPA blocks survive blur.</strong> Run the invariance analysis per transformer block instead of on the final layer only.</td>
+          <td><code>analyze_jepa_svd.py</code> has no layer selection; add it (the model already has <code>vjepa_num_layers</code>)</td>
+          <td>The depth ablation — <em>without</em> the two lost training runs</td>
+          <td><span class="st code">new code</span></td>
+        </tr>
+        <tr class="qgrp"><td colspan="5">Phase 2 · Evaluation — inference only</td></tr>
+        <tr>
+          <td class="xid">X5</td>
+          <td><strong>The eval driver.</strong> No new driver needed: <code>trainer.py -opt &lt;config&gt; -infer</code> already evaluates at native resolution once the crop transform is dropped. Verified on an A30 — 1280&times;720 single pass, no OOM, ~52 s/image at 50 steps, and the depot checkpoint loads cleanly. Two gaps remain: outputs are index-named JPEGs (<code>out_0011_0050k.jpg</code>) that <code>calculate_metrics.py</code> cannot match to GT by filename, and <code>max_val_steps</code> is ignored under <code>-infer</code> (<code>base_model.py:180</code> forces it to 1e6), so a run always sweeps the whole split.</td>
+          <td>Config exists: <code>ContextFluxBlurMap_fullres_eval.yml</code>. Still needs PNG output named by sample, and a way to bound the image count</td>
+          <td>Blocks X6–X8 and X10</td>
+          <td><span class="st code">small edit</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X6</td>
+          <td><strong>Blurred-input reference row.</strong> Metrics on the degraded inputs themselves — the floor every method must clear.</td>
+          <td>X5</td>
+          <td>Table 2 row</td>
+          <td><span class="st wait">after X5</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X7</td>
+          <td><strong>BlurMap on GoPro (1,111) and MIOR val (11).</strong> The only surviving trained model; also proves the eval path works on a real checkpoint.</td>
+          <td>X5</td>
+          <td>Table 2 row + protocol check</td>
+          <td><span class="st wait">after X5</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X8</td>
+          <td><strong>Regression baselines.</strong> NAFNet and Restormer through the identical protocol.</td>
+          <td>X5, plus checking whether the Feb checkpoints match this dataset — retrain if not</td>
+          <td>Table 2 baseline rows</td>
+          <td><span class="st wait">after X5</span></td>
+        </tr>
+        <tr class="qgrp"><td colspan="5">Phase 3 · Training — needs sustained GPU that is not currently allocated</td></tr>
+        <tr>
+          <td class="xid">X9</td>
+          <td><strong>Stage-A projector rerun.</strong> Rebuilds the aligned projector the purge destroyed. ~58 h at the measured 10.4 s/it.</td>
+          <td>An interactive allocation. Run under <code>tmux</code>/<code>nohup</code> with <code>TORCH_HOME</code> set to depot</td>
+          <td>Unblocks X10</td>
+          <td><span class="st gpu">needs GPU</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X10</td>
+          <td><strong>Stage-B V-JEPA arm</strong> — N=1, <code>heads: text</code>, LQ source. Measure s/it in the first 15 minutes and project the finish date before committing.</td>
+          <td>X9, then 3–6 more days</td>
+          <td>One trained arm, not a comparison</td>
+          <td><span class="st gpu">needs GPU</span></td>
+        </tr>
+        <tr>
+          <td class="xid">X11</td>
+          <td><strong>Stage-B DINOv2 arm.</strong> The second arm that would make the encoder claim testable again.</td>
+          <td>A second GPU running fully parallel to X10</td>
+          <td>A real comparison</td>
+          <td><span class="st gpu">unlikely</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:16px;font-size:.93rem;color:var(--text-2);"><strong>Note on X4.</strong> The N=1 vs N=4 depth question cost two full training runs last time and both were destroyed. Asking which blocks are most blur-robust answers the same design question from features alone, in hours instead of days — and it is a better fit for the analysis-led paper than a two-point curve would have been.</p>
+</section>
+
+<section>
+  <h2>Fourteen days</h2>
+  <p class="sub">Track A finishes on day one because everything else depends on it. The gate on Sep 1 is the moment the paper's framing gets decided.</p>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Day</th><th>Work</th><th>Output</th></tr>
+      </thead>
+      <tbody>
+        <tr class="wk"><td colspan="3">Week one — the analysis becomes the paper</td></tr>
+        <tr><td class="day"><b>Thu</b> 08/27 <span style="color:var(--ok)">✓</span></td><td><span class="pill">A1–A4</span>Done. Weights and hub cache on depot, projector path fixed, two jobs queued, GoPro test set indexed.</td><td>Nothing further can be lost</td></tr>
+        <tr><td class="day"><b>Fri</b> 08/28</td><td><span class="pill">C1</span><span class="pill">D1</span>Point the queued analysis job at the 1,111 GoPro pairs and raise <code>--n-images</code>. Write the eval driver in parallel — it is still needed for whatever E produces.</td><td>Figure 1 data; eval harness</td></tr>
+        <tr><td class="day"><b>Sat</b> 08/29</td><td><span class="pill">C1</span><span class="pill">C2</span>Invariance and resolution figures across V-JEPA, DINOv2 and CLIP at dataset scale.</td><td>Figures 1–2</td></tr>
+        <tr><td class="day"><b>Sun</b> 08/30</td><td><span class="pill">C3</span>Linear-probe restorability per encoder — the experiment that makes the analysis predictive rather than descriptive.</td><td>The paper's core claim</td></tr>
+        <tr class="gate"><td class="day"><b>Mon</b> 08/31</td><td><strong>Rewrite the abstract, introduction and Section 4 for the analysis-led framing.</strong> Do not wait on E: the arithmetic has already decided this.</td><td>New paper spine</td></tr>
+        <tr><td class="day"><b>Tue</b> 09/01</td><td><span class="pill">E0</span>Check whether Stage A has started. If it has, record s/it and project the finish date honestly.</td><td>Go/no-go on any trained arm</td></tr>
+        <tr><td class="day"><b>Wed</b> 09/02</td><td><span class="pill">D2</span><span class="pill">D4</span>Score BlurMap and the regression baselines through the driver on GoPro.</td><td>The rows that do exist</td></tr>
+        <tr class="wk"><td colspan="3">Week two — writing</td></tr>
+        <tr><td class="day"><b>Thu</b> 09/03</td><td>Method section rewritten around the two-stage system as instantiation, not as the headline result.</td><td>Method final</td></tr>
+        <tr><td class="day"><b>Fri</b> 09/04</td><td>Qualitative figure from whatever eval dumps exist. Results prose.</td><td>Figure 3; Results</td></tr>
+        <tr><td class="day"><b>Sat</b> 09/05</td><td><span class="pill">E1</span>If Stage B is running, checkpoint it and evaluate the latest step rather than waiting for 50K.</td><td>Partial arm, honestly labelled</td></tr>
+        <tr><td class="day"><b>Sun</b> 09/06</td><td>Final tables. Audit every number against its eval dump — the placeholder history makes this non-optional.</td><td>No unsourced numbers</td></tr>
+        <tr><td class="day"><b>Mon</b> 09/07</td><td>Cut to four pages plus references. Citation check on the four flagged entries.</td><td>Format-complete</td></tr>
+        <tr><td class="day"><b>Tue</b> 09/08</td><td>Internal review pass and advisor read.</td><td>Revisions</td></tr>
+        <tr><td class="day"><b>Wed</b> 09/09</td><td>Freeze the PDF. Confirm the actual ICASSP 2027 deadline — this week, not later.</td><td>Submission candidate</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>The gate moved to today</h2>
+  <div class="callout">
+    <p>The Sep 1 gate was designed around a choice between a full encoder comparison and an analysis-led fallback. <strong>The purge has already made that choice.</strong> Rebuilding even one arm costs 2.4 days of Stage A plus 3–6 days of Stage B, sequentially, on GPUs that are not currently allocated. Four arms is arithmetically impossible in thirteen days, so the paper cannot claim a controlled comparison across V-JEPA, DINOv2, CLIP and VL-JEPA.</p>
+    <p><strong>Plan for the analysis-led paper now, not on Sep 1.</strong> Its thesis: blur-robustness of a self-supervised representation predicts its value as conditioning for a frozen generative restorer — carried by C1's dataset-scale invariance analysis and C3's linear-probe restorability across all three encoders, both of which are cheap, unaffected by the purge, and comparable across encoders <em>without</em> training a diffusion model per encoder. The system section then presents ContextFlux as the instantiation, with whatever arms E0 and E1 deliver as evidence rather than as the whole argument.</p>
+    <p>That reframing is not a consolation prize. An encoder comparison at N=1 per arm on 11 validation images was never going to separate anyway; a predictive analysis across hundreds of image pairs is the stronger claim, and it is the one the surviving evidence can actually support. <strong>The abstract and Section 4 should be rewritten this week, not after E1 resolves.</strong></p>
+  </div>
+</section>
+
+<section>
+  <h2>What we are not doing</h2>
+  <p class="sub">All four were already marginal. With Stage A to redo before any Stage-B run can start, they are now unreachable — and saying so plainly beats leaving rows marked "pending" in a submitted paper.</p>
+  <div class="drop">
+    <div>
+      <h3>Layers 2 and 8</h3>
+      <p>N=1 versus N=4 already carries the depth argument. Two more full runs buy a smoother curve nobody asked for.</p>
+    </div>
+    <div>
+      <h3>VL-JEPA rerun</h3>
+      <p>Its checkpoint stops at 6K of 50K. A full rerun costs the same as E1 and repairs nothing that is confounded.</p>
+    </div>
+    <div>
+      <h3>LQ-aligned Stage A → Stage B</h3>
+      <p>58 hours of alignment before Stage B even starts. Cut it, and drop the LQ-aligned row from Table 3 rather than leaving it pending.</p>
+    </div>
+    <div>
+      <h3>GT-oracle Stage B</h3>
+      <p>A genuinely interesting upper bound, and the first thing to promote if the queue clears unexpectedly. Not worth displacing E1.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Cluster state, Aug 27 2026, after executing Day 1: four jobs pending on the <code>stanchan</code> GRES cap with none running; Stage-A throughput measured at 10.4 s/it; <strong>one</strong> of seven ContextFlux runs still holds weights, now on depot alongside the V-JEPA hub cache; 1,111 GoPro pairs indexed for evaluation. Stage-B step time remains unmeasured and gates everything in Track E — measure it in the first fifteen minutes, not on Sep 6.
+</footer>
+
+</div>

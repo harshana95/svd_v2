@@ -1,0 +1,38 @@
+#!/bin/bash
+# Track C: dataset-scale blur-invariance analysis (V-JEPA vs DINOv2 vs CLIP).
+# Feature extraction only - no training - so it runs fine on standby a30/a10 and must never
+# occupy an A100 that Stage-A/Stage-B training could use.
+#SBATCH -p a30
+#SBATCH -A stanchan
+#SBATCH --qos=standby
+#SBATCH -N 1
+#SBATCH -n 16
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=64G
+#SBATCH --time=4:00:00
+#SBATCH --job-name jepa_analysis
+#SBATCH -o logs/slurm-%x-%j.out
+#SBATCH -e logs/slurm-%x-%j.err
+
+set -euo pipefail
+cd /home/wweligam/svd_v2
+mkdir -p logs playground/jepa_svd_dataset
+
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/wweligam/home_env
+
+export TORCH_HOME=/depot/chan129/users/harshana/weights/torch_hub
+
+# Pairs come from the held-out test set once Track B finishes. Override with:
+#   sbatch --export=ALL,PAIRS_GT=<dir>,PAIRS_BLUR=<dir>,N_IMAGES=300 <this script>
+PAIRS_GT=${PAIRS_GT:-/depot/chan129/data/Deblur_MIOR/val/gt}
+PAIRS_BLUR=${PAIRS_BLUR:-/depot/chan129/data/Deblur_MIOR/val/blur}
+N_IMAGES=${N_IMAGES:-11}
+
+python playground/analyze_jepa_svd.py \
+  --gt-dir "$PAIRS_GT" \
+  --blur-dir "$PAIRS_BLUR" \
+  --n-images "$N_IMAGES" \
+  --encoders vjepa dino clip \
+  --save-vk \
+  --out-dir playground/jepa_svd_dataset

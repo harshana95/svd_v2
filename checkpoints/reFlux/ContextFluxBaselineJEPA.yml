@@ -32,8 +32,14 @@ vjepa_image_size: 512
 vjepa_pretrained: true
 vjepa_checkpoint_path: ~
 
-# Pretrained DualHeadPatchCrossAttnProjector from ContextProjectorAlign_JEPA (strict hot-plug after retrain).
-jepa_projector_weights_path: /scratch/gilbreth/wweligam/experiments/Motion/ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000/DualHeadPatchCrossAttnProjector_1/pytorch_model.bin
+# Pretrained DualHeadPatchCrossAttnProjector from ContextProjectorAlign_JEPA.
+# 2026-08-27: set to ~ (train from scratch). The previous path pointed at
+# ContextProjectorAlign_JEPA_2026_06_19_23_07_19/checkpoint-10000, whose weights were
+# destroyed by the ~45-day rolling scratch purge; no copy exists on depot or elsewhere.
+# Re-run Stage A (ContextProjectorAlign_JEPA.yml, ~58 h at 10.4 s/it) and point this at the
+# new checkpoint before claiming a two-stage (aligned) result. Note: a non-existent path here
+# fails silently into a randomly initialised projector, so verify the load in the run log.
+jepa_projector_weights_path: ~
 
 # Which dual-head outputs to use: text | vae | both
 jepa_projector_heads: both

@@ -1,0 +1,35 @@
+#!/bin/bash
+# Stage-A projector alignment rerun.
+# 2026-08-27: the previous Stage-A projector (ContextProjectorAlign_JEPA_2026_06_19_23_07_19)
+# was destroyed by the ~45-day rolling scratch purge and exists nowhere. Every two-stage
+# ContextFlux result depends on this run completing.
+# Measured throughput 10.4 s/it => 20K steps ~= 58 h. Walltime is set well above that.
+#SBATCH -p a100-80gb
+#SBATCH -A stanchan
+#SBATCH -N 1
+#SBATCH -n 16
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=128G
+#SBATCH --time=4-00:00:00
+#SBATCH --job-name ctx_alignA
+#SBATCH -o logs/slurm-%x-%j.out
+#SBATCH -e logs/slurm-%x-%j.err
+
+set -euo pipefail
+cd /home/wweligam/svd_v2
+mkdir -p logs
+
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/wweligam/home_env
+
+# Read the torch.hub cache from depot, not scratch. The scratch copy of
+# facebookresearch_vjepa2_main was purged on 2026-08-26 and killed a prior run at step 0.
+export TORCH_HOME=/depot/chan129/users/harshana/weights/torch_hub
+
+if [ ! -f "$TORCH_HOME/hub/facebookresearch_vjepa2_main/hubconf.py" ]; then
+  echo "ERROR: V-JEPA hub cache missing under TORCH_HOME=$TORCH_HOME" >&2
+  exit 1
+fi
+
+# Single process, single GPU: this config trains only the projector.
+python trainer.py -opt ./checkpoints/reFlux/ContextProjectorAlign_JEPA.yml
