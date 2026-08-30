@@ -1,0 +1,45 @@
+#!/bin/bash -l
+#PBS -A lighthouse-purdue
+#PBS -q debug
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -N warm_ds
+#PBS -k doe
+#PBS -j oe
+#
+# One-time, CPU-only warmup of the Deblur_MIOR HF `datasets` arrow cache
+# (checkpoints/reFlux/ContextProjectorAlign_JEPA_alcf.yml's train+val splits),
+# so scripts/alcf/sjob_ctx_alignA_2node_debug (or the real Stage-A run) finds
+# it already built instead of 8 ranks redundantly rebuilding it, or a login-
+# node attempt hanging on datasets.map(num_proc=...)'s RLIMIT_NPROC-starved
+# forked workers.
+#
+# No GPU needed -- this is pure dataset generation + transform mapping.
+#
+# Submit from the repo root:
+#   qsub scripts/alcf/sjob_warm_dataset_cache
+
+set -euo pipefail
+
+REPO="${REPO:-/lus/eagle/projects/lighthouse-purdue/harshana/svd_v2}"
+cd "${REPO}"
+
+echo "host=$(hostname)  job=${PBS_JOBID:-none}"
+
+export HTTP_PROXY="http://proxy.alcf.anl.gov:3128"
+export HTTPS_PROXY="http://proxy.alcf.anl.gov:3128"
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY}"
+export ftp_proxy="${HTTP_PROXY}"
+export no_proxy="admin,localhost,*.cm.polaris.alcf.anl.gov,polaris-*,*.polaris.alcf.anl.gov,*.alcf.anl.gov"
+
+export HF_HOME="${REPO}/.cache/huggingface"
+export TORCH_HOME="${REPO}/.cache/torch_hub"
+
+source "${REPO}/scripts/alcf/load_conda.sh"
+conda activate "${PROJECT_ENV:-/eagle/lighthouse-purdue/harshana/my_env}"
+echo "python=$(command -v python)  CONDA_PREFIX=${CONDA_PREFIX:-unset}"
+
+python -u "${REPO}/scripts/alcf/warm_dataset_cache.py"

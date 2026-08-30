@@ -106,7 +106,7 @@ datasets:
 
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/Aberration/ReblurDeform_2026_02_08_01_42_47/
   resume_from_checkpoint: latest

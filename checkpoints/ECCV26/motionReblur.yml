@@ -143,7 +143,7 @@ meta_vae:
   mid_block_add_attention: true
 
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: ~
   resume_from_checkpoint: ~

@@ -1,0 +1,169 @@
+# ALCF/Polaris variant of ContextProjectorAlign_JEPA.yml (X9, Stage-A projector
+# alignment). Differs from the canonical Gilbreth recipe in exactly the ways the
+# environment forces:
+#
+#   - mixed_precision: bf16, not "no" (fp32). The frozen stack loaded here
+#     (Qwen3-VL-8B captioner + Flux2's own text encoder + VAE + V-JEPA-L) is
+#     loaded at `weight_dtype` on every GPU. In fp32 that is why Gilbreth uses
+#     an 80GB card; Polaris GPUs are 40GB A100s, and DDP replicates this stack
+#     per GPU rather than sharding it, so more GPUs does not change the
+#     per-GPU memory requirement. bf16 roughly halves it. This is a real
+#     numerical divergence from the fp32 Gilbreth run, not just a path swap.
+#   - datasets.{train,val}.name points at the local eagle copy of Deblur_MIOR
+#     (/depot is not mounted on ALCF compute nodes).
+#   - train.batch_size: 1 (per-GPU/per-process). Launched across 8 processes
+#     (2 nodes x 4 GPUs) with gradient_accumulation_steps: 1, total effective
+#     batch = 1 x 8 x 1 = 8, matching the original single-GPU recipe's
+#     effective batch (8 x 1 x 1 = 8) so this only changes parallelism, not
+#     the training recipe.
+#   - datasets.train.num_proc: 8, not 32 — 4 local ranks share one node's 32
+#     CPU cores, so 32 workers per rank would oversubscribe 4x.
+#   - swinir_model_path: ~ — the depot SwinIR checkpoint isn't reachable from
+#     ALCF; unused here anyway since source_image: gt (only reached when
+#     source_image: pre).
+#   - num_gpu: 8 — informational only (see utils/misc.py:initialize); actual
+#     parallelism comes from the accelerate launch process count.
+#
+# path.root, HF/V-JEPA caches, and EXPERIMENTS_ROOT are handled by
+# scripts/alcf/sjob_ctx_alignA_2node_debug, not by this file.
+
+name: Motion
+model_type: ContextProjectorAlign_model
+tracker_project_name: Motion
+experiment_key: ContextProjectorAlign_JEPA_ALCF
+
+is_train: true
+push_to_hub: false
+num_gpu: 8
+seed: 42
+# tensorboard, not comet_ml: no COMET_API_KEY is configured on ALCF, and this
+# config exists to validate the multi-node/GPU/batch-size setup, not tracking.
+report_to: tensorboard
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+source_image: gt
+target_image: gt
+train_crop_size: 512
+
+align_vae_loss_weight: 1.0
+align_text_encoder_loss_weight: 1.0
+align_bridge_loss_weight: 0.0
+# VGG/perceptual loss on the decoded prediction (pixel space) to sharpen output.
+align_perceptual_loss_weight: 0.1
+caption_model_name: Qwen/Qwen3-VL-8B-Instruct
+caption_instruction: "Describe this image in one concise caption."
+caption_on_the_fly: true
+
+swinir_model_path: ~
+
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 512
+vjepa_pretrained: true
+vjepa_checkpoint_path: ~
+vjepa_projector_hidden: 2048
+projector_target_space: text
+
+use_vjepa_condition: true
+use_vljepa_condition: false
+use_dino_condition: false
+
+datasets:
+  train:
+    type: HuggingFaceDataset
+    name: /lus/eagle/projects/lighthouse-purdue/harshana/Deblur_MIOR
+    split: train
+    trust_remote_code: true
+    # 1, not the canonical recipe's 20: repeat expands the rows dataset.map()
+    # must transform-and-cache up front (7,849 -> 157,200 at 20x), which is a
+    # multi-hour one-time cost -- affordable against the real 58h Stage-A run,
+    # irrelevant to what this debug config exists to validate (multi-node
+    # launch, GPU utilization, batch sizing).
+    repeat: 1
+    num_proc: 8
+    map_batch_size: 16
+    use_shuffle: true
+    gt_key: gt
+    lq_key: blur
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop_random:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+  val:
+    type: HuggingFaceDataset
+    name: /lus/eagle/projects/lighthouse-purdue/harshana/Deblur_MIOR
+    split: validation
+    trust_remote_code: true
+    use_shuffle: false
+    gt_key: gt
+    lq_key: blur
+    common_transforms_keys: [gt, blur]
+    transforms:
+      to_tensor:
+      crop:
+        h: 512
+        w: 512
+      normalize:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.5, 0.5, 0.5]
+
+path:
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
+  logging_dir: logs
+  resume_from_path: ~
+  resume_from_checkpoint: ~
+
+train:
+  loss: 1*MSE
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 1e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 1
+  max_train_steps: 20000
+  validation_steps: 500
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  decode_tokens: true
+  save_images: true
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+  batch_size: 1
+  max_val_steps: 50
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

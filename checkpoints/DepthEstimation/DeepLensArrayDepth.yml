@@ -52,7 +52,7 @@ network:
   
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: ~ # /scratch/gilbreth/wweligam/experiments/test/DeepLensArrayDepth 2025 10 05 21.20.39/
   resume_from_checkpoint: ~ #latest

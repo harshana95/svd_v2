@@ -1,4 +1,5 @@
 import importlib
+import logging
 import numpy as np
 import random
 import torch
@@ -34,7 +35,17 @@ def create_dataset(dataset_opt):
     dataset_cls = None
     # Iterate through module names, import one by one, and check for the class.
     for file_name in dataset_filenames:
-        module = importlib.import_module(f'dataset.{file_name}')
+        try:
+            module = importlib.import_module(f'dataset.{file_name}')
+        except Exception as e:
+            # Some dataset modules depend on packages that aren't installed in
+            # every environment (e.g. the DeepLens datasets need the
+            # deeplens/GeoLens physics package). Skip modules that fail to
+            # import instead of crashing every run regardless of dataset_type.
+            logging.getLogger(__name__).warning(
+                f"Skipping dataset.{file_name}: failed to import ({e})"
+            )
+            continue
         cls_ = getattr(module, dataset_type, None)
         if cls_ is not None:
             dataset_cls = cls_

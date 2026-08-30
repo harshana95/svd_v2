@@ -27,6 +27,8 @@ source scripts/alcf/load_conda.sh
 source .venv/alcf/bin/activate
 ```
 
+Use **`source`**, not `./load_conda.sh`. Executing the file loads conda in a subshell, so `conda: command not found` when it returns. Do not run `module load conda` by itself either — that modulefile is broken on current CPE.
+
 Compute nodes need the proxy for HuggingFace / pip / Comet:
 
 ```bash
@@ -151,5 +153,5 @@ accelerate launch --num_processes 4 --mixed_precision bf16 trainer.py -opt check
 - `prod` will silently fail or never run if you request fewer than 10 nodes.
 - `preemptable` jobs can vanish if someone submits to `demand`.
 - Compute nodes have no direct internet without the proxy above.
-- `conda/2025-09-25` pins old gcc/hdf5; `scripts/alcf/load_conda.sh` adds shims. Source that instead of `module load conda` by hand.
+- `conda/2025-09-25` pins old gcc/hdf5. Always `source scripts/alcf/load_conda.sh` — do not `./` it and do not `module load conda` by hand.
 - `#PBS` lines in the script are the defaults; `qsub -q` / `-l` / `-v` on the command line override them.

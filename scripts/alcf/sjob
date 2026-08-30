@@ -54,16 +54,20 @@ export no_proxy="admin,localhost,*.cm.polaris.alcf.anl.gov,polaris-*,*.polaris.a
 export HF_HOME="${REPO}/.cache/huggingface"
 export MPICH_GPU_SUPPORT_ENABLED=1
 
+# checkpoints/**/*.yml resolve path.root via ${oc.env:EXPERIMENTS_ROOT,...};
+# on ALCF, save experiments/logs under eagle instead of the Gilbreth default.
+export EXPERIMENTS_ROOT="${EXPERIMENTS_ROOT:-/lus/eagle/projects/lighthouse-purdue/harshana/logs}"
+
 # conda/2025-09-25 pins gcc-native/14.2 + hdf5 1.14.3.5; current CPE
 # only has gcc-native/14 and hdf5 1.14.3.9. load_conda.sh adds shims.
 source "${REPO}/scripts/alcf/load_conda.sh"
 
-# Optional project venv stacked on ALCF base (create once with --system-site-packages)
-VENV="${VENV:-${REPO}/.venv/alcf}"
-if [[ -f "${VENV}/bin/activate" ]]; then
-  source "${VENV}/bin/activate"
-  echo "using venv ${VENV}"
-fi
+# Real project env, installed by scripts/alcf/debug_deps_install.sh from
+# requirements_no_flashattn.txt (accelerate, diffusers, transformers,
+# comet-ml, xformers, the datasets==3.3.0 this repo's custom
+# HuggingFaceDataset loading scripts require, etc.).
+conda activate "${PROJECT_ENV:-/eagle/lighthouse-purdue/harshana/my_env}"
+echo "python=$(command -v python)  CONDA_PREFIX=${CONDA_PREFIX:-unset}"
 
 which python
 python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), 'ngpu', torch.cuda.device_count())"

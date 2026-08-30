@@ -173,6 +173,13 @@ cython_debug/
 **.idea
 *.npy
 *.mat
+
+# PBS job output (ALCF/Polaris): <jobname>.o<jobid> / .e<jobid>
+*.o[0-9]*
+*.e[0-9]*
+# stray conda solver artifact
+condaenv.*.requirements.txt
+
 *.png
 *.jpg
 *.tiff

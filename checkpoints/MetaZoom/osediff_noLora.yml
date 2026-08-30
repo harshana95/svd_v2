@@ -182,7 +182,7 @@ datasets:
   
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/SVD_Real/MetaZoom_OSEDiff_both_noLora 2025 10 04 11.52.20/
   resume_from_checkpoint: ~ #latest

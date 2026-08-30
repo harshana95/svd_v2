@@ -97,7 +97,7 @@ network:
 
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/DAM_NAFNetRealColor_2026_04_24_12_46_47/
   resume_from_checkpoint: latest

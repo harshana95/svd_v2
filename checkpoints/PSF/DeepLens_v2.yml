@@ -52,7 +52,7 @@ network_c:
   
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/PSF/DeepLens_PSF_interpolation 2025 11 06 22.07.22/
   resume_from_checkpoint: ~ #latest

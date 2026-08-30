@@ -1,0 +1,45 @@
+#!/bin/bash -l
+#PBS -A lighthouse-purdue
+#PBS -q debug
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -N warm_cap
+#PBS -k doe
+#PBS -j oe
+#
+# One-time warmup: download Qwen/Qwen3-VL-8B-Instruct (the on-the-fly GT
+# captioner used by ContextProjectorAlign_JEPA_alcf.yml) into HF_HOME, so
+# scripts/alcf/sjob_ctx_alignA_2node_debug's 8 ranks find it already cached
+# instead of racing to download the same ~8B-param repo simultaneously on
+# first training step (the failure mode that killed job 7573451: rank2 hit
+# OSError "does not appear to have a file named ... model.safetensors").
+#
+# CPU-only, no GPU needed.
+#
+# Submit from the repo root:
+#   qsub scripts/alcf/sjob_warm_caption_model
+
+set -euo pipefail
+
+REPO="${REPO:-/lus/eagle/projects/lighthouse-purdue/harshana/svd_v2}"
+cd "${REPO}"
+
+echo "host=$(hostname)  job=${PBS_JOBID:-none}"
+
+export HTTP_PROXY="http://proxy.alcf.anl.gov:3128"
+export HTTPS_PROXY="http://proxy.alcf.anl.gov:3128"
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY}"
+export ftp_proxy="${HTTP_PROXY}"
+export no_proxy="admin,localhost,*.cm.polaris.alcf.anl.gov,polaris-*,*.polaris.alcf.anl.gov,*.alcf.anl.gov"
+
+export HF_HOME="${REPO}/.cache/huggingface"
+export TORCH_HOME="${REPO}/.cache/torch_hub"
+
+source "${REPO}/scripts/alcf/load_conda.sh"
+conda activate "${PROJECT_ENV:-/eagle/lighthouse-purdue/harshana/my_env}"
+echo "python=$(command -v python)  CONDA_PREFIX=${CONDA_PREFIX:-unset}"
+
+python -u "${REPO}/scripts/alcf/warm_caption_model.py"
