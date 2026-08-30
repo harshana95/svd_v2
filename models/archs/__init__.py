@@ -1,4 +1,5 @@
 import importlib
+import logging
 from os import path as osp
 
 from utils import scandir, find_attr
@@ -14,7 +15,16 @@ def find_network_class(network_type):
         network_type = network_type[:-5]
     # Iterate through module names, import one by one, and check for the classes.
     for file_name in arch_filenames:
-        module = importlib.import_module(f'models.archs.{file_name}')
+        try:
+            module = importlib.import_module(f'models.archs.{file_name}')
+        except Exception as e:
+            # Some archs depend on packages that aren't installed in every
+            # environment. Skip modules that fail to import instead of
+            # crashing every run regardless of the requested network_type.
+            logging.getLogger(__name__).warning(
+                f"Skipping models.archs.{file_name}: failed to import ({e})"
+            )
+            continue
         cls_ = getattr(module, network_type + '_arch', None)
         if cls_ is not None:
             net_class = cls_

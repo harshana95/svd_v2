@@ -170,7 +170,7 @@ network:
 
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom24/NAFNet_2026_07_04_23_03_36/ #/scratch/gilbreth/wweligam/experiments/MetaZoom24/NAFNet_lpipsloss 2025 12 12 19.35.24/
   resume_from_checkpoint: latest

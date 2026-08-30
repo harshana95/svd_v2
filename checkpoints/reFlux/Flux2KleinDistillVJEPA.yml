@@ -128,7 +128,7 @@ datasets:
         std: [0.5, 0.5, 0.5]
 
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   # Resume weights (transformer LoRA + both discriminators + vjepa_projector)
   # from phase 1's completed 20k-step run, then continue under the K=4

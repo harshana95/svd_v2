@@ -181,7 +181,7 @@ datasets:
   
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/SVD_Real/Ex2_pixel 2025 09 10 16.28.12/
   resume_from_checkpoint: latest

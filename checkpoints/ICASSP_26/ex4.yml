@@ -216,7 +216,7 @@ datasets:
   
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/SVD_Real/OursRealDiffusionDeblurSDXL 2025 09 09 01.03.10/
   resume_from_checkpoint: ~ #latest

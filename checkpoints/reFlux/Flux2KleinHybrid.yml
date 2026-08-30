@@ -129,7 +129,7 @@ datasets:
         std: [0.5, 0.5, 0.5]
 
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   # PHASE 2 attempt 3 (with the base_model.py PeftModel-resume fix, see
   # peft_resume_optimizer_disconnect memory note) got interrupted by its

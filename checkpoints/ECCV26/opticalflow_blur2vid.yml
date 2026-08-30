@@ -53,7 +53,7 @@ datasets:
 
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/Blur2VidOF/Blur2Vid_opticalflow_half_res_2026_01_24_22_56_21/
   resume_from_checkpoint: latest

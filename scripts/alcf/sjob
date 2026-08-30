@@ -1,0 +1,91 @@
+#!/bin/bash -l
+#PBS -A lighthouse-purdue
+#PBS -q debug
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:eagle
+#PBS -N svd
+#PBS -k doe
+#PBS -j oe
+#
+# Default Polaris job for svd_v2.
+#
+# Submit from the repo root:
+#   qsub scripts/alcf/sjob
+#
+# Override config / flags without editing this file:
+#   qsub -v OPT=checkpoints/NAFNet.yml,COMMENT=polaris scripts/alcf/sjob
+#   qsub -v OPT=checkpoints/NAFNet.yml,TEST=1 scripts/alcf/sjob
+#
+# Longer 1-node runs (prod requires 10+ nodes on Polaris):
+#   qsub -q preemptable -l walltime=12:00:00 -v OPT=checkpoints/NAFNet.yml scripts/alcf/sjob
+#   qsub -q capacity    -l walltime=24:00:00 -v OPT=checkpoints/NAFNet.yml scripts/alcf/sjob
+#
+# Interactive:
+#   qsub -I -A lighthouse-purdue -q debug -l select=1:system=polaris \
+#        -l place=scatter -l walltime=01:00:00 -l filesystems=home:eagle
+
+set -euo pipefail
+
+# ---- edit these, or pass via qsub -v ----
+OPT="${OPT:-checkpoints/NAFNet.yml}"
+COMMENT="${COMMENT:-}"
+TEST="${TEST:-0}"
+INFER="${INFER:-0}"
+NGPUS="${NGPUS:-4}"   # Polaris node has 4x A100; billed as a whole node
+
+REPO="${REPO:-/lus/eagle/projects/lighthouse-purdue/harshana/svd_v2}"
+cd "${REPO}"
+mkdir -p logs
+
+echo "host=$(hostname)  job=${PBS_JOBID:-none}  nodes=$(wc -l < "${PBS_NODEFILE:-/dev/null}" 2>/dev/null || echo 1)"
+echo "repo=${REPO}"
+echo "opt=${OPT}  ngpus=${NGPUS}  comment=${COMMENT}"
+
+# Compute nodes need the proxy to reach HF / pip / comet
+export HTTP_PROXY="http://proxy.alcf.anl.gov:3128"
+export HTTPS_PROXY="http://proxy.alcf.anl.gov:3128"
+export http_proxy="${HTTP_PROXY}"
+export https_proxy="${HTTPS_PROXY}"
+export ftp_proxy="${HTTP_PROXY}"
+export no_proxy="admin,localhost,*.cm.polaris.alcf.anl.gov,polaris-*,*.polaris.alcf.anl.gov,*.alcf.anl.gov"
+
+export HF_HOME="${REPO}/.cache/huggingface"
+export MPICH_GPU_SUPPORT_ENABLED=1
+
+# checkpoints/**/*.yml resolve path.root via ${oc.env:EXPERIMENTS_ROOT,...};
+# on ALCF, save experiments/logs under eagle instead of the Gilbreth default.
+export EXPERIMENTS_ROOT="${EXPERIMENTS_ROOT:-/lus/eagle/projects/lighthouse-purdue/harshana/logs}"
+
+# conda/2025-09-25 pins gcc-native/14.2 + hdf5 1.14.3.5; current CPE
+# only has gcc-native/14 and hdf5 1.14.3.9. load_conda.sh adds shims.
+source "${REPO}/scripts/alcf/load_conda.sh"
+
+# Real project env, installed by scripts/alcf/debug_deps_install.sh from
+# requirements_no_flashattn.txt (accelerate, diffusers, transformers,
+# comet-ml, xformers, the datasets==3.3.0 this repo's custom
+# HuggingFaceDataset loading scripts require, etc.).
+conda activate "${PROJECT_ENV:-/eagle/lighthouse-purdue/harshana/my_env}"
+echo "python=$(command -v python)  CONDA_PREFIX=${CONDA_PREFIX:-unset}"
+
+which python
+python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available(), 'ngpu', torch.cuda.device_count())"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv
+
+CMD=(trainer.py -opt "${OPT}")
+if [[ -n "${COMMENT}" ]]; then
+  CMD+=(-comment "${COMMENT}")
+fi
+if [[ "${TEST}" == "1" ]]; then
+  CMD+=(-test)
+fi
+if [[ "${INFER}" == "1" ]]; then
+  CMD+=(-infer)
+fi
+
+if [[ "${NGPUS}" -gt 1 ]]; then
+  accelerate launch --num_processes "${NGPUS}" --mixed_precision bf16 "${CMD[@]}"
+else
+  python "${CMD[@]}"
+fi

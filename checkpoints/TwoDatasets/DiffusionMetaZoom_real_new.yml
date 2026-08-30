@@ -160,7 +160,7 @@ LKPN_network:
 
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: ~ #/scratch/gilbreth/wweligam/experiments/SVD/DiffusionMetaZoomNew 2025 05 21 22.44.24/
   resume_from_checkpoint: ~ #latest

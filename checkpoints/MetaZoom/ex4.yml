@@ -213,7 +213,7 @@ datasets:
   
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/Ex4_latent 2025 10 07 09.24.21/
   resume_from_checkpoint: latest

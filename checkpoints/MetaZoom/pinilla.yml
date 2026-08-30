@@ -138,7 +138,7 @@ discriminator:
 
 # path
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/MetaZoom/Pinilla_GAN_2026_02_03_02_19_51/
   resume_from_checkpoint: latest

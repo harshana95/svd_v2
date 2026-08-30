@@ -59,7 +59,7 @@ datasets:
     use_shuffle: false
 
 path:
-  root: /scratch/gilbreth/wweligam/experiments
+  root: ${oc.env:EXPERIMENTS_ROOT,/scratch/gilbreth/wweligam/experiments}
   logging_dir: logs
   resume_from_path: /scratch/gilbreth/wweligam/experiments/Blur2VidOF/Blur2Vid_wan21_480p_opticalflow_2026_02_27_10_15_41/
   resume_from_checkpoint: latest

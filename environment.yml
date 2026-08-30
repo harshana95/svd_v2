@@ -94,7 +94,7 @@ dependencies:
       - defusedxml==0.7.1
       - deprecation==2.1.0
       - dflat-opt==4.1.0
-      - diffusers==0.35.0
+      - diffusers==0.39.0
       - dill==0.3.8
       - distlib==0.4.0
       - dm-tree==0.1.9
