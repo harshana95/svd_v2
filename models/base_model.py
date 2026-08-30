@@ -177,9 +177,11 @@ class BaseModel():
         self.models = []
         self.overrode_max_train_steps = False
         self.global_step = 0
-        self.max_val_steps = opt.val.get('max_val_steps', 10)
-        if not self.is_train:
-            self.max_val_steps = 1e6
+        # Under -infer (is_train=False), default to sweeping the whole split (1e6) rather
+        # than the training-time quick-check default (10) -- but an explicit max_val_steps
+        # in the config still wins either way, so an eval config can bound the image count.
+        default_max_val_steps = 1e6 if not self.is_train else 10
+        self.max_val_steps = opt.val.get('max_val_steps', default_max_val_steps)
 
         # enable disable dataset caching
         if opt.dataset_caching or opt.dataset_caching is None:

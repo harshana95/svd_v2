@@ -1,0 +1,143 @@
+# Full-resolution INFERENCE config for ContextFluxBlurMap on Deblur_MIOR val (X7).
+# Sibling of ContextFluxBlurMap_fullres_eval.yml (GoPro) -- same model/checkpoint, different
+# dataset. Run with:
+#     python trainer.py -opt checkpoints/reFlux/ContextFluxBlurMap_mior_eval.yml -infer
+#
+# MIOR val images are 1920x1080. 1080 is not a multiple of 16, and forwardpass computes
+# lat_h = height // (vae_scale_factor*2), so an uncropped run would silently return a
+# 1072-row prediction against a 1080-row GT. Center-crop both to 1920x1072 to avoid that.
+
+name: Motion
+model_type: ContextFluxBlurMap_model
+tracker_project_name: Motion
+experiment_key: ContextFluxBlurMap_mior_eval
+
+is_train: false
+report_to: tensorboard
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+swinir_model_path: /depot/chan129/users/harshana/LucidFlux/weights/swinir.pth
+
+use_vjepa_condition: true
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 512
+vjepa_pretrained: true
+vjepa_checkpoint_path: ~
+vjepa_source_image: lq
+
+blur_dim: 64
+global_dim: 64
+num_bands: 16
+pga_rank: 8
+adapter_hidden: 64
+
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+use_condition_image_for_transformer: true
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: false
+
+datasets:
+  train:
+    type: ImagePairDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/val
+    split: ""
+    lq_folder: blur
+    gt_folder: gt
+    gt_key: gt
+    lq_key: blur
+    recursive: true
+    return_name: true
+    crop_h: 1072       # center-crop to a multiple of 16; avoids silent truncation mismatch
+    crop_w: 1920
+    random_crop: false
+    use_shuffle: false
+    num_proc: 1
+    num_worker_per_gpu: 0
+
+  val:
+    type: ImagePairDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/val
+    split: ""
+    lq_folder: blur
+    gt_folder: gt
+    gt_key: gt
+    lq_key: blur
+    recursive: true
+    return_name: true
+    crop_h: 1072
+    crop_w: 1920
+    random_crop: false
+    use_shuffle: false
+    num_proc: 1
+    num_worker_per_gpu: 0
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /depot/chan129/users/harshana/backups/reFlux_2026_08_27/ContextFluxBlurMap_2026_07_12_02_43_19
+  resume_from_checkpoint: checkpoint-50000
+
+train:
+  lora_finetune: false
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: !!float 2e-5
+    relative_step: false
+    scale_parameter: false
+    warmup_init: false
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: !!float 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 20
+  batch_size: 1
+
+  max_train_steps: 50000
+  validation_steps: 1000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+val:
+  save_images: true
+  num_inference_steps: 50
+  batch_size: 1
+  max_val_steps: 11    # all of MIOR val
+  patched: false
+  patch_size_h: 256
+  patch_size_w: 256
+  patch_overlap: 0.2
+  max_minibatch: 4
+
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

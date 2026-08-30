@@ -1,0 +1,97 @@
+# Smoke test only -- tiny step counts to verify VAEBlurAlign_model runs
+# end-to-end (feed_data/optimize_parameters/validate_step, checkpoint save,
+# image logging) before a real launch of VAEBlurAlign.yml.
+#   python trainer.py -opt checkpoints/reFlux/VAEBlurAlign_smoke.yml -test
+
+name: Motion
+model_type: VAEBlurAlign_model
+tracker_project_name: Motion
+experiment_key: VAEBlurAlign_smoke
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+lora_rank: 128
+latent_loss_weight: 5.0
+pixel_loss_weight: 1.0
+gan_loss_weight: 0.0  # GAN loss disabled: 3 full-length attempts (default, reduced weight, reduced weight + weakened D) all finished with block-region output worse than doing nothing, no improvement even after D stabilized -- see model docstring
+gan_mode: hinge
+
+datasets:
+  train:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: true
+    crop_size: 512
+    batch_size: 2
+    patches_per_group: 2
+    split_range: [0, 1]
+    num_worker_per_gpu: 2  # nonzero on purpose: exercises the worker-sharding path before the full run does
+
+  val:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: false
+    crop_size: 512
+    batch_size: 2
+    patches_per_group: 1
+    split_range: [99, 100]
+    num_worker_per_gpu: 0
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_checkpoint: ~
+
+train:
+  lora_finetune: true
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 5e-4
+    discriminator_learning_rate: 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1e-8
+    max_grad_norm: 1.0
+  scheduler:
+    type: constant
+    lr_warmup_steps: 1
+    lr_num_cycles: 1
+    lr_power: 1.0
+  gradient_accumulation_steps: 2
+  num_train_epochs: 50
+  batch_size: 2
+  max_train_steps: 3
+  validation_steps: 2
+  checkpointing_steps: 100
+  checkpoints_total_limit: 1
+  patched: false
+  check_speed: false
+
+val:
+  save_images: true
+  batch_size: 2  # not read for FullResPatchifierDataset -- see datasets.val.batch_size
+  max_val_steps: 2
+  metrics:
+    # ssim intentionally omitted: utils/misc.py's log_metrics passes
+    # calculate_ssim's (value, map) tuple straight to tracker.add_scalar,
+    # which crashes -- no config anywhere else in this repo uses it either.
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

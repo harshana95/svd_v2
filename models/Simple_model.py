@@ -4,6 +4,8 @@
 # Modified from BasicSR (https://github.com/xinntao/BasicSR)
 # Copyright 2018-2020 BasicSR Authors
 # ------------------------------------------------------------------------
+import os
+
 import einops
 import numpy as np
 import torch
@@ -14,7 +16,7 @@ from models.base_model import BaseModel
 from models.archs.related.LD.loss import GANLoss
 from utils.dataset_utils import merge_patches
 from utils.loss import Loss
-from utils import log_image, log_metrics
+from utils import log_image, log_metrics, save_eval_png
 
 class Simple_model(BaseModel):
     """Base Deblur model for single image deblur."""
@@ -242,6 +244,7 @@ class Simple_model(BaseModel):
         lq = lq.cpu().numpy()*0.5+0.5
         gt = gt.cpu().numpy()*0.5+0.5
         out = out.cpu().numpy()*0.5+0.5
+        names = batch.get("name") if isinstance(batch, dict) else None
         for i in range(len(gt)):
             idx += 1
             image1 = [lq[i, :3],gt[i], out[i]]
@@ -252,6 +255,14 @@ class Simple_model(BaseModel):
             log_image(self.opt, self.accelerator, np.clip(np.stack([out[i]]), 0,1), f'out_{idx:04d}', self.global_step)
             log_image(self.opt, self.accelerator, np.clip(np.stack([lq[i, :3]]), 0,1), f'lq_{idx:04d}', self.global_step)
             log_metrics(gt[i], out[i], self.opt.val.metrics, self.accelerator, self.global_step)
+
+            if not self.opt.is_train:
+                stem = (
+                    os.path.splitext(os.path.basename(names[i]))[0]
+                    if names is not None
+                    else f"{idx:05d}"
+                )
+                save_eval_png(self.opt.path.experiments_root, "eval_preds", stem, np.clip(out[i], 0, 1))
         return idx
     
     

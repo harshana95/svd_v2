@@ -318,6 +318,25 @@ def log_image(args, accelerator, formatted_images, name, step):
         elif tracker.name == "comet_ml" and not skip_comet_ml:
             tracker.writer.log_image(einops.rearrange(formatted_images, 'n c h w -> c (n h) w'), name=name, step=step, image_channels="first")
         
+def save_eval_png(experiments_root, subdir, stem, image_chw_01):
+    """Save a single [C,H,W] float image in [0,1] as a lossless PNG named by `stem`.
+
+    Unlike log_image (which writes JPEGs named by a running counter + checkpoint step, for
+    quick training-time visualisation), this names the file after the actual sample so a
+    separate eval/metrics script can match predictions back to GT by filename.
+    """
+    out_dir = os.path.join(experiments_root, subdir)
+    os.makedirs(out_dir, exist_ok=True)
+    img = einops.rearrange(np.asarray(image_chw_01), 'c h w -> h w c')
+    if img.shape[-1] == 1:
+        img = np.repeat(img, 3, axis=-1)
+    img_bgr = cv2.cvtColor((img.clip(0, 1) * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+    out_path = os.path.join(out_dir, f"{stem}.png")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    cv2.imwrite(out_path, img_bgr)
+    return out_path
+
+
 def log_video(args, accelerator, video, name, step, fps=20):
     os.makedirs(os.path.join(args.path.experiments_root, 'videos'), exist_ok=True)
     filename = os.path.join(args.path.experiments_root, 'videos' , f"{name}_{step//1000:04d}k.mp4")

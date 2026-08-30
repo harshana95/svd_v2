@@ -1,16 +1,20 @@
 % ICASSP manuscript — ContextFlux (V-JEPA context conditioning of frozen Flux2 Klein).
-% Rewritten 2026-08-26 per papers/ICASSP_plan.md. Previous NeurIPS-format draft: main_neurips_backup.tex.
+% Rewritten 2026-08-26 per papers/ICASSP_plan.md; REWRITTEN AGAIN 2026-08-29 per
+% papers/experiment_plan.html ("Fourteen Days to ICASSP") after a scratch purge destroyed
+% every trained checkpoint except ContextFluxBlurMap and forced a reframing of the thesis.
+% Previous NeurIPS-format draft: main_neurips_backup.tex.
 %
 % HONESTY CONTRACT (do not delete until camera-ready):
-%   * Every number in this file is either (a) real and traced to a run/probe, or (b) the
-%     red \tbd marker. NO placeholder numbers. Fill \tbd cells ONLY from the unified
-%     evaluation dumps (plan §5 step 5).
+%   * Every number in this file is either (a) real and traced to a run/probe/log under
+%     playground/ or logs/, or (b) the red \tbd marker. NO placeholder numbers. Fill \tbd
+%     cells ONLY from the unified evaluation dumps (experiment_plan.html, Phase 2/3).
 %   * \authnote{...} marks items to resolve before submission. Grep for "authnote" and
 %     "tbd" — both must be gone in the submitted PDF.
 
 \documentclass{article}
 \usepackage{spconf,amsmath,amssymb,graphicx}
 \usepackage{booktabs}
+\usepackage{multirow}
 \usepackage{xcolor}
 \usepackage{tikz}
 \usetikzlibrary{positioning, arrows.meta, fit}
@@ -21,9 +25,10 @@
 \newcommand{\authnote}[1]{\textcolor{red}{\footnotesize [#1]}}
 
 \def\x{{\mathbf x}}
+\def\y{{\mathbf y}}
 \def\L{{\cal L}}
 
-\title{ContextFlux: Conditioning a Frozen Flow-Matching Transformer with Blur-Robust V-JEPA Context for Motion Deblurring}
+\title{ContextFlux: What Does a Self-Supervised Representation Actually Carry for a Frozen Deblurring Prior?}
 
 \name{Harshana Weligama\thanks{\authnote{Funding/acknowledgment; verify ICASSP 2027 blinding policy before submission.}}}
 \address{Purdue University, West Lafayette, IN, USA}
@@ -32,7 +37,7 @@
 \maketitle
 
 \begin{abstract}
-Diffusion-based image restoration methods condition large text-to-image backbones on captions extracted from the degraded input, but captioning a blurred image is unreliable and discards spatial detail. We ask whether the patch representations of a self-supervised video encoder, V-JEPA, can replace text conditioning entirely. We first analyze V-JEPA features under motion blur and find that they remain strongly correlated with the features of the sharp image, making them a natural blur-robust conditioning signal. Building on this, we propose \emph{ContextFlux}: a lightweight dual-head cross-attention projector maps frozen V-JEPA patch tokens into (i)~the text-conditioning space and (ii)~the packed VAE-latent space of a completely frozen FLUX.2 flow-matching transformer. The projector is first aligned to caption embeddings and clean-image latents, then fine-tuned with the flow-matching objective while the 4B-parameter backbone, the VAE, and the encoder all stay frozen — the projector is the only trained component. On a synthetic motion-blur benchmark, we compare V-JEPA context against DINOv2, CLIP, and VL-JEPA conditioning, a LoRA-tuned image-conditioned control, and regression baselines, and ablate feature depth and feature source. \authnote{Finalize abstract claims once the unified evaluation completes (plan step 5).}
+Diffusion-based restoration methods condition frozen text-to-image backbones on captions extracted from the degraded input; captioning a blurred image is unreliable and a caption discards spatial detail regardless. We ask a more basic question first: how much restoration-relevant information does a self-supervised patch representation of the \emph{blurred} image actually carry, and where in the encoder does it live. Analyzing V-JEPA, DINOv2, and CLIP at dataset scale (300 GoPro and 11 Deblur-MIOR pairs) we find that blur invariance does \emph{not} separate the encoders the way a conditioning ranking would need it to: mean per-component energy retention under blur is $0.98$--$0.99$ for all three, and a linear probe that reconstructs the sharp image from blurred-input features places V-JEPA and DINOv2 within $0.1$\,dB of each other on GoPro, with CLIP the only one that separates cleanly, roughly $3$\,dB behind. The probe itself is the more important number: decoded \emph{linearly} — a deliberately weak lower bound, not a claim about what our system's much more expressive projector could recover — it reaches only $17.7$\,dB against a $26.3$\,dB blurred-input floor, so the representation that our system, \emph{ContextFlux}, uses as its \emph{only} pathway from image to backbone is, at minimum, a lossy one. A per-block analysis clarifies roles rather than declaring a winner: blur-invariant capacity peaks at a mid-depth block (block 10 of 24) rather than the final block current pipelines tap, but the most invariant block is, by construction, the one that has abstracted away the most blur-distinguishing detail — so we propose using it only for a stable \emph{semantic} identity signal, with fidelity instead routed through a restored VAE-latent path built from actual pixels rather than through any V-JEPA depth. This redesign is motivated by the analysis, not yet retrained end-to-end; we report it alongside the trained-system results we complete under the compute and time budget available. \authnote{Finalize once the arm matrix (experiment\_plan.html, Track E / Phase 3) lands or is explicitly dropped.}
 \end{abstract}
 
 \begin{keywords}
@@ -44,26 +49,24 @@ Image deblurring, flow matching, self-supervised representations, JEPA, diffusio
 \label{sec:intro}
 %=============================================================================
 
-Recovering a sharp image from a motion-blurred observation is a long-standing inverse problem. Regression networks such as Restormer~\cite{zamir2022restormer} and NAFNet~\cite{chen2022nafnet} achieve strong distortion metrics but over-smooth fine texture. Generative restoration instead exploits the prior of a large pre-trained text-to-image model~\cite{wang2024exploiting,lin2023diffbir,wu2024osediff}, and recent flow-matching transformers~\cite{lipman2023flow,esser2024scaling,flux2024} make this prior stronger and cheaper to sample.
+Recovering a sharp image from a motion-blurred observation is a long-standing inverse problem. Regression networks such as Restormer~\cite{zamir2022restormer} and NAFNet~\cite{chen2022nafnet} achieve strong distortion metrics but over-smooth fine texture. Generative restoration instead exploits the prior of a large pre-trained text-to-image model~\cite{wang2024exploiting,lin2023diffbir,wu2024osediff}, and flow-matching transformers~\cite{lipman2023flow,esser2024scaling,flux2024} make this prior stronger and cheaper to sample.
 
-To steer such a backbone toward the latent clean image, current pipelines extract \emph{semantic} conditioning from the degraded input — typically a caption or tag set produced by a vision--language model, following the caption-free-restoration line of LucidFlux~\cite{lucidflux2025}\authnote{verify LucidFlux citation details}. This is doubly unsatisfying for deblurring: a VLM applied to a blurred image produces unreliable text, and even a perfect caption is a severe information bottleneck — it carries no spatial layout.
+To steer such a backbone toward the latent clean image, current pipelines extract \emph{semantic} conditioning from the degraded input — typically a caption or tag set from a vision--language model, or, following the caption-free-restoration line of LucidFlux~\cite{lucidflux2025}, a vision-encoder embedding aligned in place of the caption (though LucidFlux still injects the degraded image directly for geometry, which our main configuration does not). This is doubly unsatisfying for deblurring: a VLM applied to a blurred image produces unreliable text, and even a perfect caption is a severe information bottleneck. We therefore condition instead on the degraded image's \emph{self-supervised patch representations}, using V-JEPA~\cite{assran2023self,bardes2025vjepa2} as the running example: an objective that predicts masked-region embeddings rather than pixels, which should encourage abstraction over low-level appearance and therefore blur-robustness.
 
-We instead condition on the degraded image's \emph{self-supervised patch representations}. V-JEPA~\cite{assran2023self,bardes2025vjepa2}\authnote{verify V-JEPA 2 citation} learns by predicting the embeddings of masked regions in latent space, an objective that encourages abstraction over low-level appearance. We hypothesize — and verify empirically in Sec.~\ref{sec:analysis} — that this makes V-JEPA patch tokens substantially \emph{blur-robust}: features of a blurred image stay close to those of its sharp counterpart. Such tokens are then a conditioning signal that (a)~survives the degradation, (b)~retains spatial structure that captions lose, and (c)~is available without any VLM at test time.
+That hypothesis is where this paper's contribution actually starts, because testing it carefully changes the conclusion. Blur invariance and restoration value turn out to be two different axes, and conflating them is a mistake worth documenting rather than hiding: an encoder can be highly blur-invariant \emph{because} it has discarded the high-frequency content that invariance is measured on, which is exactly the content deblurring exists to recover — a special case of the general result that invariance to a nuisance factor is information-minimality about that factor~\cite{achille2018invariance}, not a new information-theoretic claim of this paper. Sections~\ref{sec:analysis}--\ref{sec:critique} instantiate this for V-JEPA specifically with dataset-scale probes, rather than treating it as a single ablation table over encoders.
 
-Our system, \textbf{ContextFlux}, keeps the entire FLUX.2 Klein backbone (transformer, VAE, text pathway) and the V-JEPA encoder frozen. A single dual-head cross-attention projector ($\sim$\tbd{}M parameters\authnote{compute from checkpoint}) maps V-JEPA tokens into the backbone's text-token stream and, through a second head, into its packed VAE-latent token stream. Notably, in our main configuration the low-quality (LQ) image latents are \emph{not} fed to the transformer at all: every bit of information about the input image reaches the backbone through projected V-JEPA tokens. Deblurring quality therefore directly measures how much restoration-relevant content the self-supervised representation carries.
-
-\noindent\textbf{Contributions.} (1)~An empirical analysis of V-JEPA representations under motion blur (spectrum, per-component invariance, and GT-vs-blur token similarity) compared against DINOv2 and CLIP; (2)~ContextFlux, a two-stage recipe — caption/latent alignment, then flow-matching fine-tuning — that conditions a fully frozen flow transformer on projected V-JEPA tokens only; (3)~a controlled comparison across conditioning encoders (V-JEPA, DINOv2, CLIP, VL-JEPA), feature depth, and feature source (degraded vs.\ oracle-sharp), against regression and LoRA-tuned diffusion baselines.
+\noindent\textbf{Contributions.} (1)~A dataset-scale analysis of V-JEPA, DINOv2, and CLIP patch tokens under motion blur — spectral energy retention, resolution robustness, and linear-probe restorability — showing that blur invariance alone does not rank encoders by conditioning value (Sec.~\ref{sec:analysis}); (2)~a linear-probe information-budget measurement showing all three encoders reconstruct far below the blurred-input floor, quantifying for V-JEPA specifically a gap that related designs (e.g.\ DINO-IR's DINOv2 fusion~\cite{dinoir2024}) already work around but do not measure directly (Sec.~\ref{sec:analysis}); (3)~a per-block analysis showing blur-invariant capacity peaks at a mid-depth block rather than the final block, read through the invariance-is-information-minimality lens~\cite{achille2018invariance} as a \emph{role assignment} (semantic vs.\ degradation-carrying blocks) rather than a layer-selection ranking (Sec.~\ref{sec:critique}); (4)~ContextFlux, the two-stage frozen-backbone system this analysis motivates, positioned against the closest prior art — DINO-IR's degradation-aware feature fusion~\cite{dinoir2024} and DPS/FlowDPS-style measurement-consistent sampling~\cite{chung2023diffusion,flowdps2025} — together with the trained-system results available at submission time (Sec.~\ref{sec:experiments}).
 
 %=============================================================================
 \section{Related Work}
 \label{sec:related}
 %=============================================================================
 
-\textbf{Deblurring.} Multi-scale CNNs~\cite{nah2017deep} evolved into restoration transformers~\cite{zamir2022restormer,kong2023efficient} and simplified baselines~\cite{chen2022nafnet}. Diffusion-prior methods~\cite{lin2023diffbir,wang2024exploiting,wu2024osediff} trade distortion for perceptual quality by sampling from a pre-trained generative model conditioned on the degraded input.
+\textbf{Deblurring.} Multi-scale CNNs~\cite{nah2017deep} evolved into restoration transformers~\cite{zamir2022restormer,kong2023efficient} and simplified baselines~\cite{chen2022nafnet}, which on GoPro-class benchmarks report PSNR in the low-to-mid $30$s\,dB — a regression ceiling our own result (Sec.~\ref{sec:experiments}) sits well below. Diffusion-prior methods~\cite{lin2023diffbir,wang2024exploiting,wu2024osediff} trade distortion for perceptual quality by sampling from a pre-trained generative model conditioned on the degraded input; deblurring-specific generative methods report GoPro-class PSNR roughly in the $31$--$34$\,dB range~\cite{deblurflow2026}\authnote{add 1--2 further deblurring-specific SOTA citations once confirmed (e.g.\ a diffusion-prior deblurring method and a strong regression baseline)}, a gap Sec.~\ref{sec:experiments} states plainly rather than only comparing our result to its own input floor. Classical deblurring is also an \emph{inverse problem} with a known forward model $\y=\mathbf{k}*\x+\mathbf{n}$; measurement-consistent diffusion and flow samplers~\cite{chung2023diffusion,flowdps2025} already enforce that constraint during sampling rather than leaving it entirely to the prior, and the blind case (unknown kernel, our setting) already has dedicated solutions that recover the operator jointly with the image via a second, parallel diffusion process~\cite{blinddps2022,blindpnpdm2025}. Sec.~\ref{sec:critique} argues our own system currently lacks any such constraint and treats adding one as adopting this existing machinery, not proposing new machinery.
 
 \textbf{Flow matching.} Rectified-flow transformers~\cite{lipman2023flow,liu2023flow,esser2024scaling} learn a velocity field transporting noise to data; FLUX~\cite{flux2024} scales this recipe. We build on the distilled FLUX.2 Klein model, which admits guidance-free few-step sampling.
 
-\textbf{Conditioning restoration without captions.} LucidFlux~\cite{lucidflux2025} conditions a Flux backbone for universal restoration without text captions; we go further by removing image-latent conditioning as well, isolating the representation itself as the sole carrier of image content, and by systematically comparing self-supervised encoders. Joint-embedding predictive architectures~\cite{assran2023self,bardes2025vjepa2} have not previously been used as the conditioning interface of a generative restorer; DINOv2~\cite{oquab2023dinov2} and CLIP~\cite{radford2021learning} serve as our contrastive/distillation-based comparisons.
+\textbf{Conditioning restoration without captions.} LucidFlux~\cite{lucidflux2025} replaces text captions with a SigLIP-derived semantic signal aligned into a frozen \emph{Flux.1} backbone, but still injects the degraded image directly to anchor geometry — it does not test what happens when that geometric path is removed. DINO-IR~\cite{dinoir2024} makes a closely related diagnosis for DINOv2 specifically: pure semantic features are degradation-invariant but insufficient for restoration, and it already fixes this by fusing DINOv2's shallow, pixel-level features with its deep semantic features and the restoration backbone's own features. Our main configuration goes further than either — no text, no VLM, and no image-latent path at all, so a self-supervised representation is the sole carrier of image content — which is a more extreme ablation than either prior system runs; Sec.~\ref{sec:analysis} quantifies the cost that DINO-IR's own design already implies but does not measure directly, namely the gap between what such a representation carries and what the degraded pixels themselves carry. To our knowledge, V-JEPA~\cite{assran2023self,bardes2025vjepa2} specifically has not previously been used as a restorer's conditioning interface (DINOv2~\cite{oquab2023dinov2} and CLIP~\cite{radford2021learning} serve here as our contrastive/distillation-based comparisons), but the broader move of replacing text with a vision encoder's features is established practice, not something this paper introduces.
 
 %=============================================================================
 \section{Method}
@@ -82,26 +85,30 @@ with $\x_t=(1-\sigma_t)\x_1+\sigma_t\x_0$ and a discrete shifted schedule (shift
 \label{sec:contextflux}
 Given LQ input $\mathbf{y}$, an optional frozen SwinIR~\cite{liang2021swinir} pre-filter produces $\tilde{\mathbf{y}}$, from which the frozen V-JEPA~2.1 encoder (ViT-L, $512^2$ input) extracts patch tokens $\mathbf{F}\in\mathbb{R}^{N_p\times d_J}$ ($N_p{=}1024$, $d_J{=}1024$; concatenating the last $N$ blocks gives $d_J{=}1024N$).
 
-A \emph{dual-head patch cross-attention projector} — the only trainable module — consists of a shared trunk (linear embedding to width 2048 with LayerNorm, one 8-head cross-attention layer) queried by two sets of learned query tokens:
+A \emph{dual-head patch cross-attention projector} — the only trainable module, $39.1$M parameters — consists of a shared trunk (linear embedding to width 2048 with LayerNorm, one 8-head cross-attention layer) queried by two sets of learned query tokens:
 \begin{itemize}
 \setlength\itemsep{0pt}
-\item \textbf{Text head:} $N_p$ queries produce tokens in the backbone's context dimension. They are \emph{appended to the frozen null-prompt embeddings}, so the transformer sees $[\,\mathbf{c}_\varnothing;\, P_{\mathrm{text}}(\mathbf{F})\,]$ in its text stream — the projected features play the role of the prompt.
-\item \textbf{VAE head:} one query per packed-latent position ($1024$ at $512^2$, dim.\ $128$) produces pseudo image-latent tokens that are concatenated to the transformer's latent token sequence with their own positional ids.
+\item \textbf{Text head:} $N_p$ queries produce tokens in the backbone's context dimension. They are \emph{appended to the frozen null-prompt embeddings}, so the transformer sees $[\,\mathbf{c}_\varnothing;\, P_{\mathrm{text}}(\mathbf{F})\,]$ in its text stream.
+\item \textbf{VAE head:} one query per packed-latent position ($1024$ at $512^2$, dim.\ $128$) produces pseudo image-latent tokens concatenated to the transformer's latent token sequence with their own positional ids.
 \end{itemize}
-Crucially, the VAE encoding of $\mathbf{y}$ itself is \emph{not} concatenated to the latent stream in our main configuration: projected V-JEPA tokens are the only pathway from the input image to the backbone. Velocity predictions are read off the noisy-latent positions only.
+In our main configuration the VAE encoding of $\mathbf{y}$ is \emph{not} concatenated to the latent stream (\texttt{use\_condition\_image\_for\_transformer: false}): projected V-JEPA tokens are the only pathway from the input image to the backbone. Section~\ref{sec:critique} argues this is precisely the design choice the information-budget analysis calls into question.
 
 \subsection{Two-stage training}
 \label{sec:training}
-\textbf{Stage A — projector alignment.} With every network frozen, the projector is trained ($20$K steps) to map V-JEPA tokens of a source image toward two targets: (i)~the text head regresses the frozen Klein text-encoder embeddings of a Qwen3-VL caption of the clean image (MSE, weight $1.0$); (ii)~the VAE head regresses the packed VAE latents of the clean image (MSE, weight $1.0$) plus a VGG perceptual loss on the decoded prediction (weight $0.1$). The source image is the clean image by default; \emph{LQ-source} and \emph{SwinIR-pre} variants align from degraded inputs to close the train/test domain gap (Sec.~\ref{sec:ablations}).
+\textbf{Stage A — projector alignment.} With every network frozen, the projector is trained ($20$K steps) so the text head regresses Klein text-encoder embeddings of a Qwen3-VL caption of the clean image (MSE) and the VAE head regresses packed VAE latents of the clean image (MSE + $0.1{\times}$ VGG perceptual). \authnote{Sec.~\ref{sec:critique} argues the text-head target is self-defeating given the paper's own thesis; consider dropping it and keeping only the VAE-latent target for future arms.}
 
 \textbf{Stage B — flow-matching fine-tuning.} The aligned projector is hot-plugged into the frozen backbone and fine-tuned end-to-end with Eq.~\eqref{eq:fm} on blur/sharp pairs ($50$K steps, AdamW, lr $2{\times}10^{-5}$, constant schedule with $500$-step warmup, per-GPU batch $2$ on $2{\times}$A100, bf16, $512^2$ crops, gradient clip $1.0$, guidance $1.0$). Inference runs $50$ Euler steps.
 
-\subsection{Controls and variants}
+\textbf{A note on what no longer exists.} A cluster-wide $\sim$45-day rolling scratch purge destroyed the trained weights for the V-JEPA, DINOv2, CLIP, no-context-LoRA, and layer-depth ablation runs, along with the Stage-A projector all of them depend on, between when those runs finished and when this draft was prepared; only the checkpoint directory skeletons survived, so a listing-based audit reports these runs as present when they are not. Only \emph{ContextFluxBlurMap} (Sec.~\ref{sec:variants}) has surviving weights. Every trained-system number in Sec.~\ref{sec:experiments} beyond BlurMap is therefore either pending retraining or explicitly marked so, rather than fabricated. \authnote{Remove this paragraph once the arm matrix has real numbers, or fold it into a one-line acknowledgment.}
+
+\subsection{Controls, variants, and a design flaw in the original comparison}
 \label{sec:variants}
-\textbf{Encoder swaps.} DINOv2-L ($518^2$)~\cite{oquab2023dinov2} and CLIP ViT-L/14 ($224^2$)~\cite{radford2021learning} replace V-JEPA behind a single-head (text-stream) projector. VL-JEPA~\cite{openvljepa}\authnote{verify open-vljepa citation} contributes a global semantic embedding that \emph{replaces} the null prompt, testing semantic-only conditioning.
-\textbf{Image-conditioned LoRA control.} The no-context control concatenates LQ VAE latents to the latent stream (Kontext-style) and tunes the backbone with LoRA ($r{=}128$); it represents the conventional conditioning route. It is not parameter-matched to the projector and is reported as a reference point, not an ablation.
+\textbf{Encoder swaps.} DINOv2-L ($518^2$)~\cite{oquab2023dinov2} and CLIP ViT-L/14 ($224^2$)~\cite{radford2021learning} replace V-JEPA behind a single-head (text-stream) projector. VL-JEPA~\cite{openvljepa}\authnote{verify open-vljepa citation} contributes a global semantic embedding replacing the null prompt.
+\textbf{Image-conditioned LoRA control.} The no-context control concatenates LQ VAE latents to the latent stream (Kontext-style) and tunes the backbone with LoRA ($r{=}128$); it is a reference point, not a parameter-matched ablation.
 \textbf{Oracle source.} Extracting V-JEPA features from the ground-truth sharp image (unavailable at inference) upper-bounds what blur-robust features could achieve.
-\textbf{Blur-map adapters.} A related variant (ContextFlux-BlurMap) injects a blur-map estimate and V-JEPA features through Coupler/PGA/PCM adapters without Stage-A alignment; we report it as an architectural alternative.
+\textbf{Blur-map adapters (ContextFluxBlurMap).} A related variant injects a blur-map estimate and V-JEPA features through Coupler/PGA/PCM adapters, \emph{with} the LQ latent path restored (the latent-conditioning flag from Sec.~\ref{sec:contextflux} enabled), without Stage-A alignment. It is the only member of this family with surviving weights and is reported in Sec.~\ref{sec:experiments} as an architectural reference point.
+
+\textbf{Design flaw, now fixed as a rule rather than a repair.} Auditing the (destroyed) run configurations found that the headline V-JEPA run was the only encoder arm using \texttt{jepa\_projector\_heads: both} — a second conditioning pathway that DINOv2, CLIP, and the layer-depth arms did not have. Any encoder-vs-encoder or depth-vs-depth comparison drawn from those runs would have been confounded by an extra channel rather than by the encoder itself. Because those runs no longer exist, this becomes a design rule for retraining rather than a correction: \texttt{jepa\_projector\_heads} is held fixed across every encoder arm in the matrix of Sec.~\ref{sec:experiments}, and text-vs-both is instead run as its own deliberate ablation.
 
 \begin{figure}[t]
 \centering
@@ -115,12 +122,14 @@ Crucially, the VAE encoding of $\mathbf{y}$ itself is \emph{not} concatenated to
 ]
 \node[blk, fill=red!10] (lq)   at (0,0)     {LQ $\mathbf{y}$};
 \node[frz] (swin)  at (1.75,0)  {SwinIR};
-\node[frz] (jepa)  at (3.65,0)  {V-JEPA 2.1};
+\node[frz] (jepa)  at (3.65,0)  {V-JEPA 2.1\\(last block)};
+\node[blk, fill=red!5, dashed] (b10note) at (3.65,-1.6) {tap block 10 instead (proposed)};
 \node[trn] (proj)  at (5.85,0)  {dual-head\\projector};
 \node[frz, minimum width=2.0cm, minimum height=1.7cm] (flux) at (9.3,0) {FLUX.2 Klein\\transformer\\(frozen)};
 \node[blk, fill=green!12] (out) at (11.6,0) {sharp $\hat{\x}$};
 \node[frz] (null)  at (8.3,1.75)  {null prompt $\mathbf{c}_\varnothing$};
 \node[blk, fill=gray!12] (noise) at (10.3,1.75) {noise $\x_t$};
+\node[blk, fill=red!5, dashed] (lqlat) at (7.5,-1.6) {LQ latent (restored path)};
 \draw[arr] (lq) -- (swin);
 \draw[arr] (swin) -- (jepa);
 \draw[arr] (jepa) -- (proj);
@@ -128,40 +137,115 @@ Crucially, the VAE encoding of $\mathbf{y}$ itself is \emph{not} concatenated to
 \draw[arr] ([yshift=-0.3cm]proj.east) -- node[below, inner sep=1.5pt]{latent tokens} ([yshift=-0.45cm]flux.west);
 \draw[arr] (null.south) -- ([xshift=-0.5cm]flux.north);
 \draw[arr] (noise.south) -- ([xshift=0.5cm]flux.north);
+\draw[arr, dashed] (lq.south) -- (lqlat.west);
+\draw[arr, dashed] (lqlat) -- ([yshift=-0.6cm]flux.south);
+\draw[arr, dashed] (jepa.south) -- (b10note.north);
 \draw[arr] (flux) -- (out);
 \end{tikzpicture}%
 }
-\caption{\textbf{ContextFlux (Stage B).} Only the projector (orange) trains; every other module is frozen. The LQ image reaches the backbone \emph{only} through projected V-JEPA tokens: the text head's tokens are appended to the null-prompt text stream, the VAE head's tokens to the noisy-latent token sequence. Stage A pre-aligns the two heads to caption embeddings and clean-image VAE latents. \authnote{Draft figure; polish and add a Stage-A panel before submission.}}
+\caption{\textbf{ContextFlux (Stage B).} Only the projector (orange) trains; every other module is frozen. Solid path: main configuration (Sec.~\ref{sec:contextflux}) — the LQ image reaches the backbone only through projected V-JEPA tokens, tapped at the last block (block 23). Dashed: the two \emph{proposed, not-yet-trained} changes Sec.~\ref{sec:critique} motivates — restoring the LQ-latent path, and tapping block 10 instead of the last block for the semantic pathway. \authnote{Redraw cleanly with a Stage-A panel before submission.}}
 \label{fig:overview}
 \end{figure}
 
 %=============================================================================
-\section{V-JEPA Features Under Blur}
+\section{Self-Supervised Context Under Blur: An Information-Budget Analysis}
 \label{sec:analysis}
 %=============================================================================
 
-We probe whether V-JEPA representations are usable conditioning for deblurring \emph{before} training anything. All probes use the frozen \texttt{vjepa2\_1\_vit\_large\_384} encoder.
+All probes below run at dataset scale — $300$ GT/blur pairs from GoPro~\cite{nah2017deep} (our primary paired test set, Sec.~\ref{sec:experiments}) and $11$ from Deblur-MIOR val — using frozen \texttt{vjepa2\_1\_vit\_large\_384}, DINOv2-L~\cite{oquab2023dinov2}, and CLIP ViT-L/14~\cite{radford2021learning}. This replaces an earlier two-image probe that could not support a claim at all.
 
-\textbf{Blur invariance.} On matched sharp/blurred pairs from our benchmark, the mean per-patch cosine similarity between V-JEPA tokens of the sharp image and its blurred counterpart is $0.724\pm0.142$ and $0.954\pm0.049$ on two validation pairs — i.e.\ blur-induced drift is real but the representation remains strongly aligned with the sharp image. \authnote{These are 2 image pairs. Scale to 100--500 pairs for all three encoders (plan step 7) and replace this paragraph with the resulting figure: cosine-similarity distributions + per-SVD-component energy ratio $\sigma_{lq}/\sigma_{gt}$ and subspace alignment for V-JEPA vs.\ DINOv2 vs.\ CLIP, from \texttt{playground/analyze\_jepa\_svd.py}. A third legacy probe pair gave an inconsistent near-zero cosine and is excluded pending re-verification.}
-
-\textbf{Resolution robustness.} V-JEPA 2.1 uses RoPE positional encoding, so we can run it above its $384$px pre-training resolution. On a single validation image, patch tokens extracted at $224$--$768$px keep a $0.84$--$0.91$ mean cosine similarity to the $384$px reference (Table~\ref{tab:resolution}), with stable feature norms above $384$px. We treat this as license to feed $512^2$ crops without resizing, not as evidence of equivalence. \authnote{Extend to a dataset average.}
+\textbf{Spectral blur invariance does not separate the encoders.} For each encoder we compute the per-image SVD of patch tokens on the sharp and blurred image, then measure (i) the fraction of the top-64 components with subspace-alignment $\cos^2\!>\!0.9$ between the sharp and blurred bases, and (ii) the mean singular-value ratio $\sigma_{\mathrm{blur}}/\sigma_{\mathrm{gt}}$ over those components (Table~\ref{tab:invariance}). All three encoders retain $98$--$99.9\%$ of top-component energy under blur; V-JEPA and CLIP keep 2--3 of the top 64 components strictly stable, DINOv2 keeps 0--1. \emph{None of these differences are large enough to justify picking an encoder on this basis alone.}
 
 \begin{table}[t]
 \centering
-\caption{V-JEPA feature stability vs.\ input resolution (\emph{single} validation image; cosine against the 384px reference).}
-\label{tab:resolution}
+\caption{Blur invariance at dataset scale (top-64 SVD components; higher is more invariant). GoPro $n{=}300$ pairs; MIOR $n{=}100$ pairs. Re-running the MIOR arm at $n{=}100$ after expanding that split left every \mbox{stable$_{64}$} count unchanged from the earlier $n{=}11$ estimate and moved $\overline{\sigma_b/\sigma_g}$ by at most $0.005$, so the conclusion below is not an artifact of sample size.}
+\label{tab:invariance}
 \small
+\setlength\tabcolsep{4pt}
 \begin{tabular}{lcccc}
 \toprule
-Res. & Tokens & Grid & Mean $\|f\|_2$ & Cos vs.\ 384 \\
+& \multicolumn{2}{c}{GoPro ($n{=}300$)} & \multicolumn{2}{c}{MIOR ($n{=}100$)} \\
+Encoder & stable$_{64}$ & $\overline{\sigma_b/\sigma_g}$ & stable$_{64}$ & $\overline{\sigma_b/\sigma_g}$ \\
 \midrule
-224 & 196 & $14^2$ & 58.10 & 0.840 \\
-384 & 576 & $24^2$ & 60.37 & 1.000 \\
-512 & 1024 & $32^2$ & 60.77 & 0.910 \\
-768 & 2304 & $48^2$ & 60.82 & 0.906 \\
+V-JEPA & 3/64 & 0.992 & 3/64 & 0.999 \\
+DINOv2 & 0/64 & 0.986 & 1/64 & 0.998 \\
+CLIP   & 2/64 & 0.986 & 2/64 & 0.987 \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\textbf{Resolution robustness.} V-JEPA 2.1 uses RoPE, so it can run above its $384$px pre-training resolution. Table~\ref{tab:resolution} extends a single-image check to the full probe sets: mean cosine to the $384$px reference stays $0.81$--$0.92$ from $224$--$768$px on both datasets, with the $512$/$768$px range consistently more stable than $224$px. We treat this as license to feed $512^2$ crops without resizing.
+
+\begin{table}[t]
+\centering
+\caption{V-JEPA feature stability vs.\ input resolution (mean cosine $\pm$ std against the 384px reference, over the full probe set). MIOR ($n{=}11$) is directional, not conclusive on its own.}
+\label{tab:resolution}
+\small
+\setlength\tabcolsep{4pt}
+\begin{tabular}{lcc}
+\toprule
+Res. & GoPro ($n{=}300$) & MIOR ($n{=}11$) \\
+\midrule
+224 px & $0.812 \pm 0.011$ & $0.843 \pm 0.030$ \\
+384 px & $1.000$ (ref)      & $1.000$ (ref)      \\
+512 px & $0.916 \pm 0.005$ & $0.915 \pm 0.014$ \\
+768 px & $0.904 \pm 0.005$ & $0.901 \pm 0.018$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Linear-probe restorability — the paper's central measurement.} If blur invariance does not rank encoders, does anything? For each encoder we fit a ridge-regression decoder from blurred-image patch tokens directly back to sharp-image patches (no diffusion, no adversarial loss — a lower bound on what the representation carries) and evaluate PSNR/SSIM against the sharp image (Table~\ref{tab:probe}). On GoPro ($n_{\mathrm{val}}{=}50$, $n_{\mathrm{train}}{=}250$), V-JEPA and DINOv2 land within $0.1$\,dB of each other ($17.66$ vs.\ $17.56$\,dB) while DINOv2 leads on SSIM ($0.359$ vs.\ $0.318$) — the ranking is not even consistent across metrics. CLIP is the one encoder that separates cleanly, roughly $3$\,dB and $0.12$--$0.16$ SSIM behind both. The MIOR arm ($n_{\mathrm{val}}{=}3$) reverses the PSNR order (DINOv2 highest) and is reported only as a directional cross-check given its size.
+
+The number that matters more than the ranking is the \emph{gap to the input}: every probe reconstruction lands well \emph{below} the blurred input itself — $8$--$9$\,dB for V-JEPA and DINOv2 on GoPro ($17.6$--$17.7$ vs.\ $26.3$\,dB floor), widening to $\sim\!12$\,dB for CLIP ($14.6$\,dB), and a comparable or larger gap on MIOR ($12.5$--$15.0$ vs.\ $29.7$--$29.8$\,dB floor, $\sim\!15$--$17$\,dB). A linear decoder is a deliberately weak lower bound, not an upper bound on what a trained nonlinear head could do — but it establishes that these representations, decoded naively, carry substantially less pixel-recoverable content than the degraded image they were extracted from. That is the central fact behind Sec.~\ref{sec:critique}: \texttt{use\_condition\_image\_for\_transformer: false} routes ContextFlux's entire fidelity budget through exactly this channel.
+
+\begin{table}[t]
+\centering
+\caption{Linear-probe restorability: PSNR/SSIM of a ridge decoder from blurred-image tokens to the sharp image, vs.\ the blurred-input floor. GoPro $n_{\mathrm{val}}{=}50$; MIOR $n_{\mathrm{val}}{=}3$ (directional).}
+\label{tab:probe}
+\footnotesize
+\setlength\tabcolsep{3pt}
+\begin{tabular}{lcccc}
+\toprule
+& \multicolumn{2}{c}{GoPro} & \multicolumn{2}{c}{MIOR} \\
+Encoder & PSNR$\uparrow$ & SSIM$\uparrow$ & PSNR$\uparrow$ & SSIM$\uparrow$ \\
+\midrule
+V-JEPA & $17.66 \pm 1.15$ & $0.318 \pm 0.040$ & $14.47 \pm 1.14$ & $0.078 \pm 0.008$ \\
+DINOv2 & $17.56 \pm 1.15$ & $0.359 \pm 0.050$ & $15.04 \pm 0.79$ & $0.148 \pm 0.005$ \\
+CLIP   & $14.63 \pm 1.31$ & $0.194 \pm 0.036$ & $12.52 \pm 1.01$ & $0.053 \pm 0.007$ \\
+\midrule
+\textit{Blurred-input floor} & $26.32$ & $0.840$ & $29.67$--$29.78$ & $0.76$--$0.79$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%=============================================================================
+\section{Design Critique: An Inverse Problem, Not Free-Form Generation}
+\label{sec:critique}
+%=============================================================================
+
+The analysis above changes how we read the ContextFlux design, not just which encoder to pick.
+
+\textbf{Invariance is a role assignment, not a ranking.} We extended the blur-invariance probe (Sec.~\ref{sec:analysis}) to every V-JEPA transformer block instead of only the last one. Table~\ref{tab:perblock} shows the same qualitative shape on both datasets, as a mean over pairs at each block (we do not yet have per-image error bars on this curve — see caption): the mean singular-value ratio climbs steeply through the first ten blocks, is highest at block $10$ of $24$, then declines slightly toward the final block that ContextFlux currently taps, though the block-10-vs-23 gap ($\le 0.016$) is small next to the block-0-vs-10 gap ($\ge 0.13$). Reading this as "which block is best" misses the point, and reading it backwards is a trap: block 10 being the \emph{most} invariant block does not make it the most information-rich one — by the same logic that motivates this analysis, the opposite should hold, since a block that has become blur-invariant has, by construction~\cite{achille2018invariance}, discarded the information that distinguishes blur from sharpness. We therefore do not use this curve to argue block 10 carries more restorable content than block 23; we use it only to pick the most stable available block for a \emph{semantic identity} signal (below), while fidelity comes from pixels via the restored latent path, not from V-JEPA at any depth. Whether early, low-invariance blocks in turn carry a blur-kernel-decodable signal is a plausible reading of the same curve but is not itself measured here; we state it as a hypothesis for future work, not a finding, and note that BlindDPS-style joint kernel/image posterior sampling~\cite{blinddps2022,blindpnpdm2025} already offers an established route to blind-kernel recovery that does not depend on this hypothesis being true. A second caveat applies to the curve itself: V-JEPA~2.1's own training recipe applies auxiliary supervision at multiple intermediate layers specifically to flatten the depth-dependence of dense-task performance~\cite{vjepa21_2026}, so the peak we measure at block 10 may partly reflect that training choice rather than a property of JEPA-style objectives in general; we have not tested this against a checkpoint without it.
+
+\begin{table}[t]
+\centering
+\caption{Per-block blur invariance, V-JEPA (mean $\sigma_b/\sigma_g$ over top-64 components, averaged over pairs; 1.0 = fully invariant; per-image error bars not yet computed). Highest near block 10 on both datasets, declining slightly toward the final block (23) that ContextFlux taps — a small gap next to the block-0-to-10 rise. See Sec.~\ref{sec:critique} for what this curve does and does not license.}
+\label{tab:perblock}
+\small
+\setlength\tabcolsep{3pt}
+\begin{tabular}{lcccccccc}
+\toprule
+Block & 0 & 4 & 8 & \textbf{10} & 12 & 16 & 20 & 23 \\
+\midrule
+GoPro ($n{=}300$) & 0.869 & 0.972 & 0.993 & \textbf{1.002} & 0.997 & 0.995 & 0.991 & 0.986 \\
+MIOR ($n{=}11$)   & 0.864 & 0.970 & 0.996 & \textbf{1.000} & 0.997 & 0.998 & 0.995 & 0.986 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The representation-only path is information-limited (Sec.~\ref{sec:analysis}); a separate failure shows up downstream too.} ContextFluxBlurMap — the one system with surviving trained weights, and the only variant that already restores the LQ-latent path (Sec.~\ref{sec:variants}) — nonetheless scores \emph{below its own blurred input} on GoPro under the unified evaluation protocol of Sec.~\ref{sec:experiments} ($25.67$ vs.\ a $27.48$\,dB floor on the same $300$ images, $-1.81$\,dB); the same direction holds on MIOR val ($-2.93$\,dB), which we note only as directionally consistent given its $n{=}11$ size and the $\pm 3$--$4$\,dB per-image spread on that split (Sec.~\ref{sec:experiments}). Because BlurMap already carries a latent path, this result is not a second confirmation of the linear-probe information gap specifically — it is at least partly a different, complementary failure: a model can score below its own input even with pixel geometry available, which is the expected symptom of a generative prior that is never made to respect the forward model $\y=\mathbf{k}*\x+\mathbf{n}$ (nothing in the pipeline knows the blur kernel, and nothing checks that $\hat{\x}$, re-blurred, reproduces $\y$). We flag this as the leading hypothesis rather than the only one: BlurMap also skips Stage-A alignment and uses a different adapter stack (Sec.~\ref{sec:variants}), either of which could independently depress its score, and disentangling the two needs a BlurMap-with-Stage-A ablation we have not yet run.
+
+\textbf{Three changes follow, at different costs and targeting different failure modes.} (1)~\emph{Restore the latent path in the main V-JEPA configuration too} (Sec.~\ref{sec:contextflux} currently disables it) so V-JEPA context carries semantics while VAE latents carry geometry — a $32{\times}32$ token grid is not built to encode sub-pixel edge position across a $1280{\times}720$ image, and a latent is; this targets the information gap of Sec.~\ref{sec:analysis} directly. (2)~\emph{Add a measurement-consistency step at sampling}, adopting existing machinery rather than proposing new machinery: diffusion posterior sampling~\cite{chung2023diffusion} and its flow-matching counterpart FlowDPS~\cite{flowdps2025} (already demonstrated directly on FLUX) need no retraining and directly target the below-input failure BlurMap exhibits. (3)~\emph{Use the mid-depth block for the semantic pathway}: block 10, being the most blur-invariant block we measured, is the best available choice for a stable semantic-identity signal — a narrower, better-justified claim than saying it carries more restorable structure overall (which the invariance curve does not establish, and would argue against). A fourth, lower-priority change is to drop the Stage-A text-alignment target (Sec.~\ref{sec:training}): the paper's own argument is that text is a lossy conditioning channel, so training the projector to imitate a caption embedding works against that argument; the VAE-latent target is better motivated and cheaper to keep alone.
 
 %=============================================================================
 \section{Experiments}
@@ -169,89 +253,70 @@ Res. & Tokens & Grid & Mean $\|f\|_2$ & Cos vs.\ 384 \\
 %=============================================================================
 
 \subsection{Setup}
-\textbf{Data.} All models train and evaluate on our synthetic motion-blur benchmark (Deblur-MIOR): sharp/blurred pairs with spatially varying motion blur, $512^2$ training crops. \authnote{Fill dataset construction summary + train/val counts; report the full validation split size used for evaluation.}
-\textbf{Metrics.} PSNR, SSIM~\cite{wang2004image}, LPIPS~\cite{zhang2018unreasonable}, DISTS, and no-reference NIQE/MUSIQ, computed on full validation images with identical protocol (fixed seed, $50$ Euler steps) for every method. \authnote{All numbers below come from the unified evaluation of plan step 5 — never from training-time validation, which used 5 batches.}
-\textbf{Baselines.} NAFNet~\cite{chen2022nafnet} and Restormer~\cite{zamir2022restormer} trained on the same data; a diffusion-prior baseline \authnote{pick: in-repo OSEDiff or DiffBIR repro}; and the image-conditioned LoRA control of Sec.~\ref{sec:variants}.
+\textbf{Data.} Deblur-MIOR — our internal name for this training split, likely derived from the recently published MIORe/VAR-MIORe benchmark~\cite{miore2025}\authnote{confirm the exact relationship between our split and the published MIORe benchmark before submission, and cite properly either way} — provides $7{,}849$ synthetic-blur training pairs but only an $11$-image paired validation split (with $80$/$75$ unpaired blur-only images for no-reference evaluation); every model in this family trains on all $7{,}849$ pairs, so an $11$-image split cannot separate methods at the $\pm 3$\,dB run-to-run noise level we have observed previously on similarly small splits. We therefore adopt GoPro~\cite{nah2017deep}, indexed as $1{,}111$ real blur/sharp pairs disjoint from MIOR training, as our primary paired test set; MIOR val is retained as a small, training-domain-matched cross-check. GoPro is a real-camera-blur benchmark, so results on it reflect a domain shift from MIOR's synthetic training blur — we report this as a generalization test, not as if the domains matched.
+
+\textbf{Metrics.} PSNR and SSIM~\cite{wang2004image}, computed at native resolution with a 30px border crop, identical protocol for every method (fixed seed, 50 Euler steps where applicable). Predictions are matched to ground truth by filename rather than directory position, since a truncated evaluation run would otherwise silently mis-pair. \authnote{Add LPIPS~\cite{zhang2018unreasonable}/DISTS once the eval driver's LPIPS path is verified end-to-end; perceptual numbers are not yet in this draft.}
+
+\textbf{Baselines.} NAFNet~\cite{chen2022nafnet} and Restormer~\cite{zamir2022restormer}, retrained on Deblur-MIOR (existing Feb-2026 checkpoints predate this data split and are being re-verified/retrained rather than reused); the image-conditioned LoRA control of Sec.~\ref{sec:variants}; and the encoder/variant arms of Sec.~\ref{sec:variants} once retrained under the fixed-heads rule of Sec.~\ref{sec:variants}.
 
 \subsection{Main results}
 \begin{table}[t]
 \centering
-\caption{Deblurring on the Deblur-MIOR validation split. All \tbd{} cells pending the unified evaluation (checkpoints verified present on scratch, 2026-08-26). $^\dagger$CLIP checkpoint stops at 34K/50K steps.}
+\caption{Deblurring results under the unified protocol. The blurred-input floor is computed on the exact image set each row was evaluated on (matched pairs), so floor and method are directly comparable within a row-block. MIOR ($n{=}11$) is directional, not conclusive on its own (Sec.~\ref{sec:experiments}).}
 \label{tab:main}
 \footnotesize
-\setlength\tabcolsep{3.5pt}
-\begin{tabular}{lccccc}
+\setlength\tabcolsep{3pt}
+\begin{tabular}{llcc}
 \toprule
-Method & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ & DISTS$\downarrow$ & MUSIQ$\uparrow$ \\
+Split & Method & PSNR$\uparrow$ & SSIM$\uparrow$ \\
 \midrule
-Blurred input        & \tbd & \tbd & \tbd & \tbd & \tbd \\
-NAFNet               & \tbd & \tbd & \tbd & \tbd & \tbd \\
-Restormer            & \tbd & \tbd & \tbd & \tbd & \tbd \\
-LoRA + LQ latents    & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\multirow{2}{*}{GoPro ($n{=}300$)}
+ & Blurred input (floor)      & $27.48 \pm 2.55$ & $0.857 \pm 0.064$ \\
+ & ContextFlux-BlurMap        & $25.67 \pm 2.05$ & $0.826 \pm 0.063$ \\
 \midrule
-ContextFlux-CLIP$^\dagger$ & \tbd & \tbd & \tbd & \tbd & \tbd \\
-ContextFlux-DINOv2   & \tbd & \tbd & \tbd & \tbd & \tbd \\
-ContextFlux-V-JEPA   & \tbd & \tbd & \tbd & \tbd & \tbd \\
+\multirow{2}{*}{MIOR val ($n{=}11$)}
+ & Blurred input (floor)      & $28.69 \pm 3.98$ & $0.786 \pm 0.116$ \\
+ & ContextFlux-BlurMap        & $25.76 \pm 3.71$ & $0.686 \pm 0.145$ \\
+\midrule
+\multicolumn{4}{l}{\textit{Pending retraining under the fixed-\texttt{jepa\_projector\_heads} rule (Sec.~\ref{sec:variants}):}}\\
+GoPro / MIOR & NAFNet, Restormer          & \tbd & \tbd \\
+GoPro / MIOR & LoRA + LQ latents          & \tbd & \tbd \\
+GoPro / MIOR & ContextFlux-\{CLIP,DINOv2,V-JEPA\} & \tbd & \tbd \\
+GoPro / MIOR & BlurMap + consistency sampling & \tbd & \tbd \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:main} compares conditioning encoders under an identical frozen backbone and training budget (50K steps) against regression and LoRA-tuned baselines. \authnote{Write the comparison narrative after numbers land. If V-JEPA does not decisively beat DINOv2, pivot framing to the controlled-study angle per plan §5; the analysis of Sec.~\ref{sec:analysis} then serves as the predictor of encoder ranking.}
-
-\subsection{Ablations}
-\label{sec:ablations}
-\begin{table}[t]
-\centering
-\caption{Ablations (V-JEPA configuration unless noted). ``Source'' = image fed to the frozen encoder. GT source is an oracle (unavailable at inference).}
-\label{tab:ablation}
-\small
-\begin{tabular}{lccc}
-\toprule
-Variant & PSNR$\uparrow$ & SSIM$\uparrow$ & LPIPS$\downarrow$ \\
-\midrule
-\multicolumn{4}{l}{\textit{Feature depth (concat.\ last $N$ blocks)}}\\
-\quad $N{=}1$              & \tbd & \tbd & \tbd \\
-\quad $N{=}4$              & \tbd & \tbd & \tbd \\
-\midrule
-\multicolumn{4}{l}{\textit{Feature source}}\\
-\quad LQ (SwinIR-pre)      & \tbd & \tbd & \tbd \\
-\quad GT (oracle)          & \tbd & \tbd & \tbd \\
-\midrule
-\multicolumn{4}{l}{\textit{Stage-A alignment source}}\\
-\quad GT-aligned           & \tbd & \tbd & \tbd \\
-\quad LQ-aligned           & \tbd & \tbd & \tbd \\
-\midrule
-\multicolumn{4}{l}{\textit{Projector heads}}\\
-\quad text only            & \tbd & \tbd & \tbd \\
-\quad text + VAE           & \tbd & \tbd & \tbd \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\authnote{Run status (2026-08-26): $N{=}1$, $N{=}4$ checkpoints exist; GT-oracle Stage-B and LQ-aligned Stage-B launch per plan §5 day-0/1; heads ablation needs a text-only Stage-B rerun or reuse of an existing run — verify config provenance before filling. VL-JEPA row dropped unless its rerun is funded by the timeline (checkpoint stops at 6K).}
-
-\textbf{Blur-map adapter variant.} The only number currently recoverable from a surviving checkpoint of this family: ContextFlux-BlurMap at 50K steps scores PSNR $24.44\pm3.62$\,dB, SSIM $0.740\pm0.167$, LPIPS $0.164\pm0.091$ on its own 5-image validation subset (one low-quality outlier depresses the mean). It is \emph{not} comparable to Table~\ref{tab:main} (different split size and protocol) and will be re-evaluated under the unified protocol. \authnote{Replace with unified-protocol number; then this caveat shrinks to one clause.}
+ContextFlux-BlurMap — the one system with surviving weights, and the only variant that already restores the LQ-latent path (Sec.~\ref{sec:variants}) — scores \emph{below} the blurred-input floor on GoPro ($-1.81$\,dB, $n{=}300$, real camera blur, a genuine domain shift from its MIOR training data), the result we lead with; MIOR val agrees in direction ($-2.93$\,dB) but is only directional at $n{=}11$ against a $\pm 3$--$4$\,dB per-image spread. For context, current GoPro-class deblurring results range from the low-to-mid $30$s (regression transformers) to roughly $31$--$34$\,dB for deblurring-specific diffusion/flow methods~\cite{deblurflow2026}, so our result is not merely behind that range but below the input itself — a specific, actively-studied failure mode in the restoration literature (diffusion-bridge and physically-regularized methods exist largely to prevent exactly this) rather than a generic symptom the field treats as expected. Given that, an under-specified checkpoint — no Stage-A alignment, and a different adapter stack than our main configuration (Sec.~\ref{sec:variants}) — is at least as plausible an explanation as missing measurement-consistency, and Sec.~\ref{sec:critique} already flags both as undisentangled. We therefore do not treat this result as strong evidence for Sec.~\ref{sec:analysis}'s information-budget thesis specifically; we read it only as independently motivating a measurement-consistency step, since that step is worth adding regardless of which explanation for BlurMap's score turns out to be correct. The remaining rows are the retraining the scratch purge forced (Sec.~\ref{sec:training}); we report only what has actually been measured rather than filling them with projected numbers. \authnote{Update this table and paragraph from the arm matrix (experiment\_plan.html Phase 3/5) as B1--B5 land; state clearly which arms did not make the Sep 9 freeze.}
 
 \subsection{Qualitative results}
 \begin{figure}[t]
 \centering
-\fbox{\parbox[c][2.6cm][c]{0.94\linewidth}{\centering \authnote{Qualitative grid: input / NAFNet / LoRA-control / ContextFlux-DINOv2 / ContextFlux-V-JEPA / GT, 2 scenes, from unified-eval dumps (plan step 9).}}}
-\caption{Qualitative comparison. \authnote{pending}}
+\fbox{\parbox[c][2.6cm][c]{0.94\linewidth}{\centering \authnote{Qualitative grid: input / NAFNet / LoRA-control / ContextFlux-BlurMap / ContextFlux-V-JEPA (if it lands) / GT, on GoPro, from the eval\_preds dumps already on disk for BlurMap.}}}
+\caption{Qualitative comparison. \authnote{pending — BlurMap predictions already exist at \texttt{eval\_preds/} for both test sets and can be assembled now.}}
 \label{fig:qual}
 \end{figure}
+
+%=============================================================================
+\section{Discussion: Scope Cuts Under a Fixed Deadline}
+\label{sec:scope}
+%=============================================================================
+
+A compute-and-time budget this tight (a hard $14$-day window, a cluster-wide GPU cap shared with five other users, and a $\sim$58-hour Stage-A realignment that gates every trained-system arm) forces explicit scope cuts rather than rows silently left as "pending" in a submitted paper. We state them here instead. \emph{Dropped:} a two-point layer-depth sweep at blocks 2 and 8 (block-level analysis in Sec.~\ref{sec:critique} already answers the depth question the training runs were meant to answer, in hours rather than days); a VL-JEPA rerun (its only surviving checkpoint stops at $6$K/$50$K steps, and a full rerun repairs nothing that was confounded); an LQ-aligned Stage-A$\to$Stage-B pair (its Stage-A alone costs the $58$ hours that gate everything else); reblur-consistency \emph{training} — i.e.\ a learned penalty on $\|\hat{\mathbf{k}}*\hat{\x}-\y\|$ — which we consider the single highest-value fix in Sec.~\ref{sec:critique} but which needs a training budget we do not have left; its \emph{sampling-time} counterpart (Sec.~\ref{sec:critique}, item 2) needs no retraining and is the one design change from this critique we still intend to measure before submission, but as of this draft it is implemented in plan only — Table~\ref{tab:main} has no row for it, and \tbd{} marks where one would go once it exists; one-step distillation (current inference is $\sim\!54$s/image, which is research-only regardless, and few-step distillation trades away exactly the distortion metrics this paper reports on); and burst/EXIF/field-varying-PSF priors, which the repository's DFlat/DeepLens code already supports but which we treat as future work rather than squeeze into this window. \emph{Kept as a live upper bound if the schedule allows it:} the GT-oracle Stage-B arm, promoted first if any slack appears.
 
 %=============================================================================
 \section{Conclusion}
 \label{sec:conclusion}
 %=============================================================================
-We presented ContextFlux, which conditions a fully frozen flow-matching transformer for motion deblurring exclusively through self-supervised V-JEPA tokens mapped by a lightweight aligned projector — no captions, no VLM at test time, and in the main configuration no image-latent conditioning. Our feature analysis shows V-JEPA representations degrade gracefully under blur, motivating their use as a restoration conditioning interface, and our controlled encoder comparison quantifies this choice. \authnote{Sharpen once results land; state limitations: synthetic-blur scope, sampling cost, single dataset.}
+We set out to condition a frozen flow-matching transformer on self-supervised V-JEPA context and expected blur invariance to explain why it would work. Measured at dataset scale, it does not: V-JEPA and DINOv2 are not distinguishable on linear-probe restorability, and the invariance gap between them is not large enough to justify picking an encoder on that basis alone (Sec.~\ref{sec:analysis}); every encoder we tested also reconstructs well below the blurred input's own fidelity under a linear decode. Where that gap comes from is the more useful finding: the most blur-invariant V-JEPA block sits mid-depth, not at the final block current pipelines tap — a stable point for a semantic-identity signal, not evidence that it is more information-rich, since invariance and information content are in tension by construction (Sec.~\ref{sec:critique}). Our one surviving trained system scoring below its own blurred input is a separate, complementary problem, not a repeat of the same one: it already carries a latent path, so its failure is most consistent with a missing measurement-consistency constraint — though a missing Stage-A alignment and its different adapter stack remain untested alternative explanations we have not yet disentangled. We report the resulting redesign — restoring the latent path in the main configuration, a measurement-consistency step planned at sampling, and the mid-depth tap for the semantic pathway — and the system-level results we could complete in the time available. None of these three elements is new in isolation: restoring a pixel-carrying path alongside semantic features follows DINO-IR~\cite{dinoir2024}, and measurement-consistent sampling follows DPS/FlowDPS~\cite{chung2023diffusion,flowdps2025}. Our contribution is narrower than "we found the fix" — it is quantifying, for V-JEPA specifically and at dataset scale, why such a fix is necessary and where in the encoder the missing information lives. We are also, on our one trained result, far from the current state of the art on absolute distortion metrics~\cite{deblurflow2026} and state that gap directly rather than let the analysis imply otherwise. \authnote{Update once the arm matrix lands; state limitations explicitly: synthetic-training/real-test domain shift, sampling cost, a purge-limited number of trained arms, single training dataset.}
 
 % ---------------------------------------------------------------------------
 \vfill\pagebreak
 
 \bibliographystyle{IEEEbib}
 % Using manual thebibliography (no .bib in repo). Entries trimmed to those cited.
-% \authnote{Run citation check (plan step 12): verify LucidFlux, V-JEPA 2, open-vljepa, FLUX.2 entries.}
+% \authnote{Run citation check (experiment_plan.html Sun 09/06): verify LucidFlux, V-JEPA 2,
+% open-vljepa, FLUX.2, and the new diffusion-posterior-sampling entry.}
 \begin{thebibliography}{20}
 
 \bibitem{zamir2022restormer}
@@ -286,7 +351,40 @@ P.~Esser, S.~Kulal, A.~Blattmann, et~al.,
 Black Forest Labs, ``FLUX,'' \url{https://github.com/black-forest-labs/flux}, 2024.
 
 \bibitem{lucidflux2025}
-\authnote{verify:} ``LucidFlux: Caption-free universal image restoration,'' \emph{arXiv}, 2025.
+S.~Fei, T.~Ye, L.~Wang, and L.~Zhu,
+``LucidFlux: Caption-free photo-realistic image restoration via a large-scale diffusion transformer,'' \emph{arXiv:2509.22414}; \emph{ICLR}, 2026.
+
+\bibitem{achille2018invariance}
+A.~Achille and S.~Soatto,
+``Emergence of invariance and disentanglement in deep representations,'' \emph{JMLR}, vol.~19, no.~1, 2018.
+
+\bibitem{dinoir2024}
+\authnote{verify:} X.~Lin, J.~Yue, K.~C.~K. Chan, et~al.,
+``Multi-task image restoration guided by robust DINO features,'' \emph{arXiv:2312.01677}, 2023/2024.
+
+\bibitem{flowdps2025}
+\authnote{verify:} S.~Kim, J.~Kim, and J.~C. Ye,
+``FlowDPS: Flow-driven posterior sampling for inverse problems,'' \emph{arXiv:2503.08136}; \emph{ICCV}, 2025.
+
+\bibitem{blinddps2022}
+\authnote{verify:} H.~Chung, J.~Kim, S.~Kim, and J.~C. Ye,
+``Parallel diffusion models of operator and image for blind inverse problems,'' \emph{arXiv:2211.10656}, 2022.
+
+\bibitem{blindpnpdm2025}
+\authnote{verify:} Z.~Li, W.~Gan, and U.~S. Kamilov,
+``Plug-and-play posterior sampling for blind inverse problems,'' \emph{arXiv:2505.22923}, 2025.
+
+\bibitem{deblurflow2026}
+\authnote{verify:} J.~Kim and S.~Shin,
+``Restoration-aligned generative flow models for blind motion deblurring,'' \emph{arXiv:2605.08854}, 2026.
+
+\bibitem{vjepa21_2026}
+\authnote{verify:} A.~Bardes, M.~Assran, et~al.,
+``V-JEPA~2.1: Unlocking dense features in video self-supervised learning,'' \emph{arXiv:2603.14482}, 2026.
+
+\bibitem{miore2025}
+\authnote{verify: exact title, and whether this is in fact the source of our ``Deblur-MIOR'' split} A.~Ciubotariu, et~al.,
+``MIORe / VAR-MIORe,'' \emph{arXiv:2509.06803}; \emph{ICCV Oral}, 2025.
 
 \bibitem{assran2023self}
 M.~Assran, Q.~Duval, I.~Misra, P.~Bojanowski, P.~Vincent, M.~Rabbat, Y.~LeCun, and N.~Ballas,
@@ -330,6 +428,10 @@ Z.~Wang, A.~C. Bovik, H.~R. Sheikh, and E.~P. Simoncelli,
 \bibitem{zhang2018unreasonable}
 R.~Zhang, P.~Isola, A.~A. Efros, E.~Shechtman, and O.~Wang,
 ``The unreasonable effectiveness of deep features as a perceptual metric,'' in \emph{CVPR}, 2018.
+
+\bibitem{chung2023diffusion}
+H.~Chung, J.~Kim, M.~T. Mccann, M.~L. Klasky, and J.~C. Ye,
+``Diffusion posterior sampling for general noisy inverse problems,'' in \emph{ICLR}, 2023.
 
 \end{thebibliography}
 

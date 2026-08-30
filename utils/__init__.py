@@ -7,6 +7,7 @@ from .misc import (
     keep_last_checkpoints,
     log_image,
     log_metrics,
+    save_eval_png,
     get_basename
 )
 
@@ -21,6 +22,7 @@ __all__ = [
     'keep_last_checkpoints',
     'log_image',
     'log_metrics',
+    'save_eval_png',
     'get_basename'
     ]
 

@@ -58,7 +58,8 @@ from torchvision import transforms as T
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models.LucidFlux.jepa_helpers import (
-    extract_vjepa_tokens, load_vjepa2_model, vjepa_from_unit_tensor,
+    extract_vjepa_tokens, extract_vjepa_tokens_per_block, load_vjepa2_model,
+    vjepa_from_unit_tensor,
 )
 from models.reFlux.dino_helpers import (
     extract_dino_tokens, load_dinov2_model,
@@ -190,6 +191,37 @@ def sigma_ratio(S_gt: torch.Tensor, S_lq: torch.Tensor, max_k: int = 128):
     k = min(max_k, len(S_gt), len(S_lq))
     ratio = (S_lq[:k].detach() / (S_gt[:k].detach() + 1e-8)).cpu().numpy()
     return np.clip(ratio, 0, 2)
+
+
+def per_block_blur_invariance(model, gt_paths, blur_paths, device, max_k=64):
+    """For every V-JEPA transformer block, average blur-invariance metrics over GT/blur pairs.
+
+    Returns (cos2_per_block, ratio_per_block): each [n_blocks, max_k].
+    """
+    size = ENCODER_CONFIGS["vjepa"]["image_size"]
+    all_cos2, all_ratio, n_blocks = None, None, None
+
+    for gp, bp in zip(gt_paths, blur_paths):
+        pixels_gt = vjepa_from_unit_tensor(load_image_01(str(gp)), size=size, device=device)
+        pixels_lq = vjepa_from_unit_tensor(load_image_01(str(bp)), size=size, device=device)
+        blocks_gt = extract_vjepa_tokens_per_block(model, pixels_gt, device, torch.float32)
+        blocks_lq = extract_vjepa_tokens_per_block(model, pixels_lq, device, torch.float32)
+
+        if n_blocks is None:
+            n_blocks = len(blocks_gt)
+            all_cos2 = [[] for _ in range(n_blocks)]
+            all_ratio = [[] for _ in range(n_blocks)]
+
+        for bi in range(n_blocks):
+            f_g, f_l = blocks_gt[bi].squeeze(0), blocks_lq[bi].squeeze(0)
+            _, S_g, Vh_g = compute_svd(f_g)
+            _, S_l, Vh_l = compute_svd(f_l)
+            all_cos2[bi].append(component_alignment(Vh_g.T, Vh_l.T, max_k))
+            all_ratio[bi].append(sigma_ratio(S_g, S_l, max_k))
+
+    cos2_per_block = np.stack([np.stack(c).mean(0) for c in all_cos2])
+    ratio_per_block = np.stack([np.stack(r).mean(0) for r in all_ratio])
+    return cos2_per_block, ratio_per_block
 
 
 def dataset_svd(all_feats: list, ks=(32, 64, 128, 256, 512)):
@@ -331,6 +363,9 @@ def main():
                         help="Number of spatial U maps to show (default: 6).")
     parser.add_argument("--save-vk", action="store_true",
                         help="Save global V_k projection matrices to out-dir.")
+    parser.add_argument("--per-block", action="store_true",
+                        help="Also run blur-invariance analysis per transformer block "
+                             "(V-JEPA only) instead of just the final layer.")
     # Output
     parser.add_argument("--out-dir", default="playground/jepa_svd",
                         help="Output directory (default: playground/jepa_svd).")
@@ -456,6 +491,46 @@ def main():
         if S_lq is not None:
             np.save(out_dir / f"singular_values_{enc_name}_blur.npy",
                     S_lq.cpu().numpy())
+
+        # ── Analysis 4 (optional): per-block blur invariance (V-JEPA only) ──
+        if args.per_block:
+            if enc_name != "vjepa":
+                print(f"  [skip] --per-block only supported for vjepa, not {enc_name}")
+            elif not has_blur:
+                print("  [skip] --per-block requires --blur-dir/--blur (matched GT/blur pairs)")
+            else:
+                print(f"  Running per-block blur-invariance analysis ({len(gt_paths)} pairs)...")
+                cos2_pb, ratio_pb = per_block_blur_invariance(
+                    model, gt_paths, blur_paths, device, args.max_k
+                )
+                stable_k_pb = (cos2_pb > 0.9).sum(axis=1)
+                mean_ratio_pb = ratio_pb.mean(axis=1)
+                print(f"  Per-block stability (components with cos²>0.9 / {args.max_k}):")
+                for bi in range(len(stable_k_pb)):
+                    print(f"    block {bi:2d}: stable_k={stable_k_pb[bi]:3d}  "
+                          f"mean_sigma_ratio={mean_ratio_pb[bi]:.3f}")
+
+                np.savez(out_dir / f"per_block_blur_invariance_{enc_name}.npz",
+                         cos2=cos2_pb, ratio=ratio_pb,
+                         stable_k=stable_k_pb, mean_ratio=mean_ratio_pb)
+
+                if HAS_MPL:
+                    fig_pb, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.5))
+                    x = np.arange(len(stable_k_pb))
+                    ax1.plot(x, stable_k_pb, marker="o", color="steelblue")
+                    ax1.set_xlabel("Block index")
+                    ax1.set_ylabel(f"Stable components (cos²>0.9) / {args.max_k}")
+                    ax1.set_title(f"{enc_name} — per-block blur invariance")
+                    ax2.plot(x, mean_ratio_pb, marker="o", color="darkorange")
+                    ax2.axhline(1.0, color="black", lw=0.8)
+                    ax2.set_xlabel("Block index")
+                    ax2.set_ylabel(f"Mean σ_blur/σ_gt (top-{args.max_k})")
+                    ax2.set_title(f"{enc_name} — per-block energy ratio")
+                    plt.tight_layout()
+                    out_png_pb = out_dir / f"per_block_blur_invariance_{enc_name}.png"
+                    plt.savefig(out_png_pb, dpi=140)
+                    plt.close(fig_pb)
+                    print(f"  Per-block figure saved → {out_png_pb}")
 
         # ── Visualisation ──
         if not HAS_MPL:

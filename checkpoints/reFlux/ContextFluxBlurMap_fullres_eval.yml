@@ -142,7 +142,7 @@ val:
   save_images: true
   num_inference_steps: 50
   batch_size: 1
-  max_val_steps: 2      # smoke test: 3 images. Raise for a full run.
+  max_val_steps: 300    # X7: dataset-scale GoPro eval, matching the N=300 used elsewhere this session.
   patched: false
   patch_size_h: 256
   patch_size_w: 256

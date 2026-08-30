@@ -212,3 +212,43 @@ def extract_vjepa_tokens_multilayer(
     collapsed.append(base.float())
 
     return torch.cat(collapsed, dim=-1).to(dtype=dtype)
+
+
+def extract_vjepa_tokens_per_block(
+    model: nn.Module,
+    pixel_values: torch.Tensor,
+    device,
+    dtype: torch.dtype,
+) -> list:
+    """Return every transformer block's output tokens, one [B, N, D] tensor per block.
+
+    Unlike extract_vjepa_tokens_multilayer (which concatenates the last few blocks along
+    the feature dim for use as a conditioning signal), this keeps every block separate so
+    each can be analysed independently — e.g. which blocks stay blur-invariant.
+    """
+    if pixel_values.ndim == 4:
+        pixel_values = pixel_values.unsqueeze(2)
+
+    blocks = _find_transformer_blocks(model)
+    captured: list = []
+    hooks = []
+    for block in blocks:
+        def _hook(m, inp, out, buf=captured):
+            h = out[0] if isinstance(out, tuple) else out
+            buf.append(h.float().detach())
+        hooks.append(block.register_forward_hook(_hook))
+
+    try:
+        model(pixel_values.to(device=device, dtype=dtype))
+    finally:
+        for h in hooks:
+            h.remove()
+
+    collapsed = []
+    for feat in captured:
+        if feat.ndim == 5:
+            feat = rearrange(feat, "b t h w d -> b (t h w) d")
+        elif feat.ndim == 4:
+            feat = rearrange(feat, "b t n d -> b (t n) d")
+        collapsed.append(feat)
+    return collapsed

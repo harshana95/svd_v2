@@ -1,0 +1,125 @@
+# LoRA-adapt the FLUX.2 Klein VAE's encoder (decoder frozen) with a JEPA-style
+# blur-context / GT-latent-target objective. See papers/main.tex Sec. 5/6 and
+# models/reFlux/VAEBlurAlign_model.py for the design rationale.
+#
+# Run a short smoke test first (max_train_steps small) before a real launch:
+#   python trainer.py -opt checkpoints/reFlux/VAEBlurAlign.yml -test
+
+name: Motion
+model_type: VAEBlurAlign_model
+tracker_project_name: Motion
+experiment_key: VAEBlurAlign
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+lora_rank: 128
+latent_loss_weight: 5.0
+pixel_loss_weight: 1.0
+gan_loss_weight: 0.0  # GAN loss disabled: 3 full-length attempts (default, reduced weight, reduced weight + weakened D) all finished with block-region output worse than doing nothing, no improvement even after D stabilized -- see model docstring
+gan_mode: hinge
+
+datasets:
+  train:
+    # FullResPatchifierDataset (not FullResBlurDataset): yields REAL stacked
+    # batches by loading `batch_size` full-res images once and drawing
+    # `patches_per_group` different (shared-shape) crops from them before
+    # moving on -- see the file's docstring for why FullResBlurDataset's
+    # per-sample random aspect ratio made real batching crash (val.batch_size
+    # > 1 hit "stack expects each tensor to be equal size" in practice).
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: true
+    crop_size: 512
+    batch_size: 4
+    patches_per_group: 10
+    split_range: [0, 98]
+    num_worker_per_gpu: 4
+
+  val:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: false
+    crop_size: 512
+    batch_size: 4
+    patches_per_group: 1
+    split_range: [98, 100]
+    num_worker_per_gpu: 0
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_checkpoint: ~
+
+train:
+  lora_finetune: true
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 5e-4
+    # 0.1x the generator's LR -- the first GAN run collapsed (D loss ->0.3,
+    # G's adversarial loss ->2.0+, monotonic the whole 750 steps, block-region
+    # pixel error measurably worse at the end than at step 300) with D and G
+    # at the SAME LR. Weakening D directly, on top of the already-reduced
+    # gan_loss_weight below, is the retry.
+    discriminator_learning_rate: 5e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1e-8
+    max_grad_norm: 1.0
+  scheduler:
+    type: constant
+    lr_warmup_steps: 15
+    lr_num_cycles: 1
+    lr_power: 1.0
+  # Effective batch = batch_size(4, real, via FullResPatchifierDataset) *
+  # gradient_accumulation_steps(4) = 16 -- same effective batch as the
+  # earlier grad_accum=16/batch_size=1 experiment (kept fixed on purpose so
+  # this is the same tested compute budget, just spread across a real stacked
+  # batch instead of 16 sequential single-image passes: same GPU parallelism
+  # benefit an actual batch_size>1 gets, without inflating the batch-size
+  # variable itself as a second uncontrolled change). This is the fix for the
+  # non-convergence bug: an overfit-one-fixed-sample sanity check confirmed
+  # gradients/optimizer are fine (loss_latent 0.283->0.132 over 40 steps on a
+  # single example), but population-level training showed ~zero trend
+  # (linear-regression r~=-0.07 over 500 steps) because every step was one
+  # gradient computed on a BRAND NEW random (crop, block) task. max_train_steps
+  # /validation_steps/checkpointing_steps are unchanged from that experiment
+  # (they already account for the 8x total-compute reduction vs. the original
+  # 6000-step runs).
+  gradient_accumulation_steps: 4
+  num_train_epochs: 150
+  batch_size: 4
+  max_train_steps: 750
+  validation_steps: 25
+  checkpointing_steps: 75
+  checkpoints_total_limit: 3
+  patched: false
+  check_speed: false
+
+val:
+  save_images: true
+  batch_size: 4  # not read for FullResPatchifierDataset -- see datasets.val.batch_size
+  max_val_steps: 8
+  metrics:
+    # ssim intentionally omitted: utils/misc.py's log_metrics passes
+    # calculate_ssim's (value, map) tuple straight to tracker.add_scalar,
+    # which crashes -- no config anywhere else in this repo uses it either.
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

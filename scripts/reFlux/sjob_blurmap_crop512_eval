@@ -1,0 +1,24 @@
+#!/bin/bash
+# X7b: 512x512 center-crop eval of ContextFluxBlurMap -- the train/test resolution control.
+# 300 images at ~50 steps; at 512x512 each image is far cheaper than the 53.7 s/image the
+# full-res run measured, so 4 h is generous.
+#SBATCH -p a100-80gb
+#SBATCH -A stanchan
+#SBATCH -N 1
+#SBATCH -n 16
+#SBATCH --gpus-per-node=1
+#SBATCH --mem=128G
+#SBATCH --time=4:00:00
+#SBATCH --job-name bm_crop512
+#SBATCH -o logs/slurm-%x-%j.out
+#SBATCH -e logs/slurm-%x-%j.err
+
+set -euo pipefail
+cd /home/wweligam/svd_v2
+mkdir -p logs
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate /home/wweligam/home_env
+export TORCH_HOME=/depot/chan129/users/harshana/weights/torch_hub
+[ -f "$TORCH_HOME/hub/facebookresearch_vjepa2_main/hubconf.py" ] || { echo "hub cache missing" >&2; exit 1; }
+
+python trainer.py -opt ./checkpoints/reFlux/ContextFluxBlurMap_crop512_eval.yml -infer

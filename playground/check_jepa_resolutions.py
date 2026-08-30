@@ -23,6 +23,12 @@ Usage
       --resolutions 224 384 512 768 \\
       --no-pretrained               # skip downloading weights (shape-only test)
       --out-dir playground/jepa_res
+
+  # Dataset scale: mean ± std cross-resolution cosine over many images,
+  # replacing the single-image table.
+  python playground/check_jepa_resolutions.py \\
+      --image-dir /depot/chan129/users/harshana/eval_sets/gopro_test/gt \\
+      --n-images 300 --out-dir playground/jepa_resolution_dataset
 """
 
 import argparse
@@ -248,9 +254,119 @@ def visualize(results: dict, img_01: torch.Tensor, ref_res: int, hub_entry: str,
 
 # ─── main ─────────────────────────────────────────────────────────────────────
 
+def run_dataset(args, device: torch.device, out_dir: Path) -> None:
+    """Dataset-scale resolution robustness: mean ± std cross-res cosine over many images."""
+    image_paths = sorted(
+        p for p in Path(args.image_dir).glob("*")
+        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+    )[: args.n_images]
+    if not image_paths:
+        raise SystemExit(f"No images found in {args.image_dir}")
+    print(f"Found {len(image_paths)} images in {args.image_dir}")
+
+    print(f"Loading V-JEPA: {args.hub_entry}  (pretrained={not args.no_pretrained})")
+    model = load_model(args.hub_entry, pretrained=not args.no_pretrained)
+    model.to(device)
+
+    resolutions = sorted(set(args.resolutions))
+    if args.ref_res not in resolutions:
+        resolutions.append(args.ref_res)
+        resolutions = sorted(resolutions)
+
+    per_res_cos = {r: [] for r in resolutions if r != args.ref_res}
+    per_res_norm = {r: [] for r in resolutions}
+    first_img_01, first_results = None, None
+
+    for i, path in enumerate(image_paths):
+        img_01 = load_image(str(path))
+        results = {}
+        for res in resolutions:
+            info = run_at_resolution(model, img_01, res, device)
+            results[res] = info
+            if info["error"] is None:
+                per_res_norm[res].append(info["mean_norm"])
+
+        ref = results.get(args.ref_res)
+        if ref is not None and ref["error"] is None:
+            for res in resolutions:
+                if res == args.ref_res:
+                    continue
+                info = results[res]
+                if info["error"] is None:
+                    mean_c, _ = cross_cos(ref, info)
+                    per_res_cos[res].append(mean_c)
+
+        if i == 0:
+            first_img_01, first_results = img_01, results
+        if (i + 1) % 25 == 0 or (i + 1) == len(image_paths):
+            print(f"  Processed {i + 1}/{len(image_paths)} images")
+
+    # ── summary table ──
+    print(f"\n{'='*56}")
+    print(f"  Resolution robustness across {len(image_paths)} images (ref = {args.ref_res}px)")
+    print(f"  {'Res':>6}  {'N imgs':>7}  {'Mean cos':>10}  {'Std':>8}  {'Mean norm':>10}")
+    print(f"  {'-'*6}  {'-'*7}  {'-'*10}  {'-'*8}  {'-'*10}")
+
+    summary = {}
+    for res in resolutions:
+        norms = np.array(per_res_norm[res])
+        mean_norm = float(norms.mean()) if len(norms) else float("nan")
+        if res == args.ref_res:
+            cos_str, std_str = "1.0000(ref)", "     —"
+            mean_cos, std_cos, n_cos = 1.0, 0.0, len(image_paths)
+        else:
+            cos_arr = np.array(per_res_cos[res])
+            mean_cos = float(cos_arr.mean()) if len(cos_arr) else float("nan")
+            std_cos = float(cos_arr.std()) if len(cos_arr) else float("nan")
+            n_cos = len(cos_arr)
+            cos_str, std_str = f"{mean_cos:.4f}", f"{std_cos:.4f}"
+        summary[res] = dict(mean_cos=mean_cos, std_cos=std_cos, mean_norm=mean_norm, n=n_cos)
+        print(f"  {res:>6}px  {len(image_paths):>7}  {cos_str:>10}  {std_str:>8}  {mean_norm:>10.3f}")
+
+    np.savez(
+        out_dir / "resolution_robustness_summary.npz",
+        resolutions=np.array(resolutions),
+        **{f"cos_{r}": np.array(per_res_cos.get(r, [])) for r in resolutions},
+        **{f"norm_{r}": np.array(per_res_norm[r]) for r in resolutions},
+    )
+    print(f"\nSummary arrays saved → {out_dir}/resolution_robustness_summary.npz")
+
+    if HAS_MPL:
+        xs = [r for r in resolutions if r != args.ref_res]
+        means = [summary[r]["mean_cos"] for r in xs]
+        stds = [summary[r]["std_cos"] for r in xs]
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+        ax.errorbar(xs, means, yerr=stds, marker="o", capsize=4, color="steelblue")
+        ax.axhline(0.90, color="tomato", lw=1, linestyle="--", label="cos=0.90")
+        ax.set_xlabel("Resolution (px)")
+        ax.set_ylabel(f"Mean cosine vs {args.ref_res}px ± std")
+        ax.set_title(f"Resolution robustness — {len(image_paths)} images\nmodel: {args.hub_entry}")
+        ax.legend(fontsize=8)
+        plt.tight_layout()
+        out_png = out_dir / "resolution_robustness.png"
+        plt.savefig(out_png, dpi=150)
+        plt.close(fig)
+        print(f"Plot saved → {out_png}")
+
+        if first_results is not None:
+            visualize(
+                first_results, first_img_01, args.ref_res, args.hub_entry,
+                image_paths[0].name, out_dir / "resolution_comparison_example.png",
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description="V-JEPA resolution comparison.")
-    parser.add_argument("--image", required=True, help="Path to input image.")
+    parser.add_argument("--image", help="Path to a single input image.")
+    parser.add_argument(
+        "--image-dir",
+        help="Directory of images — runs at dataset scale, reporting mean ± std "
+             "cross-resolution cosine instead of a single-image table.",
+    )
+    parser.add_argument(
+        "--n-images", type=int, default=300,
+        help="Max images to load from --image-dir (default: 300).",
+    )
     parser.add_argument(
         "--resolutions", nargs="+", type=int, default=[224, 384, 512, 768],
         help="Resolutions to test (default: 224 384 512 768).",
@@ -273,9 +389,16 @@ def main():
     )
     args = parser.parse_args()
 
+    if not args.image and not args.image_dir:
+        parser.error("Provide --image or --image-dir.")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.image_dir:
+        run_dataset(args, device, out_dir)
+        return
 
     # ── model info ──
     print(f"Loading V-JEPA: {args.hub_entry}  (pretrained={not args.no_pretrained})")

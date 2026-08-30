@@ -383,22 +383,61 @@
     .exp{grid-template-columns:1fr;gap:4px;}
     .wrap{padding:0 16px 64px;}
   }
+
+  /* ---------- charts ---------- */
+  :root{ --c-vj:#33499f; --c-dn:#c2660a; --c-cl:#8a2d63; }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){ --c-vj:#7089de; --c-dn:#cf7a1e; --c-cl:#c9629b; }
+  }
+  :root[data-theme="dark"]{ --c-vj:#7089de; --c-dn:#cf7a1e; --c-cl:#c9629b; }
+
+  .chgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:14px;}
+  .ch{
+    margin:0;background:var(--surface);border:1px solid var(--line-soft);
+    border-radius:var(--radius);padding:14px 16px 8px;box-shadow:var(--shadow);
+    overflow-x:auto;
+  }
+  .ch.wide{grid-column:1/-1;}
+  .ch figcaption{margin-bottom:4px;}
+  .ch figcaption b{
+    font-family:"Archivo",sans-serif;font-weight:600;font-size:.95rem;
+    color:var(--text);display:block;margin-bottom:3px;
+  }
+  .ch figcaption span{font-size:.8rem;color:var(--text-3);display:block;line-height:1.45;}
+  .ch svg{display:block;width:100%;height:auto;margin-top:6px;overflow:visible;}
+  .ch .grid{stroke:var(--line-soft);stroke-width:1;}
+  .ch .tick{fill:var(--text-3);font-size:10px;font-family:"IBM Plex Mono",monospace;}
+  .ch .cat{fill:var(--text-2);font-size:11.5px;font-weight:500;}
+  .ch .val{fill:var(--text);font-size:11px;font-weight:600;font-family:"IBM Plex Mono",monospace;}
+  .ch .note{fill:var(--text-3);font-size:10px;font-family:"IBM Plex Mono",monospace;}
+  .ch .whisk{stroke-width:2;opacity:.55;}
+  .ch .cap{stroke-width:2;opacity:.75;}
+  .ch .dot{stroke:var(--surface);stroke-width:2;}
+  .ch circle:hover{stroke:var(--text);stroke-width:2;}
+  .keyrow{display:flex;gap:16px;flex-wrap:wrap;margin:2px 0 14px;font-size:.82rem;color:var(--text-2);}
+  .keyrow i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px;font-style:normal;}
+
+  .prog{background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--radius);padding:15px 18px;box-shadow:var(--shadow);}
+  .prog .bar{height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin:9px 0 8px;border:1px solid var(--line-soft);}
+  .prog .bar i{display:block;height:100%;background:var(--ok);}
+  .prog .lbl{display:flex;justify-content:space-between;gap:12px;font-size:.82rem;color:var(--text-3);font-family:"IBM Plex Mono",monospace;}
+  .prog b{font-family:"Archivo",sans-serif;font-size:.95rem;color:var(--text);}
 </style>
 
 <div class="wrap">
 
 <header class="mast">
-  <p class="eyebrow">Experiment plan · Aug 27 – Sep 9, 2026</p>
+  <p class="eyebrow">Experiment plan · Aug 27 – Sep 9, 2026 · status Aug 30, 2026</p>
   <h1>Fourteen Days to ICASSP</h1>
   <p class="standfirst">What to run, in what order, for the JEPA-conditioned Flux deblurring paper — planned against the compute and the data that actually survive, not what the directory listings suggested. Executing Day 1 turned up a scratch purge that had already destroyed the trained models, which changes what this paper can claim.</p>
 </header>
 
 <div class="stats">
   <div class="stat alarm"><span class="n">1 of 7</span><span class="k">runs still has weights — the purge destroyed the rest</span></div>
-  <div class="stat alarm"><span class="n">0</span><span class="k">GPUs allocated right now; 4 jobs queued on the account cap</span></div>
-  <div class="stat warn"><span class="n">2.4d</span><span class="k">per Stage-A run, measured at 10.4 s/it — and it must be redone</span></div>
-  <div class="stat ok-n"><span class="n">1,111</span><span class="k">paired test images now indexed and ready, up from 11</span></div>
-  <div class="stat"><span class="n">13</span><span class="k">days to a frozen PDF, one buffer day after</span></div>
+  <div class="stat ok-n"><span class="n">n</span><span class="k">GPUs available on request — arms can now run in parallel</span></div>
+  <div class="stat alarm"><span class="n">&minus;1.8</span><span class="k">dB below the blurred input on 300 GoPro pairs — measured, not projected</span></div>
+  <div class="stat ok-n"><span class="n">136</span><span class="k">GoPro pairs already inferred and on disk, of 1,111 indexed</span></div>
+  <div class="stat warn"><span class="n">11</span><span class="k">days to a frozen PDF; a full Stage-B needs 3–12 of them</span></div>
 </div>
 
 <section>
@@ -440,11 +479,108 @@
 </section>
 
 <section>
+  <h2>What the analysis found</h2>
+  <p class="sub">Day 2 delivered the whole analysis phase — X1 through X4, on both GoPro and MIOR. These are real measurements from the runs, not projections. They also complicate the paper's thesis.</p>
+
+  <div class="prog" style="margin-bottom:18px">
+    <b>X9 · Stage-A projector rerun — running</b>
+    <div class="bar"><i style="width:6%"></i></div>
+    <div class="lbl"><span>1,193 / 20,000 steps · 9.68 s/it</span><span>ETA ~50 h → lands Aug 31</span></div>
+  </div>
+
+  <div class="keyrow">
+    <span><i style="background:var(--c-vj)"></i>V-JEPA</span>
+    <span><i style="background:var(--c-dn)"></i>DINOv2</span>
+    <span><i style="background:var(--c-cl)"></i>CLIP</span>
+  </div>
+
+  <div class="chgrid">
+<figure class="ch wide"><figcaption><b>The trained system scores below its own input</b><span>ContextFlux-BlurMap at 50K steps vs. the blurred input, same images, same crop. Grey = degraded input, red = model output.</span></figcaption><svg viewBox="0 0 470 150" role="img" aria-label="model versus blurred-input floor"><line class="grid" x1="112.0" y1="22" x2="112.0" y2="116"/><text class="tick" x="112.0" y="130" text-anchor="middle">24</text><line class="grid" x1="162.7" y1="22" x2="162.7" y2="116"/><text class="tick" x="162.7" y="130" text-anchor="middle">25</text><line class="grid" x1="213.3" y1="22" x2="213.3" y2="116"/><text class="tick" x="213.3" y="130" text-anchor="middle">26</text><line class="grid" x1="264.0" y1="22" x2="264.0" y2="116"/><text class="tick" x="264.0" y="130" text-anchor="middle">27</text><line class="grid" x1="314.7" y1="22" x2="314.7" y2="116"/><text class="tick" x="314.7" y="130" text-anchor="middle">28</text><line class="grid" x1="365.3" y1="22" x2="365.3" y2="116"/><text class="tick" x="365.3" y="130" text-anchor="middle">29</text><line class="grid" x1="416.0" y1="22" x2="416.0" y2="116"/><text class="tick" x="416.0" y="130" text-anchor="middle">30</text><text class="cat" x="102" y="48" text-anchor="end">GoPro  (n=300)</text><line x1="196.6" y1="44" x2="288.4" y2="44" stroke="var(--stop)" stroke-width="2.5" opacity=".38"/><circle cx="288.4" cy="44" r="5.5" fill="var(--text-3)" stroke="var(--surface)" stroke-width="2"><title>blurred-input floor: 27.48 dB</title></circle><circle cx="196.6" cy="44" r="5.5" fill="var(--stop)" stroke="var(--surface)" stroke-width="2"><title>BlurMap: 25.67 dB</title></circle><text class="val" x="196.6" y="34" text-anchor="middle" fill="var(--stop)">25.67</text><text class="val" x="288.4" y="34" text-anchor="middle">27.48</text><text class="note" x="422" y="48" fill="var(--stop)">-1.81 dB</text><text class="cat" x="102" y="86" text-anchor="end">MIOR val (n=11)</text><line x1="201.3" y1="82" x2="349.8" y2="82" stroke="var(--stop)" stroke-width="2.5" opacity=".38"/><circle cx="349.8" cy="82" r="5.5" fill="var(--text-3)" stroke="var(--surface)" stroke-width="2"><title>blurred-input floor: 28.69 dB</title></circle><circle cx="201.3" cy="82" r="5.5" fill="var(--stop)" stroke="var(--surface)" stroke-width="2"><title>BlurMap: 25.76 dB</title></circle><text class="val" x="201.3" y="72" text-anchor="middle" fill="var(--stop)">25.76</text><text class="val" x="349.8" y="72" text-anchor="middle">28.69</text><text class="note" x="422" y="86" fill="var(--stop)">-2.93 dB</text><text class="tick" x="264" y="146" text-anchor="middle">PSNR (dB), 30&#8209;px border crop</text></svg></figure>
+
+<figure class="ch"><figcaption><b>Linear-probe restorability — PSNR</b><span>GoPro, n=50 val / 250 train. Dot = mean, whiskers = ±1 SD.</span></figcaption><svg viewBox="0 0 470 138" role="img" aria-label="Linear-probe restorability — PSNR"><line class="grid" x1="74.0" y1="20" x2="74.0" y2="108"/><text class="tick" x="74.0" y="122" text-anchor="middle">13.0</text><line class="grid" x1="132.5" y1="20" x2="132.5" y2="108"/><text class="tick" x="132.5" y="122" text-anchor="middle">14.0</text><line class="grid" x1="190.9" y1="20" x2="190.9" y2="108"/><text class="tick" x="190.9" y="122" text-anchor="middle">15.0</text><line class="grid" x1="249.4" y1="20" x2="249.4" y2="108"/><text class="tick" x="249.4" y="122" text-anchor="middle">16.0</text><line class="grid" x1="307.8" y1="20" x2="307.8" y2="108"/><text class="tick" x="307.8" y="122" text-anchor="middle">17.0</text><line class="grid" x1="366.3" y1="20" x2="366.3" y2="108"/><text class="tick" x="366.3" y="122" text-anchor="middle">18.0</text><line class="grid" x1="424.8" y1="20" x2="424.8" y2="108"/><text class="tick" x="424.8" y="122" text-anchor="middle">19.0</text><text class="cat" x="64" y="40" text-anchor="end">V-JEPA</text><line class="whisk" x1="279.2" y1="36" x2="413.1" y2="36" stroke="var(--c-vj)"/><line class="cap" x1="279.2" y1="32" x2="279.2" y2="40" stroke="var(--c-vj)"/><line class="cap" x1="413.1" y1="32" x2="413.1" y2="40" stroke="var(--c-vj)"/><circle class="dot" cx="346.1" cy="36" r="5.5" fill="var(--c-vj)"><title>V-JEPA: 17.7 ± 1.1</title></circle><text class="val" x="413.1" y="27" text-anchor="middle">17.7</text><text class="cat" x="64" y="70" text-anchor="end">DINOv2</text><line class="whisk" x1="273.3" y1="66" x2="407.5" y2="66" stroke="var(--c-dn)"/><line class="cap" x1="273.3" y1="62" x2="273.3" y2="70" stroke="var(--c-dn)"/><line class="cap" x1="407.5" y1="62" x2="407.5" y2="70" stroke="var(--c-dn)"/><circle class="dot" cx="340.4" cy="66" r="5.5" fill="var(--c-dn)"><title>DINOv2: 17.6 ± 1.1</title></circle><text class="val" x="407.5" y="57" text-anchor="middle">17.6</text><text class="cat" x="64" y="100" text-anchor="end">CLIP</text><line class="whisk" x1="92.2" y1="96" x2="245.8" y2="96" stroke="var(--c-cl)"/><line class="cap" x1="92.2" y1="92" x2="92.2" y2="100" stroke="var(--c-cl)"/><line class="cap" x1="245.8" y1="92" x2="245.8" y2="100" stroke="var(--c-cl)"/><circle class="dot" cx="169.0" cy="96" r="5.5" fill="var(--c-cl)"><title>CLIP: 14.6 ± 1.3</title></circle><text class="val" x="245.8" y="87" text-anchor="middle">14.6</text></svg></figure>
+<figure class="ch"><figcaption><b>Linear-probe restorability — SSIM</b><span>Same probes. DINOv2 leads here, reversing the PSNR order.</span></figcaption><svg viewBox="0 0 470 138" role="img" aria-label="Linear-probe restorability — SSIM"><line class="grid" x1="74.0" y1="20" x2="74.0" y2="108"/><text class="tick" x="74.0" y="122" text-anchor="middle">0.15</text><line class="grid" x1="144.4" y1="20" x2="144.4" y2="108"/><text class="tick" x="144.4" y="122" text-anchor="middle">0.20</text><line class="grid" x1="214.7" y1="20" x2="214.7" y2="108"/><text class="tick" x="214.7" y="122" text-anchor="middle">0.25</text><line class="grid" x1="285.1" y1="20" x2="285.1" y2="108"/><text class="tick" x="285.1" y="122" text-anchor="middle">0.30</text><line class="grid" x1="355.5" y1="20" x2="355.5" y2="108"/><text class="tick" x="355.5" y="122" text-anchor="middle">0.35</text><line class="grid" x1="425.9" y1="20" x2="425.9" y2="108"/><text class="tick" x="425.9" y="122" text-anchor="middle">0.40</text><text class="cat" x="64" y="40" text-anchor="end">V-JEPA</text><line class="whisk" x1="254.1" y1="36" x2="367.7" y2="36" stroke="var(--c-vj)"/><line class="cap" x1="254.1" y1="32" x2="254.1" y2="40" stroke="var(--c-vj)"/><line class="cap" x1="367.7" y1="32" x2="367.7" y2="40" stroke="var(--c-vj)"/><circle class="dot" cx="310.9" cy="36" r="5.5" fill="var(--c-vj)"><title>V-JEPA: 0.32 ± 0.04</title></circle><text class="val" x="367.7" y="27" text-anchor="middle">0.32</text><text class="cat" x="64" y="70" text-anchor="end">DINOv2</text><line class="whisk" x1="298.8" y1="66" x2="438.4" y2="66" stroke="var(--c-dn)"/><line class="cap" x1="298.8" y1="62" x2="298.8" y2="70" stroke="var(--c-dn)"/><line class="cap" x1="438.4" y1="62" x2="438.4" y2="70" stroke="var(--c-dn)"/><circle class="dot" cx="368.6" cy="66" r="5.5" fill="var(--c-dn)"><title>DINOv2: 0.36 ± 0.05</title></circle><text class="val" x="438.4" y="57" text-anchor="middle">0.36</text><text class="cat" x="64" y="100" text-anchor="end">CLIP</text><line class="whisk" x1="85.1" y1="96" x2="187.0" y2="96" stroke="var(--c-cl)"/><line class="cap" x1="85.1" y1="92" x2="85.1" y2="100" stroke="var(--c-cl)"/><line class="cap" x1="187.0" y1="92" x2="187.0" y2="100" stroke="var(--c-cl)"/><circle class="dot" cx="136.1" cy="96" r="5.5" fill="var(--c-cl)"><title>CLIP: 0.19 ± 0.04</title></circle><text class="val" x="187.0" y="87" text-anchor="middle">0.19</text></svg></figure>
+<figure class="ch wide"><figcaption><b>Which V-JEPA blocks survive blur</b><span>Mean singular-value energy ratio σ<sub>lq</sub>/σ<sub>gt</sub>, 300 GoPro pairs. Higher = the block's structure is preserved under blur.</span></figcaption><svg viewBox="0 0 470 170" role="img" aria-label="per-block energy retention"><line class="grid" x1="52" y1="128.9" x2="456" y2="128.9"/><text class="tick" x="44" y="132.4" text-anchor="end">0.86</text><line class="grid" x1="52" y1="100.4" x2="456" y2="100.4"/><text class="tick" x="44" y="103.9" text-anchor="end">0.90</text><line class="grid" x1="52" y1="71.9" x2="456" y2="71.9"/><text class="tick" x="44" y="75.4" text-anchor="end">0.94</text><line class="grid" x1="52" y1="43.4" x2="456" y2="43.4"/><text class="tick" x="44" y="46.9" text-anchor="end">0.98</text><line class="grid" x1="52" y1="29.1" x2="456" y2="29.1"/><text class="tick" x="44" y="32.6" text-anchor="end">1.00</text><polyline class="ln" fill="none" stroke="var(--c-vj)" stroke-width="2" points="52.0,122.7 69.6,77.1 87.1,62.1 104.7,55.3 122.3,48.9 139.8,45.6 157.4,40.7 175.0,36.9 192.5,34.1 210.1,29.2 227.7,27.9 245.2,29.2 262.8,31.4 280.3,32.0 297.9,31.1 315.5,32.2 333.0,32.4 350.6,33.1 368.2,32.8 385.7,34.3 403.3,35.3 420.9,36.7 438.4,38.1 456.0,39.3"/><circle cx="52.0" cy="122.7" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 0: 0.8686</title></circle><circle cx="69.6" cy="77.1" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 1: 0.9327</title></circle><circle cx="87.1" cy="62.1" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 2: 0.9538</title></circle><circle cx="104.7" cy="55.3" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 3: 0.9633</title></circle><circle cx="122.3" cy="48.9" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 4: 0.9722</title></circle><circle cx="139.8" cy="45.6" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 5: 0.9769</title></circle><circle cx="157.4" cy="40.7" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 6: 0.9837</title></circle><circle cx="175.0" cy="36.9" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 7: 0.9892</title></circle><circle cx="192.5" cy="34.1" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 8: 0.9930</title></circle><circle cx="210.1" cy="29.2" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 9: 0.9999</title></circle><circle cx="227.7" cy="27.9" r="4.5" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="2"><title>block 10: 1.0017</title></circle><circle cx="245.2" cy="29.2" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 11: 0.9999</title></circle><circle cx="262.8" cy="31.4" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 12: 0.9968</title></circle><circle cx="280.3" cy="32.0" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 13: 0.9960</title></circle><circle cx="297.9" cy="31.1" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 14: 0.9972</title></circle><circle cx="315.5" cy="32.2" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 15: 0.9957</title></circle><circle cx="333.0" cy="32.4" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 16: 0.9953</title></circle><circle cx="350.6" cy="33.1" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 17: 0.9944</title></circle><circle cx="368.2" cy="32.8" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 18: 0.9949</title></circle><circle cx="385.7" cy="34.3" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 19: 0.9927</title></circle><circle cx="403.3" cy="35.3" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 20: 0.9914</title></circle><circle cx="420.9" cy="36.7" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 21: 0.9894</title></circle><circle cx="438.4" cy="38.1" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 22: 0.9874</title></circle><circle cx="456.0" cy="39.3" r="2.6" fill="var(--c-vj)" stroke="var(--surface)" stroke-width="0"><title>block 23: 0.9857</title></circle><text class="tick" x="52.0" y="151" text-anchor="middle">0</text><text class="tick" x="139.8" y="151" text-anchor="middle">5</text><text class="tick" x="227.7" y="151" text-anchor="middle">10</text><text class="tick" x="315.5" y="151" text-anchor="middle">15</text><text class="tick" x="403.3" y="151" text-anchor="middle">20</text><text class="tick" x="456.0" y="151" text-anchor="middle">23</text><text class="tick" x="254" y="166" text-anchor="middle">V-JEPA transformer block</text><text class="note" x="227.7" y="16.9" text-anchor="middle">peak 1.002 @ block 10</text></svg></figure>
+
+  </div>
+
+  <div class="callout">
+    <p><strong>The headline result does not separate V-JEPA from DINOv2.</strong> On PSNR they sit 0.10&nbsp;dB apart against a 1.15&nbsp;dB standard deviation — statistically indistinguishable — and on SSIM the order <em>reverses</em>, with DINOv2 ahead on both GoPro and MIOR. The one clean separation is CLIP, roughly 3&nbsp;dB behind both. That supports "text-aligned contrastive features carry less restorable structure", but it does not support "JEPA is the right encoder."</p>
+    <p>Two caveats that belong in the paper rather than in a footnote. Probe reconstructions land near 17.7&nbsp;dB while the blurred input itself scores 26.3&nbsp;dB, so this metric ranks encoders relatively and says nothing about absolute restoration quality. And the MIOR arm of the same experiment rests on <strong>n=3</strong> validation images — it is directional at best, which is why only the n=50 GoPro arm is plotted here.</p>
+    <p><strong>The per-block curve is the more quotable finding.</strong> Energy retention climbs steeply through the first ten blocks, peaks near block 10, then declines slightly — so mid-depth V-JEPA features are the most blur-robust, and the last block is not the best place to tap. That answers the depth question the two destroyed training runs were meant to answer, from features alone, in hours instead of days.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The pivot: train the encoder for the degradation</h2>
+  <p class="sub">The measurements said the conditioning channel is information-limited. Rather than routing around that, train the representation itself against blur. This is the strongest move available, and the validation for it is nearly free.</p>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag sig">Why it works</span><h3>It attacks the number we actually measured</h3></div>
+    <p>X3 is the whole argument: a frozen V-JEPA representation of the blurred image decodes to <strong>17.7&nbsp;dB against a 26.3&nbsp;dB blurred-input floor</strong>. The representation is lossy <em>because its objective made it lossy</em> — JEPA predicts masked-region embeddings precisely so it can discard unpredictable high-frequency detail, which is the content deblurring exists to recover.</p>
+    <p>Training the encoder with a blur&rarr;sharp objective inverts that. Instead of learning what survives blur, the encoder learns <em>what the sharp image looks like in latent space given the blurred one</em> — which is exactly the signal a frozen generative prior needs, and exactly what the current pipeline cannot supply.</p>
+    <p><strong>And the paper arc gets better, not worse:</strong> off-the-shelf self-supervised features are information-limited for restoration (measured, Sec.&nbsp;4) &rarr; training the objective against the degradation recovers part of it (measured, same axis). A negative result that motivates a fix beats either half alone.</p>
+  </div>
+
+  <div class="finding amber">
+    <div class="fhead"><span class="tag amber">Design risk</span><h3>A pure JEPA objective could reproduce the same problem</h3></div>
+    <p>JEPA avoids pixel reconstruction deliberately, to get abstract features for <em>recognition</em>. Restoration wants the low-level detail back. So a latent-predictive objective can rediscover exactly the abstraction that caused the bottleneck — unless the asymmetry does the work: predicting the <em>sharp</em> target from the <em>blurred</em> context forces the representation to encode what differs between them.</p>
+    <p>Two failure modes to instrument from step one. <strong>Collapse</strong> — JEPA without an EMA target encoder, stop-gradient, and an asymmetric predictor converges to constant outputs with a beautiful loss curve; track feature rank and per-dimension variance, not just loss. <strong>A blur-invariant target</strong> — if the target encoder is itself insensitive to blur, the prediction task is trivial and nothing is learned. The target must retain the detail we are asking the context branch to recover.</p>
+    <p>Also: <em>fine-tune, do not pretrain.</em> V-JEPA was trained on millions of videos; there are 7,760 training pairs here. From scratch will underperform the frozen checkpoint and burn the window doing it.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag ok">The good part</span><h3>It validates without the diffusion model</h3></div>
+    <p>The X3 probe is already built, already run, and already has a baseline: <strong>17.66&nbsp;dB frozen, against a 26.3&nbsp;dB floor</strong>. Re-running it on a deblur-trained encoder measures the improvement directly — no Stage-B, no sampling, no 53.7&nbsp;s/image. If probe PSNR climbs toward or past the floor, the contribution is demonstrated on the same axis the problem was diagnosed on.</p>
+    <p>That decouples the paper's main claim from the training queue entirely. Even if no Stage-B arm lands by Sep&nbsp;6, this result stands on its own.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The design critique — and what it changes</h2>
+  <p class="sub">A systems read of the architecture, run against the measurements already in hand. It changes the paper's thesis and reorders what is worth running with the time left.</p>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag">Measured</span><h3>The trained system is worse than doing nothing</h3></div>
+    <p>The critique predicted this; the evaluation now confirms it on real data. Scored against the blurred input on identical images with the same 30-px border crop: <strong>&minus;1.81&nbsp;dB on 300 GoPro pairs</strong> (25.67 vs 27.48) and <strong>&minus;2.93&nbsp;dB on MIOR val</strong> (25.76 vs 28.69). SSIM is lower too, on both. This is no longer a hint from a five-image split — 300 pairs at a 2.05&nbsp;dB standard deviation.</p>
+    <p>The generative prior is not restoring the image, it is replacing it with a plausible one. That is the expected outcome when the observation reaches the backbone only through a semantic channel and nothing enforces <code>y = k * x̂</code>.</p>
+  </div>
+
+  <div class="finding">
+    <div class="fhead"><span class="tag">Structural</span><h3>The conditioning path is information-limited, and X3 measures it</h3></div>
+    <p>The JEPA objective predicts <em>representations</em> of masked regions, not pixels — it is trained to discard unpredictable high-entropy detail, which is exactly the high-frequency content deblurring exists to recover. The system asks a representation optimised for abstraction to do a codec's job.</p>
+    <p>X3 puts a number on it: the linear probe reconstructs at <strong>17.7&nbsp;dB while the blurred input itself is 26.3&nbsp;dB</strong>. A linear decoder is a lower bound, but decoded naively the representation carries <em>less</em> usable image content than the degraded pixels would. That matters because <code>use_condition_image_for_transformer: false</code> makes projected V-JEPA tokens the <strong>only</strong> path from observation to backbone — the entire fidelity budget runs through the lossier channel.</p>
+    <p>A second signal agrees: BlurMap scored 24.44&nbsp;dB against a MIOR blurred-input floor near 29.7&nbsp;dB. Different small samples, so treat it as directional — but a model scoring below its own input is not deblurring, it is re-imagining. That is the expected failure when a generative prior is disconnected from the forward model.</p>
+  </div>
+
+  <div class="finding amber">
+    <div class="fhead"><span class="tag amber">Framing</span><h3>Deblurring is an inverse problem; the system treats it as conditional generation</h3></div>
+    <p>Deblurring carries a hard fidelity constraint, <code>y = k * x + n</code>. Nothing in this pipeline knows the blur kernel, and nothing ever checks that the output, re-blurred, reproduces the input. Frozen text-to-image prior, semantic conditioning, no degradation model, no measurement consistency — every choice treats the task as generation.</p>
+    <p>Three consequences are cheap to act on. <strong>Restore the latent path</strong> so V-JEPA carries semantics while VAE latents carry geometry — a 32&times;32 token grid cannot encode sub-pixel edge position across 1280&times;720, and a latent is built to. <strong>Add a data-consistency step at sampling</strong>, which needs no retraining at all. <strong>Re-tap mid-depth</strong>: X4 already says block&nbsp;10 beats the block&nbsp;23 currently used.</p>
+    <p>One self-inflicted wound worth removing: Stage&nbsp;A regresses V-JEPA tokens onto Qwen3-VL <em>caption embeddings</em>. The introduction argues text is a lossy conditioning channel, then trains the projector to imitate it. The VAE-latent head is far better motivated.</p>
+  </div>
+
+
+  <div class="finding amber">
+    <div class="fhead"><span class="tag amber">Plumbing</span><h3>Two resolution bugs sit between the model and its score</h3></div>
+    <p><strong>Aspect distortion.</strong> <code>jepa_helpers.py</code> resizes with <code>Resize((size, size))</code> — square. Training used 512&times;512 crops, so that resize was identity; at native 1280&times;720 inference the input is squashed 1.78&times; anisotropically, so the V-JEPA tokens describe a distorted image while the latent grid they steer is not. Raising <code>vjepa_image_size</code> does not fix this — a square resize distorts at any size.</p>
+    <p><strong>Train/test scale.</strong> BlurMap trained at 512&times;512 and was scored at 1280&times;720 (3.5&times; the area) and 1920&times;1080 (7.9&times;). The packed latent sequence length changes with resolution, and <code>calculate_shift</code> derives the dynamic time-shift from sequence length — so the sampler ran on a <em>different noise schedule than it trained under</em>. A 512-crop control (job 11632229) is queued to separate this from the architectural bottleneck.</p>
+    <p>Note the resolution sweep argues against simply going bigger: cosine to the 384&nbsp;px pretraining reference is 0.916 at 512 but <em>0.904 at 768</em> — non-monotonic, so more pixels is not automatically better features.</p>
+  </div>
+
+  <div class="finding amber">
+    <div class="fhead"><span class="tag amber">Reframing</span><h3>Invariance is a role assignment, not a ranking</h3></div>
+
+  <p>X4 was read as "which block is best." The sharper reading is that a blur-invariant block, by construction, carries <em>no information about the blur</em>. You want both: invariant mid-depth features for semantics, and blur-<em>sensitive</em> early features for kernel estimation. The invariance curve is the diagnostic that assigns each block a job — a better story than picking a layer, and it costs one more analysis run rather than a training run.</p>
+  </div>
+</section>
+
+<section>
   <h2>The five tracks</h2>
   <p class="sub">Ordered by how much GPU they need. Track A is complete; Track B is resolved by the GoPro index; Track D has largely collapsed with the checkpoints, and Track E is no longer optional.</p>
 
   <div class="done">
-    <p><strong>Day 1 complete (Aug 27).</strong> BlurMap weights and the V-JEPA hub cache are on depot; the stale projector path is fixed to <code>~</code> with a note explaining why; two batch jobs are queued (<code>ctx_alignA</code> for the Stage-A rerun, <code>jepa_analysis</code> on standby); and the 1,111-pair GoPro test set is indexed. Nothing further can be lost to the purge.</p>
+    <p><strong>Day 1 complete (Aug 27).</strong> BlurMap weights and the V-JEPA hub cache are on depot; the stale projector path is fixed to <code>~</code>; the 1,111-pair GoPro test set is indexed. Nothing further can be lost to the purge. All of it is committed and pushed to <code>origin/main</code> in three commits ending <code>0c40402</code>.</p>
+    <p style="margin-top:10px"><strong>Day 2 (Aug 28) — mixed.</strong> The analysis pipeline ran green end to end across all three encoders, but only on the 11-image smoke default, so Figure 1 still needs its 300-pair run. The full-resolution evaluation reached 136 of 1,111 images and was then killed by its walltime; those 136 pairs survived and are usable. The Stage-A rerun was cancelled before it ever started, so <strong>no training has begun</strong>. Two GPUs are now allocated after two days of drought — one is working, the other has held 72&thinsp;GB at zero utilisation for fifteen hours.</p>
   </div>
 
   <div class="track">
@@ -507,29 +643,29 @@
   <div class="track">
     <div class="track-head">
       <span class="track-id">C</span>
-      <span class="track-title">The analysis — the guaranteed deliverable</span>
-      <span class="tag sig">1 GPU × hours · Days 2–4</span>
+      <span class="track-title">The analysis — the guaranteed deliverable ✓</span>
+      <span class="tag ok">Done · Aug 28–29</span>
     </div>
     <div class="track-body">
       <div class="exp">
-        <span class="exp-id">C1</span>
+        <span class="exp-id is-done">C1</span>
         <div class="exp-body">
-          <p><strong>Blur invariance at dataset scale.</strong> Run <code>compare_jepa_features.py</code> and <code>analyze_jepa_svd.py</code> across 200–500 GT/blur pairs for V-JEPA, DINOv2 and CLIP: cosine-similarity distributions, per-component energy ratio σ<sub>lq</sub>/σ<sub>gt</sub>, and subspace alignment. This replaces the current two-image probe and its excluded outlier with real statistics.</p>
-          <div class="meta"><span><b>Fills:</b> Figure 1</span><span><b>Cost:</b> feature extraction, no training</span></div>
+          <p><strong>Blur invariance at dataset scale — complete on both datasets.</strong> GoPro at n=300, and the MIOR arm re-run at <strong>n=100</strong> (up from 11) on the expanded val split. Result: V-JEPA 3/64 stable components at σ ratio 0.999, DINOv2 1/64 at 0.998, CLIP 2/64 at 0.987. Every stable<sub>64</sub> count matched the earlier n=11 estimate and the ratio moved by ≤0.005, so <em>"invariance does not separate the encoders" is a properly-powered finding, not a small-sample artifact</em>. The two-image probe and its excluded outlier are gone from the paper.</p>
+          <div class="meta"><span><b>Filled:</b> Figure 1 + Table 1</span><span><b>Note:</b> the scripts read directories, so they saw the new val split despite the stale HF cache</span></div>
         </div>
       </div>
       <div class="exp">
-        <span class="exp-id">C2</span>
+        <span class="exp-id is-done">C2</span>
         <div class="exp-body">
-          <p><strong>Resolution robustness at dataset scale.</strong> Extends Table 1 from its single image to a mean ± std across the same pairs at 224/384/512/768 px.</p>
-          <div class="meta"><span><b>Fills:</b> Table 1</span></div>
+          <p><strong>Resolution robustness at dataset scale — done.</strong> Mean cosine to the 384&nbsp;px reference across 300 GoPro pairs: 0.812 at 224, <strong>0.916 at 512, 0.904 at 768</strong>. Non-monotonic — more pixels is <em>not</em> better features, which is the measurement that argues against simply raising <code>vjepa_image_size</code>. <em>Still n=11 on the MIOR arm; could go to n=100 the same way C1 did.</em></p>
+          <div class="meta"><span><b>Filled:</b> the resolution table</span><span><b>Open:</b> MIOR arm still n=11</span></div>
         </div>
       </div>
       <div class="exp">
-        <span class="exp-id">C3</span>
+        <span class="exp-id is-done">C3</span>
         <div class="exp-body">
-          <p><strong>Linear-probe restorability — the experiment that makes the analysis predictive.</strong> For each encoder, fit a light decoder from LQ features back to the GT image and measure reconstruction quality. If the ranking this produces matches the deblurring ranking from the trained models, the paper has a thesis that holds <em>regardless of which encoder wins</em>: blur-robustness of a representation predicts its value as conditioning. That argument survives even a total compute drought.</p>
-          <div class="meta"><span><b>Fills:</b> a new analysis figure and the Discussion</span><span><b>Cost:</b> hours, small model</span></div>
+          <p><strong>Linear-probe restorability — done, and it refused the hypothesis.</strong> V-JEPA 17.66&nbsp;dB vs DINOv2 17.56 on GoPro — 0.10&nbsp;dB apart against a 1.15&nbsp;dB SD, and DINOv2 <em>wins</em> on SSIM (0.359 vs 0.318). Only CLIP separates, ~3&nbsp;dB back. So blur-robustness does <strong>not</strong> predict conditioning value, and the paper's thesis moved accordingly. The more important number is the gap to the input: 17.7&nbsp;dB against a 26.3&nbsp;dB blurred-input floor.</p>
+          <div class="meta"><span><b>Filled:</b> the probe table + the information-budget argument</span><span><b>Open:</b> MIOR arm still n_val=3</span></div>
         </div>
       </div>
     </div>
@@ -539,21 +675,21 @@
     <div class="track-head">
       <span class="track-id">D</span>
       <span class="track-title">Evaluate what already exists <span style="font-weight:400;color:var(--text-3)">— mostly gone</span></span>
-      <span class="tag amber">Collapsed · 1 model left</span>
+      <span class="tag amber">Scored · 1 model left, and it lost to its input</span>
     </div>
     <div class="track-body">
       <div class="exp">
-        <span class="exp-id">D1</span>
+        <span class="exp-id is-done">D1</span>
         <div class="exp-body">
-          <p><strong>Build the unified eval driver.</strong> <code>analysis/calculate_metrics.py</code> exists and takes <code>--gt_folder</code>/<code>--pred_folder</code>, but the <code>test_saved_model.py</code> that CLAUDE.md advertises at the repo root does not exist. Something has to load a checkpoint, run a split at a fixed seed and 50 Euler steps, and dump predictions to disk. Write it once, use it for every row.</p>
-          <div class="meta"><span><b>Blocks:</b> D2, D3, D4, E1</span></div>
+          <p><strong>Resolved — no new driver was needed.</strong> <code>trainer.py -opt &lt;config&gt; -infer</code> already evaluates at native resolution once the crop transform is dropped; an <code>infer_fullres.py</code> was written and then correctly deleted. Two real bugs were fixed instead: <code>max_val_steps</code> now survives <code>-infer</code>, and <code>save_eval_png</code> writes filename-stemmed PNGs so predictions match GT by name. <em>Scoring</em> still needed new code — <code>analysis/calculate_metrics.py</code> pairs by list position, force-resizes to a square, and hangs unless the path contains a dir named <code>Results</code>; <code>analysis/eval_pairs.py</code> replaces it.</p>
+          <div class="meta"><span><b>Unblocked:</b> D2, D4, and every arm</span></div>
         </div>
       </div>
       <div class="exp">
-        <span class="exp-id">D2</span>
+        <span class="exp-id is-done">D2</span>
         <div class="exp-body">
-          <p><strong>Score the one surviving model.</strong> Only <code>ContextFluxBlurMap</code> has weights, so this is now a single row rather than a comparison table — and it is the architectural variant, not the headline method. Run it through the driver on both GoPro and the 11-image MIOR val to at least establish that the evaluation path works end to end on a real checkpoint.</p>
-          <div class="meta"><span><b>Fills:</b> one row</span><span><b>Was:</b> most of Tables 2 and 3</span></div>
+          <p><strong>Done — and it produced the paper's headline negative result.</strong> BlurMap scores <strong>25.67&nbsp;dB against a 27.48&nbsp;dB input floor</strong> on 300 GoPro pairs (&minus;1.81), and 25.76 vs 28.69 on MIOR (&minus;2.93). Lower SSIM on both. The eval path is proven end to end on a real checkpoint — and the checkpoint loads from the depot backup, so that backup is verified too.</p>
+          <div class="meta"><span><b>Filled:</b> Table 2 rows</span><span><b>Caveat:</b> trained at 512², scored at native res — the Y5 control is queued to separate that confound</span></div>
         </div>
       </div>
       <div class="exp">
@@ -566,8 +702,8 @@
       <div class="exp">
         <span class="exp-id">D4</span>
         <div class="exp-body">
-          <p><strong>Regression baselines.</strong> Check whether the existing <code>NAFNet_2026_02_13</code> and <code>Restormer_2026_02_14</code> checkpoints were trained on this dataset; if not, retrain — both are cheap next to anything Flux-based — and score them through the same driver.</p>
-          <div class="meta"><span><b>Fills:</b> Table 2 baseline rows</span></div>
+          <p><strong>Blocked — the baselines were purged too.</strong> <code>NAFNet_2026_02_13</code> and <code>Restormer_2026_02_14</code> both contain <strong>zero weight files</strong>, and the existing configs point at a different dataset. So this is retraining plus a new Deblur-MIOR config, not an evaluation. Both are cheap next to anything Flux-based, and GPU hours are no longer the constraint — but nothing has started.</p>
+          <div class="meta"><span><b>Fills:</b> Table 2 baseline rows</span><span><b>Status:</b> not started</span></div>
         </div>
       </div>
     </div>
@@ -583,8 +719,8 @@
       <div class="exp">
         <span class="exp-id">E0</span>
         <div class="exp-body">
-          <p><strong>Stage-A projector rerun — queued as <code>ctx_alignA</code> (job 11619155).</strong> Every two-stage result depends on an aligned projector, and the only one that existed was destroyed. At the measured 10.4 s/it this is ~58 hours. It reads the hub cache from depot and fails fast if it is missing, so it cannot repeat the step-0 death of Aug 26. It is queued rather than running: the account cap is full.</p>
-          <div class="meta"><span><b>Blocks:</b> every Stage-B run</span><span><b>Cost:</b> ~2.4 days, 1 GPU</span></div>
+          <p><strong>Running.</strong> The first attempt was cancelled before it started; the current run (<code>x9_ctx_alignA_rerun</code>) is at <strong>6,354/20,000 at 9.93&nbsp;s/it</strong> after recovering from a spell at 15.35, and lands ~Aug&nbsp;31. It reads the hub cache from depot with a fail-fast check, so it cannot repeat the step-0 death of Aug&nbsp;26. <em>Caveat: it is training against the stale cached 7,849-image split, so 89 of the new val images sit inside its projector's training set.</em></p>
+          <div class="meta"><span><b>Lands:</b> ~Aug 31</span><span><b>No longer blocks:</b> B1/B2 use a random-init projector</span></div>
         </div>
       </div>
       <div class="exp">
@@ -618,9 +754,9 @@
         <tr>
           <td class="xid">X1</td>
           <td><strong>Blur invariance at scale.</strong> V-JEPA vs DINOv2 vs CLIP over 300 GoPro pairs: cosine distributions, per-component energy ratio, subspace alignment.</td>
-          <td>Nothing — the job script works. Resubmit with <code>--export=ALL,PAIRS_GT=&hellip;/gopro_test/gt,PAIRS_BLUR=&hellip;/gopro_test/blur,N_IMAGES=300</code></td>
-          <td>Figure 1</td>
-          <td><span class="st run">run today</span></td>
+          <td><strong>Complete.</strong> GoPro at n=300, and the MIOR arm re-run at <strong>n=100</strong> (up from 11) on the expanded val split — the analysis scripts read image directories directly, so they see the new split despite the stale HF cache still blocking training. Every stable<sub>64</sub> count was unchanged from the n=11 estimate and the energy ratio moved by at most 0.005, so the "invariance does not separate the encoders" conclusion is not a sample-size artifact.</td>
+          <td>Figure 1 + Table 1, both filled</td>
+          <td><span class="st run">done</span></td>
         </tr>
         <tr>
           <td class="xid">X2</td>
@@ -647,9 +783,9 @@
         <tr>
           <td class="xid">X5</td>
           <td><strong>The eval driver.</strong> No new driver needed: <code>trainer.py -opt &lt;config&gt; -infer</code> already evaluates at native resolution once the crop transform is dropped. Verified on an A30 — 1280&times;720 single pass, no OOM, ~52 s/image at 50 steps, and the depot checkpoint loads cleanly. Two gaps remain: outputs are index-named JPEGs (<code>out_0011_0050k.jpg</code>) that <code>calculate_metrics.py</code> cannot match to GT by filename, and <code>max_val_steps</code> is ignored under <code>-infer</code> (<code>base_model.py:180</code> forces it to 1e6), so a run always sweeps the whole split.</td>
-          <td>Config exists: <code>ContextFluxBlurMap_fullres_eval.yml</code>. Still needs PNG output named by sample, and a way to bound the image count</td>
+          <td><strong>The bug has now bitten.</strong> Job 11624342 ran with <code>max_val_steps: 2</code> ("smoke test: 3 images"), was overridden to 1e6, and began a 16.5-hour sweep against a 2-hour walltime — <code>TIMEOUT</code> at 136/1,111. Needs the count bounded (patch <code>base_model.py:180</code>, or point at a subsampled directory) <em>and</em> a walltime matching the real 53.7&nbsp;s/image. PNG output named by sample is still outstanding</td>
           <td>Blocks X6–X8 and X10</td>
-          <td><span class="st code">small edit</span></td>
+          <td><span class="st code">fix + resubmit</span></td>
         </tr>
         <tr>
           <td class="xid">X6</td>
@@ -660,10 +796,10 @@
         </tr>
         <tr>
           <td class="xid">X7</td>
-          <td><strong>BlurMap on GoPro (1,111) and MIOR val (11).</strong> The only surviving trained model; also proves the eval path works on a real checkpoint.</td>
-          <td>X5</td>
-          <td>Table 2 row + protocol check</td>
-          <td><span class="st wait">after X5</span></td>
+          <td><strong>BlurMap on GoPro (300) and MIOR val (11).</strong> Done. 25.67 vs a 27.48&nbsp;dB input floor on GoPro; 25.76 vs 28.69 on MIOR. Required a new scorer — <code>analysis/calculate_metrics.py</code> pairs by list position, force-resizes to a square, and its <code>main()</code> hangs unless the path contains a directory named <code>Results</code>. <code>analysis/eval_pairs.py</code> pairs by filename at native resolution and always reports the input floor.</td>
+          <td>Done</td>
+          <td>Table 2 rows + the headline negative result</td>
+          <td><span class="st run">done</span></td>
         </tr>
         <tr>
           <td class="xid">X8</td>
@@ -672,13 +808,13 @@
           <td>Table 2 baseline rows</td>
           <td><span class="st wait">after X5</span></td>
         </tr>
-        <tr class="qgrp"><td colspan="5">Phase 3 · Training — needs sustained GPU that is not currently allocated</td></tr>
+        <tr class="qgrp"><td colspan="5">Phase 3 · Training — parallel arms, sized to finish by Sep 6</td></tr>
         <tr>
           <td class="xid">X9</td>
           <td><strong>Stage-A projector rerun.</strong> Rebuilds the aligned projector the purge destroyed. ~58 h at the measured 10.4 s/it.</td>
-          <td>An interactive allocation. Run under <code>tmux</code>/<code>nohup</code> with <code>TORCH_HOME</code> set to depot</td>
+          <td><strong>Queued on Aug 27 as <code>ctx_alignA</code>, then cancelled before it ran</strong> (elapsed 00:00:00) and never resubmitted. Two GPUs are allocated now, so the constraint that justified deferring it no longer holds. Run under <code>tmux</code>/<code>nohup</code> with <code>TORCH_HOME</code> set to depot</td>
           <td>Unblocks X10</td>
-          <td><span class="st gpu">needs GPU</span></td>
+          <td><span class="st gpu">cancelled — not queued</span></td>
         </tr>
         <tr>
           <td class="xid">X10</td>
@@ -694,6 +830,114 @@
           <td>A real comparison</td>
           <td><span class="st gpu">unlikely</span></td>
         </tr>
+        <tr class="qgrp"><td colspan="5">Phase 4 · From the design critique — no training required</td></tr>
+        <tr>
+          <td class="xid">Y1</td>
+          <td><strong>The information budget, measured.</strong> Extend the X3 probe to put every conditioning channel on one axis: V-JEPA, DINOv2, CLIP, <em>the VAE latent</em>, and <em>the blurred input itself</em>. Turns "the bottleneck is real" from an argument into a figure.</td>
+          <td>Probe code exists; add the latent and identity baselines</td>
+          <td>The paper's central figure</td>
+          <td><span class="st code">small edit</span></td>
+        </tr>
+        <tr>
+          <td class="xid">Y2</td>
+          <td><strong>Blur sensitivity per block</strong> — the complement to X4. Regress kernel parameters (direction, length) from each block and plot against the invariance curve. Shows which blocks carry semantics and which carry the degradation.</td>
+          <td>New probe head; reuse the X4 extraction path</td>
+          <td>Splits the encoder into two roles</td>
+          <td><span class="st code">new code</span></td>
+        </tr>
+        <tr>
+          <td class="xid">Y3</td>
+          <td><strong>Data-consistency sampling</strong> on the existing BlurMap checkpoint — a measurement-projection step inside the Euler loop. <strong>The only route to a system-level result that needs no training.</strong></td>
+          <td>Kernel estimate (BlurMapExtractor exists) + a step in the sampling loop</td>
+          <td>A real dB delta, zero GPU-days of training</td>
+          <td><span class="st code">highest value</span></td>
+        </tr>
+        <tr>
+          <td class="xid">Y4</td>
+          <td><strong>Latents restored, mid-depth tap</strong> — <code>use_condition_image_for_transformer: true</code>, block&nbsp;10. The direct test of the critique's main claim, at whatever step budget fits.</td>
+          <td>X9, then a heavily shortened Stage-B</td>
+          <td>One honest arm, explicitly under-trained</td>
+          <td><span class="st gpu">only if X9 lands</span></td>
+        </tr>
+        <tr>
+          <td class="xid">Y5</td>
+          <td><strong>512&times;512 centre-crop control.</strong> Same checkpoint, same 300 images, crop matched to training. Separates the train/test resolution mismatch from the architectural bottleneck — and tells us whether the &minus;1.81&nbsp;dB is partly a plumbing artifact before any arm is baselined against it.</td>
+          <td>Submitted as job 11632229; <code>PENDING</code> on the account GRES cap, behind two of your own interactive allocations</td>
+          <td>Re-baselines every later number</td>
+          <td><span class="st gpu">queued, blocked</span></td>
+        </tr>
+        <tr>
+          <td class="xid">Y6</td>
+          <td><strong>Aspect-preserving V-JEPA resize</strong> (e.g. 1024&times;576 for 16:9, both multiples of 16). Inference-only, no retraining. The projector pools variable token counts through learned-query cross-attention, so changing resolution or aspect is architecturally free.</td>
+          <td>One function in <code>jepa_helpers.py</code></td>
+          <td>Removes a geometric misalignment</td>
+          <td><span class="st code">small edit</span></td>
+        </tr>
+        <tr class="qgrp"><td colspan="5">Phase 6 · Deblur-aware encoder — the pivot, cheapest first</td></tr>
+        <tr>
+          <td class="xid">F1</td>
+          <td><strong>Unfreeze the encoder inside Stage-A.</strong> Stage-A already regresses V-JEPA tokens onto the sharp image's VAE latents — that <em>is</em> a blur&rarr;sharp objective. Letting the encoder move, rather than only the projector, is the cheapest possible version of this pivot and reuses the whole existing path.</td>
+          <td>~15 lines: <code>ContextProjectorAlign_model.py:270</code> hard-codes <code>requires_grad_(False)</code>, and <code>setup_optimizers</code> collects only projector params. Add a config flag and a lower encoder LR</td>
+          <td>The pivot, testable today</td>
+          <td><span class="st code">start here</span></td>
+        </tr>
+        <tr>
+          <td class="xid">F2</td>
+          <td><strong>Probe the trained encoder</strong> — re-run X3 against the frozen baseline. <strong>This is the result, not a diagnostic.</strong> 17.66&nbsp;dB frozen vs a 26.3&nbsp;dB floor; anything that closes that gap is the paper's constructive contribution, measured without touching the diffusion model.</td>
+          <td>F1. Probe code exists and the baseline is already computed</td>
+          <td>The headline positive result</td>
+          <td><span class="st wait">after F1</span></td>
+        </tr>
+        <tr>
+          <td class="xid">F3</td>
+          <td><strong>Full JEPA-style blur&rarr;sharp fine-tune.</strong> Context encoder on the blurred image, EMA target encoder on the sharp one, asymmetric predictor, loss in latent space. The principled version of F1 — and the one that earns the "V-JEPA-style" description.</td>
+          <td>New training loop: EMA target, stop-gradient, predictor head, plus rank/variance logging to catch collapse early</td>
+          <td>The method contribution</td>
+          <td><span class="st code">new code</span></td>
+        </tr>
+        <tr>
+          <td class="xid">F4</td>
+          <td><strong>Stage-B on the deblur-trained encoder.</strong> Whichever of F1/F3 wins on the probe, feed it into the B2 configuration (latents on). Only worth GPU-days once F2 says the representation actually improved.</td>
+          <td>F2 showing a real gain, then a shortened Stage-B</td>
+          <td>System-level confirmation</td>
+          <td><span class="st wait">gated on F2</span></td>
+        </tr>
+        <tr class="qgrp"><td colspan="5">Phase 5 · The arm matrix — run in parallel, all sized off B1's measured s/it</td></tr>
+        <tr>
+          <td class="xid">B1</td>
+          <td><strong>Baseline, random-init projector.</strong> Latents off, last block, V-JEPA — reproduces the destroyed configuration. <strong>Launch first, today.</strong> Needs no Stage-A, so it breaks the serial dependency on X9, sizes every other arm, and is itself the untested "does Stage-A alignment help?" ablation.</td>
+          <td>Nothing — config exists</td>
+          <td>s/it for the whole plan + an ablation</td>
+          <td><span class="st code">launch now</span></td>
+        </tr>
+        <tr>
+          <td class="xid">B2</td>
+          <td><strong>Latents restored.</strong> Identical to B1 with <code>use_condition_image_for_transformer: true</code>. <strong>B1 vs B2 is the headline result</strong> — it measures the information bottleneck at system level, where the probe only measured it in feature space.</td>
+          <td>One config flag</td>
+          <td>The paper's central comparison</td>
+          <td><span class="st code">launch now</span></td>
+        </tr>
+        <tr>
+          <td class="xid">B3</td>
+          <td><strong>Mid-depth tap.</strong> Latents on, block&nbsp;10 rather than 23. Turns X4 from a descriptive curve into a <em>prediction that a training run confirms or refutes</em> — the strongest available link between the cheap analysis and the expensive system.</td>
+          <td>Small code change: tap depth is hard-coded to <code>blocks[-(n-1):]</code>; needs an explicit block-index option</td>
+          <td>Analysis validated by a system result</td>
+          <td><span class="st code">new code</span></td>
+        </tr>
+        <tr>
+          <td class="xid">B4</td>
+          <td><strong>Reblur consistency.</strong> Latents on, plus a penalty on <code>‖k̂ * x̂ − y‖</code>. The critique's strongest fix, and the one most likely to stop the model scoring below its own input.</td>
+          <td><code>DeblurDeform_model.py</code> already carries a frozen <code>reblur_net</code> pattern to copy</td>
+          <td>The fidelity fix</td>
+          <td><span class="st code">new code</span></td>
+        </tr>
+        <tr>
+          <td class="xid">B5</td>
+          <td><strong>DINOv2, matched.</strong> Same fixed configuration as B2. Restores the encoder comparison — but now under an architecture that is not handicapped, and with heads held constant so it is not the confounded comparison from before.</td>
+          <td>B2's config with the encoder swapped</td>
+          <td>An honest encoder comparison</td>
+          <td><span class="st wait">after B2 sizes</span></td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -702,7 +946,7 @@
 
 <section>
   <h2>Fourteen days</h2>
-  <p class="sub">Track A finishes on day one because everything else depends on it. The gate on Sep 1 is the moment the paper's framing gets decided.</p>
+  <p class="sub">Day 1 landed in full and day 2 landed partly. The Sep 1 gate has already been overtaken by the arithmetic — the live decision is now Aug 29: start the long pole, or drop it on purpose.</p>
   <div class="scroll">
     <table>
       <thead>
@@ -711,20 +955,23 @@
       <tbody>
         <tr class="wk"><td colspan="3">Week one — the analysis becomes the paper</td></tr>
         <tr><td class="day"><b>Thu</b> 08/27 <span style="color:var(--ok)">✓</span></td><td><span class="pill">A1–A4</span>Done. Weights and hub cache on depot, projector path fixed, two jobs queued, GoPro test set indexed.</td><td>Nothing further can be lost</td></tr>
-        <tr><td class="day"><b>Fri</b> 08/28</td><td><span class="pill">C1</span><span class="pill">D1</span>Point the queued analysis job at the 1,111 GoPro pairs and raise <code>--n-images</code>. Write the eval driver in parallel — it is still needed for whatever E produces.</td><td>Figure 1 data; eval harness</td></tr>
-        <tr><td class="day"><b>Sat</b> 08/29</td><td><span class="pill">C1</span><span class="pill">C2</span>Invariance and resolution figures across V-JEPA, DINOv2 and CLIP at dataset scale.</td><td>Figures 1–2</td></tr>
-        <tr><td class="day"><b>Sun</b> 08/30</td><td><span class="pill">C3</span>Linear-probe restorability per encoder — the experiment that makes the analysis predictive rather than descriptive.</td><td>The paper's core claim</td></tr>
-        <tr class="gate"><td class="day"><b>Mon</b> 08/31</td><td><strong>Rewrite the abstract, introduction and Section 4 for the analysis-led framing.</strong> Do not wait on E: the arithmetic has already decided this.</td><td>New paper spine</td></tr>
-        <tr><td class="day"><b>Tue</b> 09/01</td><td><span class="pill">E0</span>Check whether Stage A has started. If it has, record s/it and project the finish date honestly.</td><td>Go/no-go on any trained arm</td></tr>
-        <tr><td class="day"><b>Wed</b> 09/02</td><td><span class="pill">D2</span><span class="pill">D4</span>Score BlurMap and the regression baselines through the driver on GoPro.</td><td>The rows that do exist</td></tr>
+        <tr><td class="day"><b>Fri</b> 08/28 <span style="color:var(--risk)">◐</span></td><td><span class="pill">X1</span><span class="pill">X5</span>Analysis ran but only on 11 images; eval timed out at 136/1,111. No driver needed after all — <code>trainer.py -infer</code> does the job. Work committed and pushed.</td><td>Pipeline proven; 136 pairs banked</td></tr>
+        <tr class="gate"><td class="day"><b>Sat</b> 08/29 <span style="color:var(--ok)">✓</span></td><td>BlurMap scored: <strong>below the input floor on both datasets</strong>. New scorer written, 5.4&nbsp;GB of eval outputs on depot, two resolution bugs found. Y5 control queued but <code>PENDING</code> — <strong>the account GRES cap is held by two of your own interactive allocations, so batch jobs cannot start.</strong></td><td>The headline negative result</td></tr>
+        <tr class="gate"><td class="day"><b>Sat</b> 08/29 pm</td><td><span class="pill">F1</span>Add the unfreeze flag and encoder LR to Stage-A, then launch. Free a GRES slot and start <span class="pill">B1</span><span class="pill">B2</span> beside it, reading s/it within fifteen minutes.</td><td>The pivot running; the step budget</td></tr>
+        <tr><td class="day"><b>Sun</b> 08/30</td><td><span class="pill">F2</span><strong>Probe the trained encoder against the 17.66&nbsp;dB frozen baseline.</strong> This is the result that no longer depends on the training queue. <span class="pill">F3</span>Write the EMA/predictor loop if F1 shows movement.</td><td>The headline positive result</td></tr>
+        <tr><td class="day"><b>Sat</b> 08/29</td><td><span class="pill">Y1</span>Add the VAE-latent and raw-input baselines to the probe — the figure that makes the bottleneck argument without any training at all.</td><td>Central figure</td></tr>
+        <tr><td class="day"><b>Sun</b> 08/30</td><td><span class="pill">B3</span><span class="pill">B4</span>Write the tap-depth option and the reblur term, then launch B3 and B4 beside the others. <span class="pill">Y3</span>Data-consistency on BlurMap in parallel.</td><td>All arms running; training-free dB delta</td></tr>
+        <tr><td class="day"><b>Mon</b> 08/31</td><td>Write the new spine: information budget &rarr; where the information lives &rarr; training-free repair. Abstract and intro first.</td><td>Paper spine, evidence-backed</td></tr>
+        <tr><td class="day"><b>Tue</b> 09/01</td><td><span class="pill">X9</span>Stage-A lands. Launch the aligned counterpart of whichever arm is winning — B1 vs that arm is then a clean test of whether Stage-A alignment earns its 72&nbsp;hours. <strong>Last day to start anything that must be evaluated.</strong></td><td>Alignment ablation; hard start cutoff</td></tr>
+        <tr><td class="day"><b>Wed</b> 09/02</td><td><span class="pill">X7</span><span class="pill">X8</span>Bounded evaluation: BlurMap and the regression baselines on GoPro, with the count capped and a walltime that matches 53.7&nbsp;s/image.</td><td>The rows that exist</td></tr>
         <tr class="wk"><td colspan="3">Week two — writing</td></tr>
-        <tr><td class="day"><b>Thu</b> 09/03</td><td>Method section rewritten around the two-stage system as instantiation, not as the headline result.</td><td>Method final</td></tr>
-        <tr><td class="day"><b>Fri</b> 09/04</td><td>Qualitative figure from whatever eval dumps exist. Results prose.</td><td>Figure 3; Results</td></tr>
-        <tr><td class="day"><b>Sat</b> 09/05</td><td><span class="pill">E1</span>If Stage B is running, checkpoint it and evaluate the latest step rather than waiting for 50K.</td><td>Partial arm, honestly labelled</td></tr>
-        <tr><td class="day"><b>Sun</b> 09/06</td><td>Final tables. Audit every number against its eval dump — the placeholder history makes this non-optional.</td><td>No unsourced numbers</td></tr>
+        <tr><td class="day"><b>Thu</b> 09/03</td><td>Method section: present ContextFlux as the instantiation and the ablation, not as a competitive restorer.</td><td>Method final</td></tr>
+        <tr><td class="day"><b>Fri</b> 09/04</td><td>Figures final. Results prose against real numbers only.</td><td>Figures 1–4</td></tr>
+        <tr><td class="day"><b>Sat</b> 09/05</td><td><span class="pill">Y4</span>If a shortened arm is running, checkpoint and evaluate wherever it has reached. Label the step count in the caption.</td><td>Partial arm, honestly labelled</td></tr>
+        <tr><td class="day"><b>Sun</b> 09/06</td><td>Audit every number against its dump. Discussion section: reblur consistency, one-step distillation, burst and metadata priors as the stated next steps.</td><td>No unsourced numbers</td></tr>
         <tr><td class="day"><b>Mon</b> 09/07</td><td>Cut to four pages plus references. Citation check on the four flagged entries.</td><td>Format-complete</td></tr>
-        <tr><td class="day"><b>Tue</b> 09/08</td><td>Internal review pass and advisor read.</td><td>Revisions</td></tr>
-        <tr><td class="day"><b>Wed</b> 09/09</td><td>Freeze the PDF. Confirm the actual ICASSP 2027 deadline — this week, not later.</td><td>Submission candidate</td></tr>
+        <tr><td class="day"><b>Tue</b> 09/08</td><td>Internal review and advisor read.</td><td>Revisions</td></tr>
+        <tr><td class="day"><b>Wed</b> 09/09</td><td>Freeze the PDF. Confirm the real ICASSP 2027 deadline — this weekend, not later.</td><td>Submission candidate</td></tr>
       </tbody>
     </table>
   </div>
@@ -733,9 +980,31 @@
 <section>
   <h2>The gate moved to today</h2>
   <div class="callout">
-    <p>The Sep 1 gate was designed around a choice between a full encoder comparison and an analysis-led fallback. <strong>The purge has already made that choice.</strong> Rebuilding even one arm costs 2.4 days of Stage A plus 3–6 days of Stage B, sequentially, on GPUs that are not currently allocated. Four arms is arithmetically impossible in thirteen days, so the paper cannot claim a controlled comparison across V-JEPA, DINOv2, CLIP and VL-JEPA.</p>
-    <p><strong>Plan for the analysis-led paper now, not on Sep 1.</strong> Its thesis: blur-robustness of a self-supervised representation predicts its value as conditioning for a frozen generative restorer — carried by C1's dataset-scale invariance analysis and C3's linear-probe restorability across all three encoders, both of which are cheap, unaffected by the purge, and comparable across encoders <em>without</em> training a diffusion model per encoder. The system section then presents ContextFlux as the instantiation, with whatever arms E0 and E1 deliver as evidence rather than as the whole argument.</p>
-    <p>That reframing is not a consolation prize. An encoder comparison at N=1 per arm on 11 validation images was never going to separate anyway; a predictive analysis across hundreds of image pairs is the stronger claim, and it is the one the surviving evidence can actually support. <strong>The abstract and Section 4 should be rewritten this week, not after E1 resolves.</strong></p>
+    <p><strong>GPU hours are no longer the constraint — wall-clock is.</strong> More GPUs let arms run <em>beside</em> each other, not faster individually, so the binding limits are now: the Sep&nbsp;9 freeze, the fact that Stage-B s/it has still never been measured, and code that does not exist yet. An arm started after ~Sep&nbsp;3 cannot be trained and evaluated in time no matter how much hardware is behind it.</p>
+    <p>That reorders the first move. <strong>Launch one arm immediately with a randomly-initialised projector and read s/it within fifteen minutes.</strong> It needs no Stage-A, so it removes the serial dependency on X9 entirely, it sizes the step budget for every other arm, and it doubles as the "does Stage-A alignment help at all?" ablation — which has never actually been tested.</p>
+    <p><strong>The encoder pivot outranks the arm matrix.</strong> F1 is ~15 lines against an existing training path, it targets the one number the whole analysis rests on, and F2 validates it with a probe that needs no diffusion sampling at all. The B-arms test whether the <em>architecture</em> wastes information; F1/F3 test whether the <em>representation</em> can be made to carry it. The second question is both cheaper to answer and closer to the paper's thesis — run it first, and let the arms run beside it rather than ahead of it.</p>
+    <p><strong>Spend the remaining hardware on hypotheses, not on more encoders.</strong> The temptation is to rebuild the four-encoder comparison the purge destroyed. That answers a weaker question than the one the critique opened up. The higher-value factorial holds the encoder fixed and varies what the architecture is missing — above all <em>latents on versus off</em>, which measures the information bottleneck at the system level rather than through a linear probe.</p>
+    <p><strong>The thesis should move with the evidence.</strong> "Blur-robustness predicts conditioning value" is no longer quite what the data says — X3 refused to separate V-JEPA from DINOv2, and the critique explains why that was always the wrong axis. The stronger claim the measurements actually support: <em>what is the information budget of a self-supervised representation used as the conditioning channel of a frozen generative restorer, and what does that prior need beyond semantics?</em> Y1 makes it a figure by putting the VAE latent and the raw degraded input on the same probe axis; X4 and Y2 split the encoder into semantic and degradation-carrying roles; Y3 shows what a measurement-consistency step buys without any training at all.</p>
+    <p>A negative result that is measured, explained and then partly repaired is a better ICASSP paper than a win claimed on eleven images. The honest arc is: semantic conditioning alone is information-limited (Y1) &rarr; here is where in the encoder the missing information lives (X4, Y2) &rarr; here is a training-free fix that recovers part of it (Y3). <strong>Write that spine now; do not wait on any training run.</strong></p>
+  </div>
+</section>
+
+<section>
+  <h2>The encoder pivot happened, but not as F1–F3 sketched it</h2>
+  <p class="sub">The day-by-day table above proposed unfreezing V-JEPA inside Stage-A. What actually started the evening of 08/29 and is still running is a different, separate training path: adapting the FLUX.2&nbsp;Klein VAE's own encoder, not V-JEPA — the VAE's latent space is fidelity-preserving by construction, which sidesteps the invariance-vs-information tension the whole critique is built on, instead of asking an abstraction-oriented encoder to also carry fidelity. This section supersedes F1–F3 in that table.</p>
+
+  <div class="stats">
+    <div class="stat ok-n"><span class="n">128</span><span class="k">LoRA rank, up from 4 — rank 4 plateaued at ~0.25 latent loss after ~1,000 steps on both arms</span></div>
+    <div class="stat ok-n"><span class="n">12.35%</span><span class="k">of the VAE now trainable (11.8M / 95.9M params), up from 0.44%</span></div>
+    <div class="stat warn"><span class="n">2</span><span class="k">arms running head-to-head: patched (clean context + one blurred block) vs. full-frame (no context at all)</span></div>
+    <div class="stat alarm"><span class="n">0</span><span class="k">deblurring dB numbers yet — this track is upstream of that; only latent loss and block-region PSNR so far</span></div>
+  </div>
+
+  <div class="callout">
+    <p><strong>The mechanism.</strong> A new model, <code>VAEBlurAlign_model</code>, LoRA-adapts only the VAE's encoder (decoder frozen throughout, exactly as Stage&nbsp;B and everything downstream already assumes). Each training sample is one image with one rectangular sub-patch swapped for its blurred counterpart — most of the frame stays clean GT context, one block is corrupted — mirroring how JEPA actually trains (context patches visible, target patches predicted) rather than "encode a fully blurred image and match it everywhere," which was this idea's first, incorrect draft. The latent loss is computed <em>only</em> at the corrupted block's token positions, using the clean surrounding context implicitly available to the (convolutional, spatially non-local) encoder — the actual point of the exercise.</p>
+    <p><strong>Two comparison arms, everything else held equal.</strong> <code>VAEBlurAlign.yml</code> (patched, 30–50% of the crop replaced) vs. <code>VAEBlurAlign_fullblur_baseline.yml</code> (the identical code path with the replaced block forced to cover the entire crop — zero clean context) is the ablation: does giving the encoder clean context to condition on actually help, or does it deblur just as well with none? At rank 4 both plateaued at nearly the same latent loss, so the question was still unanswered — undertrained, not yet a real result. That plateau is what motivated the rank bump above.</p>
+    <p><strong>Two real bugs caught before they wasted a GPU-day.</strong> The dataset first synthesized its own blur on the fly via a motion-kernel generator, using the kernel class's own default support (8px) rather than the value this repo's other blur dataset actually uses (32px) — produced blur so mild it was visually indistinguishable from GT (31.6&nbsp;dB vs. the ~27&nbsp;dB this project's own floors otherwise sit at). Fixed by dropping synthesized blur entirely and loading Deblur-MIOR's own existing <code>blur/</code> folder, paired by filename with <code>gt/</code> — it was on disk the whole time, no generation needed. Separately, after adding randomized crop aspect ratios (below), the full-frame baseline's "cover everything" block briefly stopped covering non-square crops correctly (a square-derived block leaves GT strips on the long edge) — caught by comparing its floor metric against the patched arm's before either result was trusted.</p>
+    <p><strong>Crops now vary in shape, not just content.</strong> Each crop's area is held near 512² but its aspect ratio (portrait to landscape, 0.5–2.0) is randomized per sample, so the encoder sees more than square inputs during training — it needs to handle arbitrary aspect ratios at inference. Because differently-shaped tensors can't collate into a batch by default, this forced <code>batch_size: 1</code> (gradient accumulation holds the effective batch at 2) — not a memory ceiling (each run uses ~4.5&nbsp;GB of the shared 80&nbsp;GB A100, alongside the NAFNet baseline's 31.5&nbsp;GB) but a real constraint on using the GPU's spare capacity. A pad-to-common-shape collate function would lift it; not yet built.</p>
   </div>
 </section>
 
@@ -759,11 +1028,23 @@
       <h3>GT-oracle Stage B</h3>
       <p>A genuinely interesting upper bound, and the first thing to promote if the queue clears unexpectedly. Not worth displacing E1.</p>
     </div>
+    <div>
+      <h3>Reblur-consistency training</h3>
+      <p>The highest-value fix in the critique — penalise <code>‖k̂ * x̂ − y‖</code> — but it is a training change, and there is no training budget left. Name it as the next step, with the cycle-loss code that already exists as the starting point.</p>
+    </div>
+    <div>
+      <h3>One-step distillation</h3>
+      <p>53.7&nbsp;s/image is research-only, and few-step models usually win on distortion metrics for restoration. OSEDiff machinery is in the repo. Out of scope for eleven days.</p>
+    </div>
+    <div>
+      <h3>Burst input, EXIF and field-varying PSF</h3>
+      <p>What a camera actually offers: multi-frame makes the problem far better posed, exposure time bounds the blur length, and the DFlat/DeepLens code already models field-varying PSFs. All are the paper's future work, not its content.</p>
+    </div>
   </div>
 </section>
 
 <footer>
-  Cluster state, Aug 27 2026, after executing Day 1: four jobs pending on the <code>stanchan</code> GRES cap with none running; Stage-A throughput measured at 10.4 s/it; <strong>one</strong> of seven ContextFlux runs still holds weights, now on depot alongside the V-JEPA hub cache; 1,111 GoPro pairs indexed for evaluation. Stage-B step time remains unmeasured and gates everything in Track E — measure it in the first fifteen minutes, not on Sep 6.
+  Status Aug 30, 2026 — day 4 of 14. ContextFlux-BlurMap's headline numbers are unchanged (25.67&nbsp;dB vs. a 27.48&nbsp;dB floor on 300 GoPro pairs; 25.76 vs. 28.69 on MIOR val). The encoder pivot landed as a new track rather than as F1–F3's Stage-A unfreeze: <code>VAEBlurAlign_model</code> LoRA-adapts the VAE's own encoder with a JEPA-style block-replacement objective (real blur spliced into a clean crop, loss on the replaced region only), running two arms — patched-with-context vs. full-frame-no-context — to test whether clean surrounding context actually helps. Rank-4 LoRA plateaued identically on both arms after ~1,000 steps; now re-running both at rank 128 (12.35% of the VAE trainable) with randomized crop aspect ratios so the encoder isn't only ever trained on squares. No deblurring dB numbers yet from this track — it is upstream of that, and the patched-vs-full-frame question is still open. Manuscript still does not contain any of these system-level numbers.
 </footer>
 
 </div>

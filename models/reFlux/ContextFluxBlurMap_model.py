@@ -37,7 +37,7 @@ from models.LucidFlux.jepa_helpers import (
     vjepa_from_unit_tensor,
 )
 from models.LucidFlux.src.flux.lucidflux import load_precomputed_embeddings, load_swinir
-from utils import log_image, log_metrics
+from utils import log_image, log_metrics, save_eval_png
 
 from .blur_adapters import (
     BlurMapExtractor,
@@ -669,6 +669,8 @@ class ContextFluxBlurMap_model(BaseModel):
         gt_np = (gt.cpu().numpy() * 0.5 + 0.5).clip(0, 1)
         out_np = (out.cpu().float().numpy() * 0.5 + 0.5).clip(0, 1)
 
+        names = batch.get("name") if isinstance(batch, dict) else None
+
         for i in range(bsz):
             idx += 1
             images = [lq_np[i], gt_np[i], out_np[i]]
@@ -693,4 +695,15 @@ class ContextFluxBlurMap_model(BaseModel):
                 self.accelerator,
                 self.global_step,
             )
+
+            # Under -infer, also dump a lossless PNG named after the real sample so a
+            # metrics script can match predictions back to GT by filename instead of by
+            # position in a (possibly truncated-by-max_val_steps) directory listing.
+            if not self.opt.is_train:
+                stem = (
+                    os.path.splitext(os.path.basename(names[i]))[0]
+                    if names is not None
+                    else f"{idx:05d}"
+                )
+                save_eval_png(self.opt.path.experiments_root, "eval_preds", stem, out_np[i])
         return idx
