@@ -36,6 +36,8 @@ datasets:
     crop_size: 512
     batch_size: 2
     patches_per_group: 2
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
     split_range: [0, 1]
     num_worker_per_gpu: 2  # nonzero on purpose: exercises the worker-sharding path before the full run does
 
@@ -48,6 +50,8 @@ datasets:
     crop_size: 512
     batch_size: 2
     patches_per_group: 1
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
     split_range: [99, 100]
     num_worker_per_gpu: 0
 

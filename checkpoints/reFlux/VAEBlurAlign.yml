@@ -44,6 +44,13 @@ datasets:
     crop_size: 512
     batch_size: 4
     patches_per_group: 10
+    # Reject block placements whose blur-vs-GT signal is weaker than the
+    # frozen VAE's own decode(encode(x)) round-trip noise (~0.0005-0.0019 MSE
+    # measured directly) -- below that, no trained encoder can ever beat the
+    # "do nothing" floor, since the round trip alone costs more than the blur
+    # did. See dataset/fullres_patchifier_dataset.py's docstring/comments.
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
     split_range: [0, 98]
     num_worker_per_gpu: 4
 
@@ -56,6 +63,8 @@ datasets:
     crop_size: 512
     batch_size: 4
     patches_per_group: 1
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
     split_range: [98, 100]
     num_worker_per_gpu: 0
 
