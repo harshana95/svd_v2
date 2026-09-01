@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from diffusers import FlowMatchEulerDiscreteScheduler, Flux2Transformer2DModel
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, IterableDataset, Subset
 from tqdm import tqdm
 
 from models.base_model import BaseModel
@@ -290,14 +290,20 @@ class Flux2KleinLoRA_model(BaseModel):
         for model in self.models:
             model.eval()
 
-        dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(3)), 
-                                shuffle=False, 
-                                batch_size=1)
-        print(f"Tesing using {len(dataloader)} training data...")
-        dataloader = self.accelerator.prepare(dataloader)
-        for batch in dataloader:
-            idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
-        self.accelerator._dataloaders.remove(dataloader)
+        # Subset() requires a map-style Dataset (needs __getitem__ by index);
+        # an IterableDataset like FullResPatchifierDataset can't support this
+        # extra train-set sanity check, so skip straight to the real val set.
+        if isinstance(self.dataloader.dataset, IterableDataset):
+            print("Skipping training-data sanity check (IterableDataset train set)...")
+        else:
+            dataloader = DataLoader(Subset(self.dataloader.dataset, np.arange(3)),
+                                    shuffle=False,
+                                    batch_size=1)
+            print(f"Tesing using {len(dataloader)} training data...")
+            dataloader = self.accelerator.prepare(dataloader)
+            for batch in dataloader:
+                idx = self.validate_step(batch, idx, self.dataloader.dataset.lq_key, self.dataloader.dataset.gt_key)
+            self.accelerator._dataloaders.remove(dataloader)
 
         print(f"Tesing using {len(self.test_dataloader)} testing data...")
         for batch in tqdm(self.test_dataloader):

@@ -1,12 +1,12 @@
-# Smoke test only -- tiny step counts to verify the ContextFluxBaseline_model
-# + FullResPatchifierDataset + IterableDataset-aware setup_dataloaders combo
-# runs end-to-end before a real launch of ContextFluxBaseline_SimpleLoRA.yml.
-#   python trainer.py -opt checkpoints/reFlux/ContextFluxBaseline_SimpleLoRA_smoke.yml -test
+# Smoke test only -- tiny step counts to verify Flux2KleinLoRA_model +
+# FullResPatchifierDataset runs end-to-end before a real launch of
+# Flux2KleinLoRA_SimpleBaseline.yml.
+#   python trainer.py -opt checkpoints/reFlux/Flux2KleinLoRA_SimpleBaseline_smoke.yml -test
 
 name: Motion
-model_type: ContextFluxBaseline_model
+model_type: Flux2KleinLoRA_model
 tracker_project_name: Motion
-experiment_key: ContextFluxBaseline_SimpleLoRA_smoke
+experiment_key: Flux2KleinLoRA_SimpleBaseline_smoke
 
 is_train: true
 report_to: comet_ml
@@ -20,18 +20,10 @@ pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
 revision: ~
 variant: ~
 
-use_vjepa_condition: false
-use_vljepa_condition: false
-use_dino_condition: false
-use_clip_condition: false
-use_condition_image_for_transformer: true
-swinir_model_path: ~
-
-precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
-
 guidance_scale: 1.0
 discrete_flow_shift: 3.1582
 transformer_gradient_checkpointing: true
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
 
 datasets:
   train:
@@ -68,7 +60,6 @@ path:
   resume_from_checkpoint: ~
 
 train:
-  lora_finetune: true
   lora_rank: 128
   lora_alpha: 256
   lora_dropout: 0.0
