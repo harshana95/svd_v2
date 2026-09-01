@@ -1,0 +1,131 @@
+# Phase 2 of the VAEBlurAlign investigation: LoRA-fine-tune FLUX.2 Klein's
+# transformer to use the phase-1 trained VAE encoder's tokens as conditioning,
+# instead of relying on that VAE's own (frozen, fairly weak) decoder.
+# See models/reFlux/VAEBlurAlignFluxLoRA_model.py's docstring for the design.
+#
+# vae_checkpoint_path below points at phase 1's FINAL checkpoint-6000 (phase 1
+# has finished). Note: the phase-2 run launched from this file before phase 1
+# finished loaded checkpoint-2400 at its own startup (already in GPU memory,
+# unaffected by that checkpoint later being deleted by
+# checkpoints_total_limit's cleanup) -- this path only matters for future
+# fresh launches of this config.
+#
+# batch_size=32 measured directly (memcheck_phase2.py, same forward/backward
+# path as optimize_parameters): 44.7GB allocated / 52.2GB reserved on this
+# dedicated 80GB GPU, ~28GB headroom -- batch=24 used 43.0GB reserved, batch=8
+# only 25.0GB, so this architecture (4B transformer, gradient-checkpointed)
+# scales much more gently with batch size than VAEBlurAlign's pure-VAE path did.
+#
+# Run a short smoke test first (max_train_steps small) before a real launch:
+#   python trainer.py -opt checkpoints/reFlux/VAEBlurAlignFluxLoRA.yml -test
+
+name: Motion
+model_type: VAEBlurAlignFluxLoRA_model
+tracker_project_name: Motion
+experiment_key: VAEBlurAlignFluxLoRA
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: true
+
+# Phase-1 trained encoder to use as the conditioning source.
+vae_checkpoint_path: /scratch/gilbreth/wweligam/experiments/Motion/VAEBlurAlign_2026_08_31_15_07_57/checkpoint-6000/AutoencoderKLFlux2_1
+vae_lora_rank: 128  # must match the rank phase 1 actually trained with, or load_state_dict(strict=True) fails
+vae_trainable: false  # true -> keep adapting cond_vae's LoRA jointly with the FLUX LoRA below
+
+datasets:
+  train:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: true
+    crop_size: 512
+    batch_size: 32
+    patches_per_group: 10
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
+    split_range: [0, 98]
+    num_worker_per_gpu: 4
+
+  val:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: false
+    crop_size: 512
+    # Kept smaller than train: validation runs a full num_inference_steps
+    # diffusion sampling loop per batch, not a single forward/backward, so
+    # it's far more expensive per-sample -- no need to max out memory here.
+    batch_size: 4
+    patches_per_group: 1
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
+    split_range: [98, 100]
+    num_worker_per_gpu: 0
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_checkpoint: ~
+
+train:
+  lora_rank: 128
+  lora_alpha: 256
+  lora_dropout: 0.0
+  # lora_target_modules: [to_q, to_k, to_v, to_out.0, proj_out, ff.net, context_embedder, x_embedder]
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 1e-4
+    # Only read when vae_trainable=true; falls back to learning_rate otherwise.
+    cond_vae_learning_rate: 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant_with_warmup
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  # gradient_accumulation_steps=1: batch_size=32 alone is already the real,
+  # memory-probed parallel batch (see the top-of-file note) -- no accumulation
+  # needed on top of it.
+  gradient_accumulation_steps: 1
+  num_train_epochs: 150
+  batch_size: 32
+  max_train_steps: 20000
+  validation_steps: 200
+  checkpointing_steps: 500
+  checkpoints_total_limit: 3
+  patched: false
+  check_speed: false
+
+val:
+  save_images: true
+  num_inference_steps: 28
+  batch_size: 4  # not read for FullResPatchifierDataset -- see datasets.val.batch_size
+  max_val_steps: 8
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

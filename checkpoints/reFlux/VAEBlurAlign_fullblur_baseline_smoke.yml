@@ -34,13 +34,18 @@ datasets:
     lq_folder: blur
     is_train: true
     crop_size: 512
-    batch_size: 2
+    batch_size: 64  # matches the real config -- smoke-tests the bigger batch through the full pipeline
     patches_per_group: 2
     replace_ratio_min: 1.0
     replace_ratio_max: 1.0
     block_aspect_min: 1.0
     block_aspect_max: 1.0
-    split_range: [0, 1]
+    # [0,1] (77 images) used to be enough, but num_worker_per_gpu=2 shards
+    # BEFORE batching -- each worker only saw ~38 images, less than
+    # batch_size=64, so n_groups=0 for both shards and the dataloader yielded
+    # nothing ("Batch does not contain any data"). Needs >= batch_size*2
+    # images; [0,3] (~232 images, ~116/worker) covers that with margin.
+    split_range: [0, 3]
     num_worker_per_gpu: 2  # nonzero on purpose: exercises the worker-sharding path before the full run does
 
   val:
@@ -81,9 +86,9 @@ train:
     lr_warmup_steps: 1
     lr_num_cycles: 1
     lr_power: 1.0
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 1
   num_train_epochs: 50
-  batch_size: 2
+  batch_size: 64
   max_train_steps: 3
   validation_steps: 2
   checkpointing_steps: 100

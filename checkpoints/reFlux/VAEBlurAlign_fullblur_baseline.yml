@@ -51,7 +51,11 @@ datasets:
     lq_folder: blur
     is_train: true
     crop_size: 512
-    batch_size: 4
+    # See VAEBlurAlign.yml for the memory measurement behind batch_size=64
+    # (~49.1GB reserved, ~31GB headroom). Runs on its own dedicated GPU
+    # (k050) rather than sharing k004 with the patched arm, to avoid compute
+    # contention on top of memory sharing.
+    batch_size: 64
     patches_per_group: 10
     replace_ratio_min: 1.0
     replace_ratio_max: 1.0
@@ -100,14 +104,16 @@ train:
     lr_warmup_steps: 15
     lr_num_cycles: 1
     lr_power: 1.0
-  # See VAEBlurAlign.yml for why this is batch_size=4 (real, via
-  # FullResPatchifierDataset) * gradient_accumulation_steps=4 = effective 16.
-  gradient_accumulation_steps: 4
+  # See VAEBlurAlign.yml for why batch_size=64/grad_accum=1 (effective batch
+  # 64, up from 16) -- maximizing real GPU-parallel batch size.
+  gradient_accumulation_steps: 1
+  # See VAEBlurAlign.yml for why max_train_steps/validation_steps/
+  # checkpointing_steps are scaled 8x for a real convergence run.
   num_train_epochs: 150
-  batch_size: 4
-  max_train_steps: 750
-  validation_steps: 25
-  checkpointing_steps: 75
+  batch_size: 64
+  max_train_steps: 6000
+  validation_steps: 200
+  checkpointing_steps: 600
   checkpoints_total_limit: 3
   patched: false
   check_speed: false

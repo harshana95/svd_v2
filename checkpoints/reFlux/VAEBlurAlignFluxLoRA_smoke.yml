@@ -1,0 +1,107 @@
+# Smoke test only -- tiny step counts to verify VAEBlurAlignFluxLoRA_model
+# runs end-to-end (cond_vae checkpoint loading, conditioning-token
+# concatenation, flow-matching loss, LoRA optimizer step, sampling-based
+# validation, checkpoint save) before a real launch of VAEBlurAlignFluxLoRA.yml.
+#   python trainer.py -opt checkpoints/reFlux/VAEBlurAlignFluxLoRA_smoke.yml -test
+
+name: Motion
+model_type: VAEBlurAlignFluxLoRA_model
+tracker_project_name: Motion
+experiment_key: VAEBlurAlignFluxLoRA_smoke
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: true
+
+vae_checkpoint_path: /scratch/gilbreth/wweligam/experiments/Motion/VAEBlurAlign_2026_08_31_15_07_57/checkpoint-6000/AutoencoderKLFlux2_1
+vae_lora_rank: 128
+vae_trainable: false
+
+datasets:
+  train:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: true
+    crop_size: 512
+    batch_size: 32  # matches the real config -- smoke-tests the memory-probed batch through the full pipeline
+    patches_per_group: 2
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
+    split_range: [0, 5]
+    num_worker_per_gpu: 0
+
+  val:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: false
+    crop_size: 512
+    batch_size: 4
+    patches_per_group: 1
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
+    split_range: [99, 100]
+    num_worker_per_gpu: 0
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_checkpoint: ~
+
+train:
+  lora_rank: 128
+  lora_alpha: 256
+  lora_dropout: 0.0
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 1e-4
+    cond_vae_learning_rate: 1e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant
+    lr_warmup_steps: 1
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 50
+  batch_size: 32
+  max_train_steps: 3
+  validation_steps: 2
+  checkpointing_steps: 100
+  checkpoints_total_limit: 1
+  patched: false
+  check_speed: false
+
+val:
+  save_images: true
+  num_inference_steps: 4  # tiny -- this is a plumbing smoke test, not an image-quality check
+  batch_size: 2
+  max_val_steps: 2
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

@@ -427,17 +427,17 @@
 <div class="wrap">
 
 <header class="mast">
-  <p class="eyebrow">Experiment plan · Aug 27 – Sep 9, 2026 · status Aug 30, 2026</p>
+  <p class="eyebrow">Experiment plan · Aug 27 – Sep 9, 2026 · status Aug 31, 2026</p>
   <h1>Fourteen Days to ICASSP</h1>
-  <p class="standfirst">What to run, in what order, for the JEPA-conditioned Flux deblurring paper — planned against the compute and the data that actually survive, not what the directory listings suggested. Executing Day 1 turned up a scratch purge that had already destroyed the trained models, which changes what this paper can claim.</p>
+  <p class="standfirst">Reprioritized Aug 31: JEPA-token-into-Flux conditioning is confirmed information-limited (Sec.&nbsp;4's probe, the trained system's negative dB) and now stays only as motivation and a cautionary ablation, not the main line of work. <strong>VAEBlurAlign — LoRA-training the Flux VAE's own encoder to be blur-aware</strong> is the primary technical thrust instead, because the VAE's latent space is near-lossless where V-JEPA's is lossy by design. This page tracks that pivot, the literature baselines an ICASSP submission needs, and what's still running on the cluster.</p>
 </header>
 
 <div class="stats">
-  <div class="stat alarm"><span class="n">1 of 7</span><span class="k">runs still has weights — the purge destroyed the rest</span></div>
-  <div class="stat ok-n"><span class="n">n</span><span class="k">GPUs available on request — arms can now run in parallel</span></div>
-  <div class="stat alarm"><span class="n">&minus;1.8</span><span class="k">dB below the blurred input on 300 GoPro pairs — measured, not projected</span></div>
-  <div class="stat ok-n"><span class="n">136</span><span class="k">GoPro pairs already inferred and on disk, of 1,111 indexed</span></div>
-  <div class="stat warn"><span class="n">11</span><span class="k">days to a frozen PDF; a full Stage-B needs 3–12 of them</span></div>
+  <div class="stat alarm"><span class="n">&minus;1.8</span><span class="k">dB below the blurred input, ContextFlux-BlurMap on 300 GoPro pairs — why the pivot happened</span></div>
+  <div class="stat ok-n"><span class="n">2/2</span><span class="k">GPUs now running VAEBlurAlign — patched context (k004) vs. full-frame baseline (k050)</span></div>
+  <div class="stat warn"><span class="n">41%</span><span class="k">through the 6,000-step convergence run — patched still statistically tied with the no-context arm</span></div>
+  <div class="stat"><span class="n">42</span><span class="k">dB VAE self round-trip fidelity — why this substrate beats V-JEPA's 17.7&nbsp;dB probe ceiling</span></div>
+  <div class="stat warn"><span class="n">9</span><span class="k">days to a frozen PDF — literature baselines are not all launched yet</span></div>
 </div>
 
 <section>
@@ -990,21 +990,157 @@
 </section>
 
 <section>
-  <h2>The encoder pivot happened, but not as F1–F3 sketched it</h2>
-  <p class="sub">The day-by-day table above proposed unfreezing V-JEPA inside Stage-A. What actually started the evening of 08/29 and is still running is a different, separate training path: adapting the FLUX.2&nbsp;Klein VAE's own encoder, not V-JEPA — the VAE's latent space is fidelity-preserving by construction, which sidesteps the invariance-vs-information tension the whole critique is built on, instead of asking an abstraction-oriented encoder to also carry fidelity. This section supersedes F1–F3 in that table.</p>
-
-  <div class="stats">
-    <div class="stat ok-n"><span class="n">128</span><span class="k">LoRA rank, up from 4 — rank 4 plateaued at ~0.25 latent loss after ~1,000 steps on both arms</span></div>
-    <div class="stat ok-n"><span class="n">12.35%</span><span class="k">of the VAE now trainable (11.8M / 95.9M params), up from 0.44%</span></div>
-    <div class="stat warn"><span class="n">2</span><span class="k">arms running head-to-head: patched (clean context + one blurred block) vs. full-frame (no context at all)</span></div>
-    <div class="stat alarm"><span class="n">0</span><span class="k">deblurring dB numbers yet — this track is upstream of that; only latent loss and block-region PSNR so far</span></div>
-  </div>
+  <h2>VAEBlurAlign — the primary track now</h2>
+  <p class="sub">Not F1–F3's "unfreeze V-JEPA inside Stage-A." A separate, more direct training path: LoRA-adapt the FLUX.2&nbsp;Klein VAE's own encoder — the same latent space the transformer already consumes natively, no cross-space projector to misalign. Started 08/29 evening, still running. Supersedes the JEPA-conditioning tracks below as the paper's constructive contribution.</p>
 
   <div class="callout">
-    <p><strong>The mechanism.</strong> A new model, <code>VAEBlurAlign_model</code>, LoRA-adapts only the VAE's encoder (decoder frozen throughout, exactly as Stage&nbsp;B and everything downstream already assumes). Each training sample is one image with one rectangular sub-patch swapped for its blurred counterpart — most of the frame stays clean GT context, one block is corrupted — mirroring how JEPA actually trains (context patches visible, target patches predicted) rather than "encode a fully blurred image and match it everywhere," which was this idea's first, incorrect draft. The latent loss is computed <em>only</em> at the corrupted block's token positions, using the clean surrounding context implicitly available to the (convolutional, spatially non-local) encoder — the actual point of the exercise.</p>
-    <p><strong>Two comparison arms, everything else held equal.</strong> <code>VAEBlurAlign.yml</code> (patched, 30–50% of the crop replaced) vs. <code>VAEBlurAlign_fullblur_baseline.yml</code> (the identical code path with the replaced block forced to cover the entire crop — zero clean context) is the ablation: does giving the encoder clean context to condition on actually help, or does it deblur just as well with none? At rank 4 both plateaued at nearly the same latent loss, so the question was still unanswered — undertrained, not yet a real result. That plateau is what motivated the rank bump above.</p>
-    <p><strong>Two real bugs caught before they wasted a GPU-day.</strong> The dataset first synthesized its own blur on the fly via a motion-kernel generator, using the kernel class's own default support (8px) rather than the value this repo's other blur dataset actually uses (32px) — produced blur so mild it was visually indistinguishable from GT (31.6&nbsp;dB vs. the ~27&nbsp;dB this project's own floors otherwise sit at). Fixed by dropping synthesized blur entirely and loading Deblur-MIOR's own existing <code>blur/</code> folder, paired by filename with <code>gt/</code> — it was on disk the whole time, no generation needed. Separately, after adding randomized crop aspect ratios (below), the full-frame baseline's "cover everything" block briefly stopped covering non-square crops correctly (a square-derived block leaves GT strips on the long edge) — caught by comparing its floor metric against the patched arm's before either result was trusted.</p>
-    <p><strong>Crops now vary in shape, not just content.</strong> Each crop's area is held near 512² but its aspect ratio (portrait to landscape, 0.5–2.0) is randomized per sample, so the encoder sees more than square inputs during training — it needs to handle arbitrary aspect ratios at inference. Because differently-shaped tensors can't collate into a batch by default, this forced <code>batch_size: 1</code> (gradient accumulation holds the effective batch at 2) — not a memory ceiling (each run uses ~4.5&nbsp;GB of the shared 80&nbsp;GB A100, alongside the NAFNet baseline's 31.5&nbsp;GB) but a real constraint on using the GPU's spare capacity. A pad-to-common-shape collate function would lift it; not yet built.</p>
+    <p><strong>Why the VAE and not V-JEPA.</strong> Sec.&nbsp;4's probe put a number on the problem: a frozen V-JEPA representation of a blurred image decodes to 17.7&nbsp;dB against a 26.3&nbsp;dB blurred-input floor — the representation is lossy because its predictive objective made it lossy, discarding exactly the high-frequency content deblurring exists to recover. The Flux VAE has no such ceiling: its own <code>decode(encode(x))</code> round trip on a clean image costs just 42.4&nbsp;dB (measured, GoPro probe, n=50), and a <em>linear</em> probe from a blurred image's VAE latents back to the sharp image already reaches 26.85&nbsp;dB against a 26.86&nbsp;dB floor — essentially matching "do nothing" with a linear map and zero training. That is real headroom: a nonlinearly-trained encoder has somewhere to go that V-JEPA's channel never had.</p>
+    <p><strong>The mechanism.</strong> <code>VAEBlurAlign_model</code> LoRA-adapts only the encoder (decoder frozen, matching every downstream assumption). Each training sample splices one real blurred block from <code>Deblur-MIOR</code> into an otherwise-clean GT crop — most of the frame is clean context, one block is corrupted — mirroring how JEPA trains (context visible, target predicted) rather than blurring the whole frame and matching everywhere. Latent (and pixel) loss is computed only at the corrupted block. Two arms run head-to-head under identical settings: <code>VAEBlurAlign.yml</code> (patched, clean context available) vs. <code>VAEBlurAlign_fullblur_baseline.yml</code> (the same mechanism with <code>replace_ratio=1.0</code> — the whole crop corrupted, no context at all). The open question both arms exist to answer: does clean surrounding context actually help recovery?</p>
+  </div>
+
+  <p><strong>Seven fixes it took to get a trainable signal</strong> — condensed from the full engineering log in <code>findings/VAEBlurAlign_findings.md</code>:</p>
+  <ol style="margin:0 0 18px; padding-left:22px; color:var(--text-2); font-size:.92rem; line-height:1.7;">
+    <li><strong>Separate frozen target VAE.</strong> A shared LoRA-adapted encoder for both branches meant the "fixed" target drifted every step because it shared live weights with the branch being trained — chasing a target it was itself moving. Fixed with a second, permanently frozen VAE copy for the target only.</li>
+    <li><strong>Real batching.</strong> Single-example gradient steps over thousands of distinct (crop, block) tasks showed ~zero population trend even though an overfit-one-sample check proved gradients were fine. <code>FullResPatchifierDataset</code> now loads full-res images once and draws several same-shape crops per group so they actually stack into real batches.</li>
+    <li><strong>Dropped VGG perceptual loss and the reconstruction-anchor term.</strong> Removing them exposed a regression that had been latent all along: decoded output was measurably <em>worse than doing nothing</em> in 11–12 of 12 validation images. The anchor had been the only thing keeping general decode fidelity honest outside the supervised region.</li>
+    <li><strong>GAN loss — tried three times, abandoned.</strong> A PatchGAN discriminator against the full decoded frame, hypothesizing checkerboard artifacts caused #3. All three attempts (default weight, reduced weight, reduced weight + 10&times; weaker discriminator LR) ended in discriminator collapse or no improvement over baseline — 12/12 samples worse than doing nothing regardless of D/G balance. <code>gan_loss_weight: 0</code> in every current config.</li>
+    <li><strong>Root cause of "worse than baseline": a noise floor, not a training bug.</strong> The frozen, untrained VAE's own round trip costs 0.0005–0.0019 MSE on a clean image from lossy encode/decode alone. For any block whose true blur-vs-GT signal is smaller than that, beating "do nothing" is mathematically impossible — a large uncontrolled fraction of every batch was an unwinnable comparison by construction, explaining every prior "worse than baseline" result.</li>
+    <li><strong>Block-floor filtering.</strong> Reject block placements below <code>min_block_floor_mse</code> (0.002, with margin over the measured floor). Only partly effective alone — retrying block <em>position</em> within an already-blur-free crop can't manufacture blur that isn't there; 38% of selected blocks stayed below threshold.</li>
+    <li><strong>Crop-position energy biasing — the fix that mattered.</strong> Motion blur is usually localized; a uniformly random crop often misses it. A per-pixel blur-energy integral image, computed once per loaded pair, now scores every valid crop position and samples among the top-20 highest-energy ones. Verified directly: below-threshold blocks dropped 38%&nbsp;&rarr;&nbsp;11%, and median block floor MSE roughly quadrupled (0.0028&nbsp;&rarr;&nbsp;0.0101).</li>
+  </ol>
+
+  <div class="stats" style="margin-bottom:18px">
+    <div class="stat"><span class="n">2,489</span><span class="k">/ 6,000 steps, patched arm (k004) — 9h01m elapsed, 12.84&nbsp;s/it</span></div>
+    <div class="stat"><span class="n">2,472</span><span class="k">/ 6,000 steps, full-frame baseline (k050) — 9h00m elapsed, 13.01&nbsp;s/it</span></div>
+    <div class="stat ok-n"><span class="n">&minus;0.595 / &minus;0.599</span><span class="k">correlation(step, latent loss), patched / baseline — the cleanest trend of the whole investigation</span></div>
+    <div class="stat warn"><span class="n">0.3031 vs. 0.2988</span><span class="k">last-100-step mean latent loss, patched vs. baseline — still statistically close at 41%</span></div>
+  </div>
+
+  <p style="color:var(--text-2); font-size:.92rem; margin:0 0 18px">Both numbers above are read directly off the live training logs, not projected. At the current rate each arm has roughly 12.5 more hours to go — landing early on Sep&nbsp;1. The patched-vs-full-frame question the whole ablation exists to answer is <strong>still open</strong>: the two arms remain close enough that nothing can be claimed yet either way.</p>
+
+  <p><strong>What has to happen after the run finishes</strong> — none of this exists yet:</p>
+  <div class="drop">
+    <div>
+      <h3>Re-evaluate above-floor only</h3>
+      <p>The old fixed 12-sample panel is biased toward unwinnable comparisons (7 of 12 fall below the recoverability threshold even after crop-bias). Draw a fresh, larger panel now that the biasing fix is in place, and report only on samples above the noise floor.</p>
+    </div>
+    <div>
+      <h3>Decide patched vs. full-frame</h3>
+      <p>The ablation's actual point. Still unresolved at 41% through the run — needs the finished 6,000-step checkpoints, not the intermediate ones.</p>
+    </div>
+    <div>
+      <h3>Wire it into an end-to-end deblurring eval</h3>
+      <p><strong>The critical missing piece.</strong> Every number so far is block-region latent/pixel loss, not a full deblurred-image PSNR/SSIM/LPIPS comparable to a baseline table row. Two paths: decode straight from the trained encoder with no diffusion step (the design critique's own suggested control), and/or feed it as the conditioning image into a frozen flow-matching pass. Neither is built yet.</p>
+    </div>
+    <div>
+      <h3>Revisit the declined mask-channel idea</h3>
+      <p>Feeding the block mask as an explicit input channel (widening <code>conv_in</code> 3&rarr;4) was declined because LoRA deltas can't express a structural change like that. Worth reopening if the finished run's scalar block-supervision plateaus again.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Baselines from the literature</h2>
+  <p class="sub">A submission built around VAEBlurAlign still needs to sit in a comparison table next to standard motion-deblurring methods, under the same eval protocol (GoPro 1,111 pairs + MIOR val) already built for ContextFlux-BlurMap. Status below is what's actually in the repo, checked directly — not what the related-work citations imply is available.</p>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id" style="color:var(--ok)">&check;</span>
+      <span class="track-title">NAFNet — done, needs re-scoring on the shared protocol</span>
+      <span class="tag ok">checkpoint-20000 verified</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">regression</span>
+        <div class="exp-body">
+          <p>Trained on Deblur-MIOR, checkpoint-20000 confirmed with real weight files on scratch. Val PSNR 28.20&nbsp;dB (mean, n=11) — beats every ContextFlux-BlurMap number and the blurred-input floor, which is the bar every other baseline and VAEBlurAlign itself has to clear. <strong>Caveat:</strong> that n=11 is the same stale-HF-cache MIOR split flagged elsewhere on this page — the on-disk val set is 100 images, but the cached dataset build still serves 11 to training/eval code that goes through <code>HuggingFaceDataset</code>. Re-score this checkpoint on the 1,111-pair GoPro protocol (which reads directories directly, bypassing the cache) for a number that belongs in the same table as ContextFlux-BlurMap's 25.67&nbsp;dB.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id" style="color:var(--signal)">&rarr;</span>
+      <span class="track-title">Restormer — config ready, not yet launched</span>
+      <span class="tag sig">launch next free GPU-slot</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">transformer</span>
+        <div class="exp-body">
+          <p><code>checkpoints/reFlux/Restormer_deblur_mior.yml</code> already exists, built on the identical template as the NAFNet config that just finished. Zero new code — this is a launch, not a build. Highest-priority baseline to start the moment either VAEBlurAlign arm frees a GPU (~Sep&nbsp;1) or a third GPU becomes available sooner.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id" style="color:var(--risk)">&#9679;</span>
+      <span class="track-title">FFTformer — arch exists, config does not</span>
+      <span class="tag amber">~15 min of config work, then launch</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">frequency</span>
+        <div class="exp-body">
+          <p><code>models/archs/fftformer_arch.py</code> is in the repo and already cited in Related Work — but no <code>_deblur_mior.yml</code> config exists yet. Build one from the NAFNet/Restormer template (same dataset block, swap <code>network.type</code>) and queue it behind Restormer.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id" style="color:var(--risk)">&#9679;</span>
+      <span class="track-title">OSEDiff — model code exists, wired for the wrong project</span>
+      <span class="tag amber">stretch goal</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">one-step diffusion</span>
+        <div class="exp-body">
+          <p><code>models/OneStepDiffusion/OSEDiff_twodataset_qis_model.py</code> and <code>pipelines/OSEDiffPipeline.py</code>/<code>_SD3.py</code> exist, but built for a QIS-sensor project, not Deblur-MIOR. Needs a new config and a check that the model class generalizes to this dataset shape. Moderate lift — worth it only if VAEBlurAlign and the other three baselines are already scored with days to spare.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id" style="color:var(--stop)">&#10005;</span>
+      <span class="track-title">DiffBIR — citation only, not a trained baseline</span>
+      <span class="tag">no in-repo implementation</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">diffusion prior</span>
+        <div class="exp-body">
+          <p>Cited in Related Work; no code anywhere in this repo. Training from scratch is out of budget with 9 days left. If a released pretrained checkpoint can be run for blind inference-only comparison on the same eval images, that's a cheap addition — otherwise keep it as a related-work citation and say plainly in the paper it wasn't run under the identical protocol, rather than implying an apples-to-apples number.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="track">
+    <div class="track-head">
+      <span class="track-id" style="color:var(--stop)">&#10005;</span>
+      <span class="track-title">LucidFlux — the closest prior work, and entirely purged</span>
+      <span class="tag">0 of ~12 runs have weights</span>
+    </div>
+    <div class="track-body">
+      <div class="exp">
+        <span class="exp-id">Flux-based restoration</span>
+        <div class="exp-body">
+          <p>Architecturally the nearest neighbor to this whole project — caption-free universal restoration via a Flux backbone — and already cited. Checked directly: every <code>LucidFlux*</code> and <code>LucidFlux2*</code> run under <code>experiments/Motion/</code> (about a dozen, dating to March–May) has <strong>zero surviving weight files</strong>, same purge that took the ContextFlux family. Retraining competes for the same two GPUs VAEBlurAlign needs. Keep as a related-work citation only unless GPU capacity opens up after Sep&nbsp;5 — do not plan on it as a scored baseline.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:14px">
+    <p><strong>Priority order for the 9 remaining days, GPU-scarce.</strong> (1) Let VAEBlurAlign's two arms finish — no action needed, ~13&nbsp;h. (2) Launch Restormer the moment a slot opens. (3) Build the FFTformer config and launch it right behind Restormer. (4) Wire VAEBlurAlign's trained encoder into a real end-to-end deblurring eval — this is on the paper's own critical path, not optional. (5) OSEDiff only if every prior item is done with days to spare. (6) DiffBIR and LucidFlux as citations, not experiments, unless something above finishes early.</p>
   </div>
 </section>
 
@@ -1044,7 +1180,9 @@
 </section>
 
 <footer>
-  Status Aug 30, 2026 — day 4 of 14. ContextFlux-BlurMap's headline numbers are unchanged (25.67&nbsp;dB vs. a 27.48&nbsp;dB floor on 300 GoPro pairs; 25.76 vs. 28.69 on MIOR val). The encoder pivot landed as a new track rather than as F1–F3's Stage-A unfreeze: <code>VAEBlurAlign_model</code> LoRA-adapts the VAE's own encoder with a JEPA-style block-replacement objective (real blur spliced into a clean crop, loss on the replaced region only), running two arms — patched-with-context vs. full-frame-no-context — to test whether clean surrounding context actually helps. Rank-4 LoRA plateaued identically on both arms after ~1,000 steps; now re-running both at rank 128 (12.35% of the VAE trainable) with randomized crop aspect ratios so the encoder isn't only ever trained on squares. No deblurring dB numbers yet from this track — it is upstream of that, and the patched-vs-full-frame question is still open. Manuscript still does not contain any of these system-level numbers.
+  Status Aug 31, 2026 — day 5 of 14, reprioritized. ContextFlux-BlurMap's headline numbers are unchanged and are the reason for the pivot (25.67&nbsp;dB vs. a 27.48&nbsp;dB floor on 300 GoPro pairs; 25.76 vs. 28.69 on MIOR val) — JEPA-token-into-Flux conditioning now stays in the paper only as motivating analysis and a negative-result ablation. <strong>VAEBlurAlign is the primary track</strong>: both arms (patched-context on k004, full-frame-no-context on k050) are 41% through a 6,000-step convergence run, r&asymp;&minus;0.60 loss trend on both, still statistically tied (0.3031 vs. 0.2988 last-100-step mean) — the "does context help" question is unresolved with ~12.5&nbsp;h left. No deblurring-benchmark dB numbers exist for this track yet; wiring the trained encoder into an end-to-end eval is the critical missing step once the run finishes. Literature baselines: NAFNet done (28.20&nbsp;dB, n=11, needs re-scoring on the GoPro protocol), Restormer configured and ready to launch, FFTformer needs a ~15-minute config, OSEDiff and DiffBIR are stretch/citation-only, and LucidFlux — the closest prior work — has zero surviving checkpoints and is citation-only unless GPU capacity opens up late. Manuscript still does not contain any VAEBlurAlign or baseline-table numbers.
 </footer>
 
 </div>
+
+</body></html>

@@ -153,3 +153,94 @@ context at all (the `_fullblur_baseline` arm, same mechanism with
   its context encoder — receives mask tokens + positional embeddings at
   target locations). Would require widening `conv_in` from 3→4 channels,
   a structural change LoRA deltas can't express on their own.
+
+## Live status update (2026-08-31, measured directly from training logs)
+
+The 6000-step convergence run (batch_size=64, both arms on dedicated GPUs —
+patched on k004, fullblur-baseline on k050) is in progress. At step
+~2,489/2,472 (~41%, ~9h elapsed, ~12.8s/it):
+
+- Loss trend is the strongest of the whole investigation: corr(step,
+  latent_loss) = -0.595 (patched) / -0.599 (baseline) over the full run so
+  far, vs. r=-0.28/-0.22 in the earlier 750-step run.
+- Last-100-step mean latent loss: patched 0.3031, baseline 0.2988 — still
+  statistically close. The "does clean context help" question is **still
+  open** at 41% through training; needs the finished 6000-step checkpoints,
+  not intermediate ones, to resolve.
+- ETA ~12.5h more at current rate, landing early Sep 1.
+
+## 6000-step run finished (2026-09-01) — final comparison
+
+Both arms completed cleanly (exit code 0). Comet's full-run summary (min,
+max) over all 384 logged validation samples across the whole 6000-step run:
+
+| metric | patched (context) | fullblur baseline |
+|---|---|---|
+| psnr | 22.81 – 34.95 | 20.84 – 34.98 |
+| floor_psnr | 22.91 – 44.57 | 20.93 – 41.30 |
+| blockfloor_psnr | 20.72 – 40.37 | 21.25 – 41.13 |
+| blockpred_psnr | 20.68 – 36.11 | 21.16 – 35.03 |
+| reconanchor_psnr | 30.97 – 38.82 | 30.53 – 39.15 |
+
+Top end is essentially identical between arms (~35dB psnr ceiling either
+way), but patched's *floor* is meaningfully higher (22.8 vs 20.8 psnr,
+22.9 vs 20.9 floor_psnr) — i.e. clean context reduces the worst-case
+failures more than it raises the best case. Caveat: these are ranges
+aggregated over the whole run's logged history, not a final-checkpoint-only
+average — a precise mean-at-convergence comparison would need querying the
+Comet dashboard directly, not just grepping the local log. Directionally,
+though, this is the first time in the whole investigation the "does clean
+context help" question has a (tentative) answer: yes, mainly at the tail.
+
+Final checkpoint used downstream: patched arm's
+`checkpoint-6000/AutoencoderKLFlux2_1` under
+`VAEBlurAlign_2026_08_31_15_07_57/` — this is the encoder Phase 2 (below)
+conditions on.
+
+## Phase 2: FLUX.2 LoRA fine-tuned on the VAE-encoder's conditioning tokens
+
+New model `models/reFlux/VAEBlurAlignFluxLoRA_model.py` +
+`checkpoints/reFlux/VAEBlurAlignFluxLoRA.yml`. Takes the phase-1 trained VAE
+encoder (frozen or optionally LoRA-jointly-trainable via `vae_trainable`)
+as the source of conditioning tokens, packs them into FLUX.2's
+`hidden_states` alongside the noisy target's own tokens (Pattern A, same
+mechanism VAEBlurAlign itself used, non-colliding position ids via
+`_prepare_image_ids`), and LoRA-fine-tunes the FLUX.2 transformer
+(rank 128) to actually use them. Decoder is never touched — final image
+decode always goes through the plain frozen `self.vae`, not `cond_vae`.
+
+**Frozen-FLUX2 baseline** (`VAEBlurAlignFluxLoRA_frozen_baseline.yml`,
+`lora_rank<=0` skips `initialize_transformer_lora` entirely and uses the
+base transformer directly — 0 trainable params): a real eval (40 val
+samples, 28 diffusion steps, `-infer`) shows the pretrained FLUX.2
+transformer does *not* yet know how to use these raw image-latent
+conditioning tokens well:
+
+```
+floor_psnr [40] : (22.91, 44.57)
+psnr [40]       : (8.71, 31.54)
+```
+
+The frozen model is often *catastrophically* worse than doing nothing
+(psnr as low as 8.7dB vs floor's 22.9dB minimum), though not because it
+ignores the conditioning outright — visual inspection of a sample shows
+the pretrained transformer does reconstruct the right scene (same subject,
+composition, background) from the conditioning tokens, just without
+pixel-level fidelity (color/texture drift is enough to tank PSNR/MSE
+without being obviously "broken" to the eye). This is exactly the gap the
+LoRA fine-tune is meant to close, and gives a clean floor to fine-tune
+above.
+
+**LoRA training status (2026-09-01, step ~2,776/20,000, ~14%, ~11.6h
+elapsed, ~70h ETA at current rate, 14.5-15.0s/it):** loss dropped from
+~0.18 (step ~75) to ~0.13-0.14 by step ~1,000-1,300, then plateaued —
+noisy oscillation in the 0.13-0.16 band since, no further downward trend
+through step 2,776. Visual check of the same validation sample at step 0
+vs. step 2,000 checkpoints shows no obvious perceptual change yet. Not
+necessarily concerning this early (flow-matching per-step loss is
+inherently noisy across timestep sampling, and rank-128 LoRA may still be
+making real progress the eye can't catch at 512px thumbnail scale) but
+worth re-checking once further checkpoints land — if the plateau holds
+past, say, step 5,000, that would suggest either the LoRA capacity/LR is
+already saturated for this task, or there's a subtler bug worth
+investigating rather than just letting it run to 20,000.

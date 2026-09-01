@@ -42,7 +42,19 @@ datasets:
     lq_folder: blur
     is_train: true
     crop_size: 512
-    batch_size: 4
+    # Measured directly on this GPU (memcheck_batch.py probe, same
+    # encode/decode/loss path as optimize_parameters): batch=64 peaks at
+    # ~41.9GB allocated / ~49.1GB reserved -- ~31GB headroom on an 80GB card.
+    # This arm runs on its OWN dedicated GPU (k004), the fullblur baseline on
+    # a separate one (k050), rather than sharing one GPU between both jobs:
+    # sharing meant both competing for the same compute (100% util either
+    # way), not just memory, so splitting across two GPUs removes that
+    # contention entirely instead of merely fitting both in one card's
+    # memory. batch=96 was tested too (~62.7GB reserved, ~17GB headroom) but
+    # left less margin than felt safe for an unattended multi-hour run given
+    # real training's variable crop aspect ratios vs. this probe's fixed
+    # 512x512 shape.
+    batch_size: 64
     patches_per_group: 10
     # Reject block placements whose blur-vs-GT signal is weaker than the
     # frozen VAE's own decode(encode(x)) round-trip noise (~0.0005-0.0019 MSE
@@ -95,27 +107,30 @@ train:
     lr_warmup_steps: 15
     lr_num_cycles: 1
     lr_power: 1.0
-  # Effective batch = batch_size(4, real, via FullResPatchifierDataset) *
-  # gradient_accumulation_steps(4) = 16 -- same effective batch as the
-  # earlier grad_accum=16/batch_size=1 experiment (kept fixed on purpose so
-  # this is the same tested compute budget, just spread across a real stacked
-  # batch instead of 16 sequential single-image passes: same GPU parallelism
-  # benefit an actual batch_size>1 gets, without inflating the batch-size
-  # variable itself as a second uncontrolled change). This is the fix for the
-  # non-convergence bug: an overfit-one-fixed-sample sanity check confirmed
-  # gradients/optimizer are fine (loss_latent 0.283->0.132 over 40 steps on a
-  # single example), but population-level training showed ~zero trend
-  # (linear-regression r~=-0.07 over 500 steps) because every step was one
-  # gradient computed on a BRAND NEW random (crop, block) task. max_train_steps
-  # /validation_steps/checkpointing_steps are unchanged from that experiment
-  # (they already account for the 8x total-compute reduction vs. the original
-  # 6000-step runs).
-  gradient_accumulation_steps: 4
+  # batch_size raised 4->64 to use the GPU's actual headroom (see
+  # datasets.train.batch_size above) -- gradient_accumulation_steps can't go
+  # below 1, so this necessarily raises the effective batch from 16 to 64
+  # (was batch_size=4 * grad_accum=4). That's an intentional side effect of
+  # maximizing real (parallel) batch size, not a separate deliberate
+  # experiment change -- LR is left as-is rather than also applying the
+  # linear-scaling-rule bump, to keep this a single-variable change.
+  # max_train_steps unchanged means ~4x more total images seen over the run
+  # than the batch=4/grad_accum=4 config (64 vs 16 images per optimizer
+  # step), which given the extra parallelism should still be faster in
+  # wall-clock terms, not slower.
+  gradient_accumulation_steps: 1
+  # max_train_steps/validation_steps/checkpointing_steps scaled 8x (750->6000
+  # etc.) for a real convergence run, now that batch_size=64 gives by far the
+  # cleanest loss trend of the investigation (r=-0.66 at step 300, vs -0.28
+  # for the best prior config) -- the 750-step budget was sized for fast
+  # iteration between architecture fixes, not for judging real convergence.
+  # Safe to edit while the current 750-step run is still in flight: OmegaConf
+  # is loaded once at process start, never re-read from disk mid-run.
   num_train_epochs: 150
-  batch_size: 4
-  max_train_steps: 750
-  validation_steps: 25
-  checkpointing_steps: 75
+  batch_size: 64
+  max_train_steps: 6000
+  validation_steps: 200
+  checkpointing_steps: 600
   checkpoints_total_limit: 3
   patched: false
   check_speed: false
