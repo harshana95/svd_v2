@@ -1,0 +1,136 @@
+# Third-arm ablation for the VAEBlurAlign investigation: "simple" FLUX.2 LoRA
+# baseline with NO trained encoder at all -- reuses the existing generic
+# ContextFluxBaseline_model (models/reFlux/ContextFluxBaseline_model.py)
+# instead of writing a new model. Conditioning image tokens are packed via
+# Pattern A (same mechanism as VAEBlurAlignFluxLoRA) but through the plain,
+# untouched pretrained FLUX.2 VAE -- use_condition_image_for_transformer=true
+# with every semantic-encoder toggle (V-JEPA/VL-JEPA/DINO/CLIP) off.
+#
+# Dataset/optimizer/LoRA/schedule hyperparameters are matched 1:1 to
+# VAEBlurAlignFluxLoRA.yml (Phase 2) so the only real variable between the
+# two runs is "does the Phase-1 trained VAE-encoder conditioning beat
+# conditioning through the plain frozen VAE?" batch_size=32 carries over
+# unverified from Phase 2's memory probe -- this model uses one fewer VAE
+# instance (no separate cond_vae), so it should have equal-or-more headroom,
+# but batch_size was kept matched rather than re-maxed to keep the ablation
+# controlled on everything except the encoder itself.
+#
+# Enabling FullResPatchifierDataset here (an IterableDataset that yields
+# already-batched tensors) needed one shared fix: models/base_model.py's
+# default setup_dataloaders() now detects IterableDataset and uses
+# batch_size=None automatically (previously only VAEBlurAlign_model /
+# VAEBlurAlignFluxLoRA_model duplicated that override locally) -- no
+# ContextFluxBaseline_model code changes were needed.
+#
+# Run a short smoke test first:
+#   python trainer.py -opt checkpoints/reFlux/ContextFluxBaseline_SimpleLoRA_smoke.yml -test
+
+name: Motion
+model_type: ContextFluxBaseline_model
+tracker_project_name: Motion
+experiment_key: ContextFluxBaseline_SimpleLoRA
+
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+
+pretrained_model_name_or_path: black-forest-labs/FLUX.2-klein-4B
+revision: ~
+variant: ~
+
+# No semantic vision-encoder conditioning at all -- this is the point of
+# this ablation. Only the raw condition image's own VAE-latent tokens are
+# fed to the transformer (Pattern A), through the plain frozen VAE.
+use_vjepa_condition: false
+use_vljepa_condition: false
+use_dino_condition: false
+use_clip_condition: false
+use_condition_image_for_transformer: true
+swinir_model_path: ~
+
+precomputed_embeddings_path: /home/wweligam/svd_v2/playground/null_prompt_embeddings_flux2_klein.pt
+
+guidance_scale: 1.0
+discrete_flow_shift: 3.1582
+transformer_gradient_checkpointing: true
+
+datasets:
+  train:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: true
+    crop_size: 512
+    batch_size: 32
+    patches_per_group: 10
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
+    split_range: [0, 98]
+    num_worker_per_gpu: 4
+
+  val:
+    type: FullResPatchifierDataset
+    data_dir: /depot/chan129/data/Deblur_MIOR/train
+    gt_folder: gt
+    lq_folder: blur
+    is_train: false
+    crop_size: 512
+    batch_size: 4
+    patches_per_group: 1
+    min_block_floor_mse: 0.002
+    max_block_resample_attempts: 20
+    split_range: [98, 100]
+    num_worker_per_gpu: 0
+
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_checkpoint: ~
+
+train:
+  lora_finetune: true
+  lora_rank: 128
+  lora_alpha: 256
+  lora_dropout: 0.0
+
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 1e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1e-8
+    max_grad_norm: 1.0
+
+  scheduler:
+    type: constant_with_warmup
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+
+  gradient_accumulation_steps: 1
+  num_train_epochs: 150
+  batch_size: 32
+  max_train_steps: 20000
+  validation_steps: 200
+  checkpointing_steps: 500
+  checkpoints_total_limit: 3
+  patched: false
+  check_speed: false
+
+val:
+  save_images: true
+  num_inference_steps: 28
+  batch_size: 4  # not read for FullResPatchifierDataset -- see datasets.val.batch_size
+  max_val_steps: 8
+  metrics:
+    psnr:
+      crop: 30
+    mse:
+      crop: 30

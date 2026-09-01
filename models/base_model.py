@@ -17,7 +17,7 @@ from huggingface_hub import create_repo, upload_folder
 from safetensors.torch import load_file
 import peft
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from diffusers import get_scheduler
 from tqdm import tqdm
 from utils import initialize, keep_last_checkpoints
@@ -324,21 +324,27 @@ class BaseModel():
         print(f"Dataset test size {l}: {n} iteration took {np.average(out.repeat(repeat=1, number=n))}")
 
     def setup_dataloaders(self):
+        # A dataset can be an IterableDataset that yields already-batched
+        # tensors itself (e.g. FullResPatchifierDataset) -- DataLoader must
+        # use batch_size=None in that case, or it would try to re-batch
+        # already-batched groups.
         self.logger.info("Setting up val dataloaders...")
         val_set = create_dataset(self.opt.datasets.val)
+        val_iterable = isinstance(val_set, IterableDataset)
         self.test_dataloader = DataLoader(
             val_set,
-            shuffle=self.opt.datasets.val.use_shuffle,
-            batch_size=self.opt.val.batch_size,
+            shuffle=False if val_iterable else self.opt.datasets.val.use_shuffle,
+            batch_size=None if val_iterable else self.opt.val.batch_size,
             num_workers=self.opt.datasets.val.get('num_worker_per_gpu', 0),
         )
 
         self.logger.info("Setting up train dataloader...")
         train_set = create_dataset(self.opt.datasets.train)
+        train_iterable = isinstance(train_set, IterableDataset)
         self.dataloader = DataLoader(
             train_set,
-            shuffle=self.opt.datasets.train.use_shuffle,
-            batch_size=self.opt.train.batch_size,
+            shuffle=False if train_iterable else self.opt.datasets.train.use_shuffle,
+            batch_size=None if train_iterable else self.opt.train.batch_size,
             num_workers=self.opt.datasets.train.get('num_worker_per_gpu', 0),
         )
 

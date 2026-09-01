@@ -141,14 +141,16 @@ class ContextFluxBaseline_model(BaseModel):
         text_in_dim = resolve_transformer_context_dim(opt, transformer_config)
         default_guidance_scale = 1.0 if "klein" in pretrained.lower() else 4.0
 
-        self.vjepa_hub_entry = getattr(opt, "vjepa_hub_entry", "vjepa2_1_vit_large_384")
-        self.vjepa_image_size = getattr(opt, "vjepa_image_size", 384)
-        self.vjepa_pretrained = getattr(opt, "vjepa_pretrained", True) 
-        self.vjepa_checkpoint_path = getattr(opt, "vjepa_checkpoint_path", None)
+        self.vjepa_hub_entry = opt.get("vjepa_hub_entry") or "vjepa2_1_vit_large_384"
+        self.vjepa_image_size = opt.get("vjepa_image_size") or 384
+        self.vjepa_pretrained = opt.get("vjepa_pretrained")
+        if self.vjepa_pretrained is None:
+            self.vjepa_pretrained = True
+        self.vjepa_checkpoint_path = opt.get("vjepa_checkpoint_path")
 
         self.vjepa_feature_dim = get_vjepa_feature_dim(
             self.vjepa_hub_entry,
-            fallback_dim=getattr(opt, "vjepa_feature_dim", 1024),
+            fallback_dim=opt.get("vjepa_feature_dim") or 1024,
         )
         self.vjepa_num_layers = int(opt.get("vjepa_num_layers") or 1)
         self.vjepa_feature_dim *= self.vjepa_num_layers
@@ -183,12 +185,10 @@ class ContextFluxBaseline_model(BaseModel):
         self.vljepa_readout = None
         self.vljepa_query_tokenizer = None
         self.vljepa_cfg = None
-        self.vljepa_caption_query = getattr(
-            opt, "vljepa_caption_query", "Describe the image in detail."
-        )
-        self.vljepa_num_frames = int(getattr(opt, "vljepa_num_frames", 1))
-        self.vljepa_image_size = int(getattr(opt, "vljepa_image_size", 256))
-        self.vljepa_dtype = getattr(opt, "vljepa_dtype", torch.bfloat16)
+        self.vljepa_caption_query = opt.get("vljepa_caption_query") or "Describe the image in detail."
+        self.vljepa_num_frames = int(opt.get("vljepa_num_frames") or 1)
+        self.vljepa_image_size = int(opt.get("vljepa_image_size") or 256)
+        self.vljepa_dtype = opt.get("vljepa_dtype") or torch.bfloat16
         self.vljepa_query_ids = None
         self.vljepa_query_mask = None
 
@@ -385,7 +385,7 @@ class ContextFluxBaseline_model(BaseModel):
             self.vae,
             transformer_config=transformer_config,
         )
-        self.jepa_projector_heads = getattr(opt, "jepa_projector_heads", "text")
+        self.jepa_projector_heads = opt.get("jepa_projector_heads") or "text"
         if self.jepa_projector_heads not in ("text", "vae", "both"):
             raise ValueError(
                 f"jepa_projector_heads must be text, vae, or both; got {self.jepa_projector_heads!r}"
@@ -435,7 +435,7 @@ class ContextFluxBaseline_model(BaseModel):
             num_text_slots = int(opt.vljepa_num_text_slots)
         self.vljepa_num_text_slots = num_text_slots
 
-        projector_hidden = int(getattr(opt, "vljepa_projector_hidden", 2048))
+        projector_hidden = int(opt.get("vljepa_projector_hidden") or 2048)
         patch_projector_num_slots = getattr(opt, "patch_projector_num_slots", None)
         if patch_projector_num_slots not in (None, "~"):
             patch_projector_num_slots = int(patch_projector_num_slots)
