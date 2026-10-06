@@ -18,6 +18,7 @@ from safetensors.torch import load_file
 import peft
 
 from torch.utils.data import DataLoader, IterableDataset
+from torch.optim.lr_scheduler import LambdaLR
 from diffusers import get_scheduler
 from tqdm import tqdm
 from utils import initialize, keep_last_checkpoints
@@ -65,7 +66,29 @@ def load_model_hook(models, input_dir):
         
         ckpt_dir = os.path.join(input_dir, f"{class_name}_{saved[class_name]}")
 
+        # A module that simply does not exist in this checkpoint (e.g. an
+        # adapter added after the checkpoint was written) must be SKIPPED and
+        # left at its initialization -- not treated as an error. Before this
+        # guard the two load attempts below both failed and the handler's own
+        # message referenced an unbound `c`, raising UnboundLocalError OUT of
+        # load_model_hook and aborting the whole loop, so EVERY REMAINING
+        # MODULE silently went unloaded while the run looked healthy.
+        if not os.path.isdir(ckpt_dir):
+            # A connector-family module missing while a DIFFERENT connector-family folder exists is a config/checkpoint
+            # mismatch (e.g. an eval yml without `vjepa_layers` loading a multi-layer checkpoint): leaving the connector at
+            # random init would silently produce garbage, so fail loudly. Genuinely new modules are still skipped.
+            _family = ("MultiLayerDynamicsConnector", "JEPAFactoredConnector", "JEPAPerceptualEncoder")
+            if class_name in _family:
+                _present = [d for d in os.listdir(input_dir) if any(d.startswith(f + "_") for f in _family)]
+                if _present:
+                    raise RuntimeError(
+                        f"Connector mismatch: model has {class_name}_{saved[class_name]} but {input_dir} contains {_present}. "
+                        f"Fix the config (vjepa_layers / dynamics_connector_type) to match the checkpoint.")
+            print(f"[{class_name}_{saved[class_name]}] not in checkpoint -- leaving at init (new module)")
+            continue
+
         # load diffusers style into model
+        c = None  # referenced by the failure message below; must always be bound
         try:
             if "PeftModel" in class_name:
                 # peft's PeftModel isn't a diffusers/local arch class, so it
@@ -138,6 +161,50 @@ def load_model_hook(models, input_dir):
                 if isinstance(state, dict) and state and not any(k.startswith("net.") for k in state.keys()):
                     if hasattr(model, "net") and all(k.split(".", 1)[0].isdigit() for k in state.keys()):
                         state = {f"net.{k}": v for k, v in state.items()}
+                # Drop tensors whose SHAPE disagrees with the live module, then
+                # load the rest. strict=False tolerates missing/unexpected keys
+                # but still RAISES on a size mismatch, which would abandon the
+                # whole module over one tensor -- e.g. resuming a cross-attention
+                # stack across a tubelet-count change mismatches only `pos_t`
+                # (28,800 params, 0.11% of the module) yet would otherwise
+                # discard all 25M trained weights and silently restart it from
+                # zero-init.
+                own = model.state_dict()
+                mismatched = [k for k, v in state.items()
+                              if k in own and tuple(own[k].shape) != tuple(v.shape)]
+                # PARTIAL COPY rather than discard. A resized table (typically a
+                # positional embedding whose length tracks a count that changed
+                # -- e.g. WanDynamicsCrossAttn.pos_t when the max burst size
+                # goes 3 -> 5, giving (12,64) -> (20,64)) shares its leading
+                # rows with the checkpoint. Dropping it entirely restarts a
+                # LEARNED tensor from scratch: for pos_t that discards the
+                # cross-attention's whole notion of which tubelet is which,
+                # which is the one thing keeping the KV from being an unordered
+                # bag. Copying the overlapping region keeps every position the
+                # checkpoint actually trained and leaves only genuinely-new
+                # entries at init. Works in both directions (grow or shrink).
+                # Only applied when the rank matches -- anything else is a real
+                # architecture change, not a resize, and is still skipped.
+                dropped = []
+                for k in mismatched:
+                    ck, mk = state[k], own[k]
+                    if ck.dim() != mk.dim():
+                        dropped.append(k)
+                        continue
+                    sl = tuple(slice(0, min(a, b)) for a, b in zip(ck.shape, mk.shape))
+                    merged = mk.clone()
+                    merged[sl] = ck[sl].to(merged.dtype)
+                    state[k] = merged
+                    kept = "x".join(str(x.stop) for x in sl)
+                    print(f"[{class_name}] RESIZED: {k} checkpoint{tuple(ck.shape)} -> "
+                          f"model{tuple(mk.shape)}; copied the overlapping {kept} block, "
+                          f"remainder left at initialization")
+                if dropped:
+                    for k in dropped:
+                        print(f"[{class_name}] SHAPE MISMATCH, not loaded: {k} "
+                              f"checkpoint{tuple(state[k].shape)} vs model{tuple(own[k].shape)} "
+                              f"-- differing rank, this tensor stays at its initialization")
+                    state = {k: v for k, v in state.items() if k not in dropped}
                 missing, unexpected = model.load_state_dict(state, strict=False)
                 if missing:
                     print(f"[{class_name}] Missing keys: {missing}")
@@ -336,6 +403,11 @@ class BaseModel():
             shuffle=False if val_iterable else self.opt.datasets.val.use_shuffle,
             batch_size=None if val_iterable else self.opt.val.batch_size,
             num_workers=self.opt.datasets.val.get('num_worker_per_gpu', 0),
+            # A dataset may optionally define its own collate_fn (e.g.
+            # Adobe240Dataset's batch-consistent variable-aspect-ratio crop,
+            # which needs to see a whole batch at once) -- None for any
+            # dataset that doesn't, which is DataLoader's own default.
+            collate_fn=None if val_iterable else getattr(val_set, "collate_fn", None),
         )
 
         self.logger.info("Setting up train dataloader...")
@@ -346,6 +418,7 @@ class BaseModel():
             shuffle=False if train_iterable else self.opt.datasets.train.use_shuffle,
             batch_size=None if train_iterable else self.opt.train.batch_size,
             num_workers=self.opt.datasets.train.get('num_worker_per_gpu', 0),
+            collate_fn=None if train_iterable else getattr(train_set, "collate_fn", None),
         )
 
     def prepare(self):
@@ -371,6 +444,13 @@ class BaseModel():
             self.schedulers[i] = self.accelerator.prepare(self.schedulers[i])
         self.dataloader = self.accelerator.prepare(self.dataloader)
         self.test_dataloader = self.accelerator.prepare(self.test_dataloader)
+        # Optional secondary validation dataloader (see e.g.
+        # VAEBlurAlignFluxLoRA_DP_model.py's `datasets.val_secondary`) --
+        # only a few model files set this attribute; every other subclass
+        # never has it, hence the getattr guard rather than a plain
+        # self.test_dataloader_secondary reference.
+        if getattr(self, "test_dataloader_secondary", None) is not None:
+            self.test_dataloader_secondary = self.accelerator.prepare(self.test_dataloader_secondary)
         self.logger.info("Models, datasets, and optimizers prepared...")
 
         self.print_model_memory()
@@ -459,15 +539,47 @@ class BaseModel():
         self.optimizers.append(optimizer)
 
     def setup_schedulers(self):
-        for optimizer in self.optimizers:    
-            lr_scheduler = get_scheduler(
-                self.opt.train.scheduler.type,
-                optimizer=optimizer,
-                num_warmup_steps=self.opt.train.scheduler.lr_warmup_steps,
-                num_training_steps=self.opt.train.max_train_steps,
-                num_cycles=self.opt.train.scheduler.lr_num_cycles,
-                power=self.opt.train.scheduler.lr_power,
-            )
+        # "cosine_floor": like diffusers' plain "cosine" (same
+        # num_warmup_steps/num_training_steps semantics -- including the
+        # "set lr_warmup_steps to the absolute resume step, not 0" rule for
+        # resuming into a schedule change, see
+        # findings/Wan22VJEPADynamics_findings.md / the accelerate_save_
+        # optimizer_noop memory) but decays toward a FLOOR (train.scheduler.
+        # lr_floor, absolute LR, default 0.0) instead of exactly 0 -- not
+        # expressible via diffusers.get_scheduler, which has no floor
+        # parameter for any built-in schedule. Built directly as a LambdaLR
+        # multiplier (matching every HF schedule's own convention: the
+        # lambda multiplies optimizer.param_groups[i]['lr'] at construction
+        # time), so this is a plain addition alongside get_scheduler's
+        # existing types -- everything else (constant, constant_with_warmup,
+        # linear, cosine, polynomial, ...) is unchanged.
+        for optimizer in self.optimizers:
+            sched_type = self.opt.train.scheduler.type
+            if sched_type == "cosine_floor":
+                base_lr = float(self.opt.train.optim.learning_rate)
+                floor_lr = float(self.opt.train.scheduler.get("lr_floor", 0.0))
+                floor_ratio = floor_lr / base_lr if base_lr > 0 else 0.0
+                warmup = int(self.opt.train.scheduler.lr_warmup_steps)
+                total = int(self.opt.train.max_train_steps)
+
+                def lr_lambda(current_step, _warmup=warmup, _total=total, _floor=floor_ratio):
+                    if current_step < _warmup:
+                        return float(current_step) / float(max(1, _warmup))
+                    progress = float(current_step - _warmup) / float(max(1, _total - _warmup))
+                    progress = min(max(progress, 0.0), 1.0)
+                    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+                    return _floor + (1.0 - _floor) * cosine
+
+                lr_scheduler = LambdaLR(optimizer, lr_lambda)
+            else:
+                lr_scheduler = get_scheduler(
+                    sched_type,
+                    optimizer=optimizer,
+                    num_warmup_steps=self.opt.train.scheduler.lr_warmup_steps,
+                    num_training_steps=self.opt.train.max_train_steps,
+                    num_cycles=self.opt.train.scheduler.lr_num_cycles,
+                    power=self.opt.train.scheduler.lr_power,
+                )
             self.schedulers.append(lr_scheduler)
 
     def feed_data(self, data, is_train=True):
@@ -540,6 +652,87 @@ class BaseModel():
             yield
 
 
+    def save_load_roundtrip_check(self, save_path=None, perturb: float = 1.0):
+        """Prove that EVERY trainable parameter actually survives a
+        save -> load round trip, before spending a run on it.
+
+        Why this exists: the failure mode in this codebase is silent. A module
+        whose class name changed, or that the save hook never visited, simply
+        does not appear in the checkpoint; `load_state_dict(strict=False)`
+        reports nothing and the module keeps its random init. Nothing errors,
+        the run trains, and the defect only surfaces as bad numbers days later.
+
+        The check is only meaningful because it PERTURBS the weights between
+        the save and the load. A plain save->load->compare would pass even if
+        loading were a complete no-op, which is precisely the bug being hunted.
+
+        Steps: snapshot trainable params -> save_state -> add noise to every
+        trainable param -> load_state -> compare against the snapshot. Any
+        parameter that does not come back EXACTLY was not really persisted.
+
+        Returns (ok, report). Leaves the checkpoint on disk so it can be fed to
+        a downstream stage (e.g. Stage C consuming Stage A/B checkpoint-0).
+        """
+        import shutil
+        if not self.accelerator.is_main_process:
+            self.accelerator.wait_for_everyone()
+            return True, "skipped (non-main process)"
+        save_path = save_path or os.path.join(self.opt.path.experiments_root, "checkpoint-0")
+
+        # 1. snapshot
+        snap = {}
+        for mi, model in enumerate(self.models):
+            tag = f"{type(model).__name__}_{mi}"
+            for n, prm in model.named_parameters():
+                if prm.requires_grad:
+                    snap[f"{tag}::{n}"] = prm.detach().clone().float().cpu()
+        if not snap:
+            return True, "no trainable parameters to check"
+        self.logger.info("save/load round-trip check: %d trainable tensors across %d modules",
+                         len(snap), len(self.models))
+
+        # 2. save
+        if os.path.isdir(save_path):
+            shutil.rmtree(save_path)
+        self.accelerator.save_state(save_path, save_optimizer=False)
+        self.save_other_parameters(save_path)
+
+        # 3. perturb -- without this the check is vacuous
+        with torch.no_grad():
+            for model in self.models:
+                for prm in model.parameters():
+                    if prm.requires_grad:
+                        prm.add_(torch.randn_like(prm) * perturb)
+
+        # 4. load back
+        self.accelerator.load_state(save_path)
+        self.load_other_parameters(save_path)
+
+        # 5. compare
+        bad, worst = [], {}
+        for mi, model in enumerate(self.models):
+            tag = f"{type(model).__name__}_{mi}"
+            for n, prm in model.named_parameters():
+                if not prm.requires_grad:
+                    continue
+                key = f"{tag}::{n}"
+                ref = snap.get(key)
+                if ref is None:
+                    continue
+                d = (prm.detach().float().cpu() - ref).abs().max().item()
+                worst[tag] = max(worst.get(tag, 0.0), d)
+                if d > 1e-5:
+                    bad.append((key, d))
+
+        lines = [f"  {t:<34} max|delta| = {d:.3e}  {'OK' if d <= 1e-5 else 'FAILED'}"
+                 for t, d in sorted(worst.items())]
+        report = "\n".join(lines)
+        if bad:
+            report += f"\n  {len(bad)} tensor(s) did NOT round-trip; first few:\n"
+            report += "\n".join(f"    {k}  delta={d:.3e}" for k, d in bad[:10])
+        self.accelerator.wait_for_everyone()
+        return (not bad), report
+
     def train(self):
         total_batch_size = self.opt.train.batch_size * self.accelerator.num_processes * self.opt.train.gradient_accumulation_steps
         is_patched = self.opt.train.patched
@@ -586,10 +779,36 @@ class BaseModel():
             else:
                 self.accelerator.print(f"Resuming from checkpoint {path}")
                 load_path = os.path.join(self.opt.path.resume_from_path, path)
+                _skip_opt = bool(self.opt.path.get("resume_skip_optimizer", False))
+                _saved = (self.accelerator._optimizers, self.accelerator._schedulers)
                 try:
+                    if _skip_opt:
+                        # warm start into a DIFFERENT param-group layout (e.g. extra
+                        # trainable predictor LoRA): restore weights only, fresh optimizer/scheduler
+                        self.accelerator._optimizers, self.accelerator._schedulers = [], []
+                        self.accelerator.print("resume_skip_optimizer: loading weights only")
                     self.accelerator.load_state(load_path)
                 except Exception as e:
-                    self.accelerator.print(f" {'='*50} Failed to load state {e}")
+                    # HARD FAIL. Continuing here means running with whatever the
+                    # modules were initialised to -- and because the adapters are
+                    # ZERO-init by design (cross-attention to_out, LoRA B), the
+                    # model silently degrades to base Wan and still emits
+                    # plausible-looking video. On 2026-09-23 a whole burst-size
+                    # sweep was produced this way: its checkpoint had been
+                    # rotated away by checkpoints_total_limit while the run that
+                    # owned it kept training, the error was printed, and three
+                    # eval arms of garbage were scored before the artifacts were
+                    # spotted by eye. An unloadable checkpoint is never
+                    # recoverable-by-continuing.
+                    raise RuntimeError(
+                        f"FAILED TO LOAD CHECKPOINT {load_path}: {e}\n"
+                        "Refusing to continue -- the model would run with "
+                        "initialisation-value adapters and produce output that "
+                        "looks trained but is not. If the checkpoint was rotated "
+                        "away by checkpoints_total_limit, copy it somewhere "
+                        "outside the training run's directory first."
+                    ) from e
+                self.accelerator._optimizers, self.accelerator._schedulers = _saved
                 # Optimizer moments can be stale when model param shapes changed.
                 # Remove incompatible entries so Adam re-initializes them lazily.
                 self._sanitize_optimizer_state_shapes()
@@ -602,6 +821,22 @@ class BaseModel():
                     first_epoch = self.global_step // self.num_update_steps_per_epoch
         else:
             initial_global_step = 0
+
+        # Prove the checkpoint round trip BEFORE training. Runs after resume so
+        # it validates the state actually about to be trained, and leaves a
+        # checkpoint-0 on disk that a downstream stage can consume.
+        if self.is_train and bool(self.opt.train.get("save_load_check", True)):
+            ok, report = self.save_load_roundtrip_check()
+            self.logger.info("===== SAVE/LOAD ROUND-TRIP CHECK =====\n%s", report)
+            if not ok:
+                raise RuntimeError(
+                    "save/load round-trip check FAILED -- at least one trainable tensor "
+                    "did not survive save->load, so this run would train weights that are "
+                    "silently discarded at the next resume. See the report above. "
+                    "Set train.save_load_check: false to bypass (not recommended)."
+                )
+            self.logger.info("save/load round-trip check PASSED; checkpoint-0 written to %s",
+                             os.path.join(self.opt.path.experiments_root, "checkpoint-0"))
 
         progress_bar = tqdm(
             range(0, self.opt.train.max_train_steps),
@@ -662,6 +897,33 @@ class BaseModel():
         # Create the pipeline using the trained modules and save it.
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:
+            # SAVE THE FINAL STATE. The in-loop save fires at the START of an
+            # iteration using the PRE-increment global_step (checkpoint-N means
+            # "N steps completed"), so the state reached by the LAST iteration is
+            # never checked against a boundary: the loop exits with
+            # global_step == the completed step count and nothing writes it. On
+            # 2026-09-24 a 58000->70000 resume ended by epoch exhaustion at
+            # global_step 70000 and the newest checkpoint was 69000 -- ~1000
+            # steps of a finished run were lost. (Resuming from 58000 gives
+            # first_epoch=29 and num_train_epochs=35, i.e. exactly 12000
+            # iterations, the last of which checks global_step=69999.)
+            #
+            # Placed BEFORE the final validation so the weights are durable even
+            # if that (long, at large burst sizes) validation crashes.
+            # Skipped when not training (eval/-infer runs also reach this point
+            # with the loop skipped) and when global_step is <= 1 or the
+            # checkpoint already exists (max_train_steps landing exactly on a
+            # checkpointing boundary).
+            if self.is_train and self.global_step > 1:
+                final_path = os.path.join(self.opt.path.experiments_root, f"checkpoint-{self.global_step}")
+                if os.path.isdir(final_path):
+                    self.logger.info(f"Final state already saved at {final_path}")
+                else:
+                    if self.opt.train.checkpoints_total_limit is not None:
+                        keep_last_checkpoints(self.opt.path.experiments_root, self.opt.train.checkpoints_total_limit, self.logger)
+                    self.accelerator.save_state(final_path, save_optimizer=False)
+                    self.save_other_parameters(final_path)
+                    self.logger.info(f"Saved FINAL state to {final_path}")
             self.validation() # Final validation. If testing script, training loop will be skipped to here
             if self.opt.push_to_hub:
                 repo_id = self.opt.hub_model_id or Path(self.opt.experiment_key).name

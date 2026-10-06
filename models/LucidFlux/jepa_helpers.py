@@ -85,7 +85,24 @@ def vjepa_from_unit_tensor(
     out_dtype: torch.dtype = torch.float32,
     strict_range: bool = True,
 ) -> torch.Tensor:
-    """Convert [0,1] tensor to V-JEPA-compatible ImageNet-normalized pixels."""
+    """Convert [0,1] tensor to V-JEPA-compatible ImageNet-normalized pixels.
+
+    Aspect-ratio-preserving letterbox for non-square input: resizes so the
+    LONGER side equals `size` (bicubic, same interpolation as before), then
+    zero-pads the shorter side to reach size x size, centered -- rather than
+    the previous plain `Resize((size, size))`, which silently stretched any
+    non-square input (a hires whole-frame resize, an aspect_ratio_range
+    training crop, a burst segment at a non-square crop) to fill a square
+    frame, distorting its content before V-JEPA ever saw it. Square input
+    (h == w, the historical default at crop_size=320) takes the exact same
+    path as before -- a plain resize, no padding -- so this is a pure
+    improvement for non-square input and a byte-identical no-op otherwise.
+    "Zero-pad" means the tensor V-JEPA actually receives reads exactly 0.0
+    in the padded region, not merely black pixels pre-normalization (which
+    would land on a nonzero, per-channel-mean-shifted value after ImageNet
+    normalization) -- the padded region is explicitly re-zeroed after
+    normalization below.
+    """
     if x.ndim == 3:
         x = x.unsqueeze(0)
     assert x.ndim == 4 and x.shape[1] == 3, "Expected shape (B,3,H,W)"
@@ -97,15 +114,33 @@ def vjepa_from_unit_tensor(
                 f"Input must be in [0,1], got range [{minv:.4f},{maxv:.4f}]"
             )
 
-    resize = transforms.Resize(
-        (size, size),
-        interpolation=transforms.InterpolationMode.BICUBIC,
-        antialias=True,
-    )
+    b, c, h, w = x.shape
+    x = x.float()
+    letterbox = h != w
+    if letterbox:
+        scale = size / max(h, w)
+        new_h, new_w = max(1, round(h * scale)), max(1, round(w * scale))
+        resize = transforms.Resize(
+            (new_h, new_w), interpolation=transforms.InterpolationMode.BICUBIC, antialias=True,
+        )
+        x = resize(x)
+        top, left = (size - new_h) // 2, (size - new_w) // 2
+        canvas = torch.zeros(b, c, size, size, dtype=x.dtype, device=x.device)
+        canvas[:, :, top:top + new_h, left:left + new_w] = x
+        x = canvas
+    else:
+        resize = transforms.Resize(
+            (size, size), interpolation=transforms.InterpolationMode.BICUBIC, antialias=True,
+        )
+        x = resize(x)
+
     mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(1, 3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(1, 3, 1, 1)
-    x = resize(x.float())
     x = (x - mean.to(x.device)) / std.to(x.device)
+    if letterbox:
+        mask = torch.zeros(1, 1, size, size, dtype=x.dtype, device=x.device)
+        mask[:, :, top:top + new_h, left:left + new_w] = 1.0
+        x = x * mask
 
     if device is not None:
         x = x.to(device=device, dtype=out_dtype)
@@ -252,3 +287,48 @@ def extract_vjepa_tokens_per_block(
             feat = rearrange(feat, "b t n d -> b (t n) d")
         collapsed.append(feat)
     return collapsed
+
+
+def extract_vjepa_tokens_layers(
+    model: nn.Module,
+    pixel_values: torch.Tensor,
+    device,
+    dtype: torch.dtype,
+    layers: list,
+) -> torch.Tensor:
+    """Concatenate chosen block outputs along the feature dim -> [B, N, D*len(layers)], in the order given.
+
+    `layers` are 0-based block indices (negative allowed). The LAST block's slot is the model's final
+    (LayerNorm-ed) output, exactly what extract_vjepa_tokens() returns, so layers=[-1] reproduces it;
+    every other slot is the RAW block output (un-normed residual stream -- give each slot its own
+    LayerNorm downstream). V-JEPA is frozen, so everything is detached.
+    """
+    blocks = _find_transformer_blocks(model)
+    n_blocks = len(blocks)
+    idx = [(l + n_blocks) if l < 0 else int(l) for l in layers]
+    if any(i < 0 or i >= n_blocks for i in idx):
+        raise ValueError(f"vjepa_layers {list(layers)} out of range for {n_blocks} blocks")
+    captured: dict = {}
+    hooks = []
+    for i in sorted(set(idx) - {n_blocks - 1}):
+        def _hook(m, inp, out, i=i):
+            h = out[0] if isinstance(out, tuple) else out
+            captured[i] = h.detach()
+        hooks.append(blocks[i].register_forward_hook(_hook))
+    try:
+        final = extract_vjepa_tokens(model, pixel_values, device, dtype)
+    finally:
+        for h in hooks:
+            h.remove()
+    feats = []
+    for i in idx:
+        if i == n_blocks - 1:
+            feats.append(final)
+            continue
+        f = captured[i]
+        if f.ndim == 5:
+            f = rearrange(f, "b t h w d -> b (t h w) d")
+        elif f.ndim == 4:
+            f = rearrange(f, "b t n d -> b (t n) d")
+        feats.append(f.to(final.dtype))
+    return torch.cat(feats, dim=-1)

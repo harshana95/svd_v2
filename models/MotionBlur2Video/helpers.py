@@ -20,6 +20,7 @@ def apply_lora_to_model(
     target_modules: Optional[list] = None,
     bias: str = "none",
     verbose: bool = True,
+    modules_to_save: Optional[list] = None,
 ) -> nn.Module:
     """
     Apply LoRA to a transformer model.
@@ -90,7 +91,9 @@ def apply_lora_to_model(
         target_modules=matching_modules,
         lora_dropout=lora_dropout,
         bias=bias,
-        modules_to_save=None,
+        # Fully-trainable (non-LoRA) modules, matched by name suffix; PEFT saves them with the adapter and
+        # set_peft_model_state_dict reloads them in place (optimizer references stay valid on resume).
+        modules_to_save=list(modules_to_save) if modules_to_save else None,
     )
     
     # Apply LoRA
