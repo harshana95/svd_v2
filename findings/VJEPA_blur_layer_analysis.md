@@ -90,3 +90,25 @@ Code: `extract_global.py`, `heads_global.py`, `--head mlp` in `probes.py` / `att
 Attribution and patching with the MLP head give the same writers as the linear head. Frozen top writers: attn14, mlp2, attn22, attn21, attn4; finetuned: attn14, mlp2, attn9, attn10, attn4. Total-vs-necessity Spearman .86 (frozen) and .95 (finetuned); top-k beats random-k in both models (frozen top-8 7.1 vs random-8 1.1 of 13.5). The conclusion that attn14 and mlp2 carry most of the blur-logit does not depend on the linear head.
 
 Caveats: the video-level numbers include the low-level shortcut shown by the random control, so the video-level curve is weaker evidence of "V-JEPA identifies blur" than the token-level one. All 150 test clips come from 11 scenes. Not tested: attribution on the video-level classifier itself.
+
+## Follow-up 2026-10-10 (2): can the real-blur classifier localise blur and name the layers? (`localize.py`, `localize_eval.py`)
+Setup: linear head on final tokens trained ONLY on real whole-frame blur (never on splices); video logit V = mean head logit over 576 cells. Test on 60 spliced-patch clips (held-out scenes). Per block: backprop map attr = sum grad_V * (a_patch - a_sharp), forward map fwd = per-layer head(a_patch) - head(a_sharp). Controls: seam-only splice, shuffled-label head, random-init net, Laplacian-energy baseline (matched AUROC .74). Reviewed by a red-team agent (design) and a code-review agent (no index bugs; metric caveats below are from it).
+
+**Result 1, localisation works for the spliced patch (position-matched AUROC inside vs |dist|>=3 outside; blocks 0,2,4,6,8,12,16,20,23):**
+- Forward maps, frozen: .93 .93 .96 .95 .94 .93 .94 .92 .91; finetuned .92 .87 .94 .94 .89 .93 .94 .92 .90. Random-init .76 .67 .65 .64 .62 .63 .62 .62 .61. Shuffled-label head about .5 (.44-.66, sign is arbitrary). Beats the Laplacian baseline (.74) at every block.
+- Backprop maps, frozen: .65 .78 .83 .87 .89 .94 .95 .93 .91, so localisation sharpens with depth and is best at blocks 12-16; finetuned weaker and later: .51 .60 .63 .65 .63 .73 .85 .88 .89. Seam-only control .30-.55 (V does not move on a seam: -4.90 vs sharp -4.90), shuffled .45-.61, random-init .55-.65.
+- V rises from -4.9 (sharp) to -1.4 (patch) for frozen; in-mask cell logit rises from -4.8 to +3.3.
+- Leakage: forward map outside the patch is 1.7-2.7 near/far vs 5.7-8.9 inside (blocks 8-24), so the map sits mostly inside with a halo; backprop mass inside falls 0.99 (b0) -> 0.80 (b12) -> 0.52 (b23).
+
+**Result 2, which layers: distributed, early-to-mid.** Restoring sharp values for in-mask tokens only, by block group (fraction of the V rise removed; frozen / finetuned):
+blocks 1-3 .64/.60, 4-7 .51/.45, 8-11 .27/.29, 12-15 .17/.15, 16-19 .07/.13, 20-23 .29/.26 (does not sum to 1; swaps compensate). Per component the largest are mlp1 (.21), attn14 (.16), mlp18 (.14), mlp2 (.11) frozen; mlp2 (.25), attn11 (.16), mlp17 (.11) finetuned. Negative writers (restoring them raises V): mlp16, attn13/15/16 frozen; attn16/17/18 finetuned. mlp0 alone carries 1.0 (that is where the pixels enter, not blur detection). 27/46 and 29/46 components are individually significant (bootstrap CI over clips), so no single layer is "the" blur layer.
+So the ranking is: early blocks 1-7 write most of the in-patch blur evidence; blocks 12-16 are where the backprop map is best localised and contain suppressors; the last group adds again.
+
+**What this does NOT show (reviewer):**
+- The pointing-game metric is vacuous (about 1.00 for shuffled head, random net and seam control, because the delta is nonzero only inside the patch). Not reported as evidence.
+- Both maps are delta-based, so part of the AUROC is "is there a difference at that cell". Evidence that it is not only that: real head vs shuffled head gap, seam control at chance, and the random-init gap. The backprop map adds little over the delta on real blur: Spearman with the local |blur-sharp| map is +.25 to +.33 frozen but +.24 random-init (finetuned +.11), and |blur-sharp| correlates .78 with texture; partial correlation given texture is only +.06 to +.20. Real-blur localisation is therefore NOT demonstrated beyond what the pixel difference gives.
+- swap_out (equal-size far-outside cells) is about 0 by construction since those cells barely differ between runs, so "in minus out" overstates spatial specificity. Only the group-level in-mask necessity is informative; a matched-delta control is not done.
+- First-order grad x delta is not integrated gradients: completeness ratio .9-1.3 frozen but unreliable for the finetuned model (-.01 to .65).
+- 60 clips, 11 scenes, synthetic splices, one linear head.
+
+**Verdict:** yes for the spliced patch: a head trained on real blur, forward or backprop, localises the blurred area (matched AUROC .9-.95 vs .5 for null heads and seam control), and in-mask necessity points to blocks 1-7 (plus mlp0 where the pixels enter) rather than a single layer. Not shown for real local blur beyond the pixel-difference baseline.
