@@ -20,7 +20,7 @@ from attribute import train_head
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True); ap.add_argument("--part", required=True)
-    ap.add_argument("--model", default="frozen"); ap.add_argument("--n", type=int, default=48)
+    ap.add_argument("--model", default="frozen"); ap.add_argument("--head", default="linear"); ap.add_argument("--n", type=int, default=48)
     a = ap.parse_args()
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.manual_seed(0)
@@ -28,8 +28,8 @@ def main():
         return movement(a)
     model = load_frozen() if a.model == "frozen" else load_finetuned()
     tr = Tracer(model)
-    head = train_head(a.root, a.model, "linear")
-    A = np.load(os.path.join(a.root, f"attr_{a.model}_linear", "attr.npz"))
+    head = train_head(a.root, a.model, a.head)
+    A = np.load(os.path.join(a.root, f"attr_{a.model}_{a.head}", "attr.npz"))
     names = [str(s).rsplit("_", 1)[0] for s in A["samples"]]
     scn = sorted(set(names)); rank_scenes = set(scn[::2])
     rk = np.array([s in rank_scenes for s in names])
@@ -80,7 +80,7 @@ def main():
     res["prefix_necessity"] = {b: float(np.mean(accp[b])) for b in bs}     # patch embed + blocks [0,b)
     res["suffix_necessity"] = {b: float(np.mean(accs[b])) for b in bs}     # patch blocks [b,24)
     res["top_order_names"] = [COMPS[j] for j in order[:12]]
-    json.dump(res, open(os.path.join(a.root, f"followup_patch_{a.model}.json"), "w"), indent=1)
+    json.dump(res, open(os.path.join(a.root, f"followup_patch_{a.model}" + ("" if a.head == "linear" else f"_{a.head}") + ".json"), "w"), indent=1)
     print(json.dumps(res, indent=1))
 
 

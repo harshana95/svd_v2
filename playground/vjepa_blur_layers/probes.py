@@ -40,14 +40,22 @@ def balance_idx(y, c, seed=0):
     return np.array(sorted(keep))
 
 
-def fit_probe(X, y, steps=300, wd=1e-3, seed=0):
+def fit_probe(X, y, steps=300, wd=1e-3, seed=0, head="linear"):
     """Standardised-feature logistic regression (full-batch LBFGS-ish via Adam), fixed reg -> same capacity at every layer."""
     g = torch.Generator(device="cpu").manual_seed(seed)
     mu, sd = X.mean(0, keepdim=True), X.std(0, keepdim=True).clamp_min(1e-6)
     Xn = (X - mu) / sd
+    yf = y.float()
+    if head == "mlp":   # one hidden layer, fixed width/steps at every layer
+        torch.manual_seed(seed)
+        net = torch.nn.Sequential(torch.nn.Linear(X.shape[1], 256), torch.nn.GELU(), torch.nn.Linear(256, 1)).to(X.device)
+        opt = torch.optim.Adam(net.parameters(), lr=0.003, weight_decay=wd)
+        for _ in range(steps):
+            opt.zero_grad(); torch.nn.functional.binary_cross_entropy_with_logits(net(Xn).squeeze(-1), yf).backward(); opt.step()
+        net.eval().requires_grad_(False)
+        return lambda Z: net((Z - mu) / sd).squeeze(-1)
     w = torch.zeros(X.shape[1], device=X.device, requires_grad=True); b = torch.zeros(1, device=X.device, requires_grad=True)
     opt = torch.optim.Adam([w, b], lr=0.02)
-    yf = y.float()
     for _ in range(steps):
         opt.zero_grad()
         loss = torch.nn.functional.binary_cross_entropy_with_logits(Xn @ w + b, yf) + wd * (w ** 2).sum()
@@ -71,7 +79,7 @@ def gather(m, f, layer, kinds, cond):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--root", required=True)
-    ap.add_argument("--models", nargs="+", default=["frozen", "ft", "random"])
+    ap.add_argument("--models", nargs="+", default=["frozen", "ft", "random"]); ap.add_argument("--head", default="linear")
     a = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     res = {}
@@ -82,8 +90,8 @@ def main():
         for layer in range(25):
             Xtr, ii, ss = gather(mt, ft, layer, [0], (dtr >= 3) & (mt['strength'][:, None] >= 0.01)); ytr = torch.from_numpy(mt["slot_lab"][ii, ss])
             kp = balance_idx(ytr.numpy(), mt['slot_cell'][ii, ss]); Xtr, ytr = Xtr[kp].to(dev), ytr[kp].to(dev)   # position-balanced training
-            P = fit_probe(Xtr, ytr)
-            Pn = fit_probe(Xtr, ytr[torch.randperm(len(ytr), generator=torch.Generator().manual_seed(1)).to(dev)])  # shuffled-label null
+            P = fit_probe(Xtr, ytr, head=a.head)
+            Pn = fit_probe(Xtr, ytr[torch.randperm(len(ytr), generator=torch.Generator().manual_seed(1)).to(dev)], head=a.head)  # shuffled-label null
             r = {}
             Xte, ji, js = gather(me, fe, layer, [0], dte >= 1); Xte = Xte.to(dev)
             yte = torch.from_numpy(me["slot_lab"][ji, js]).to(dev); dd = dte[ji, js]; s = P(Xte)
@@ -116,12 +124,12 @@ def main():
                 def pf(mm, jj, ss_):
                     c = mm['slot_cell'][jj, ss_]; rr, cc = (c // 24 - 11.5) / 12, (c % 24 - 11.5) / 12
                     return torch.from_numpy(np.stack([rr, cc, rr * rr, cc * cc, rr * cc], 1)).float().to(dev)
-                Pp = fit_probe(pf(mt, ii, ss)[torch.from_numpy(kp).to(dev)], ytr)
+                Pp = fit_probe(pf(mt, ii, ss)[torch.from_numpy(kp).to(dev)], ytr, head=a.head)
                 r["auroc_position_only_unmatched"] = auroc(Pp(pf(me, ji, js))[m3], yte[m3].bool())
                 r["auroc_position_only"] = matched_auroc(Pp(pf(me, ji, js))[m3], yte[m3], cte[dd >= 3])
             res[model][layer] = r
             print(model, layer, {k: round(v, 3) for k, v in r.items() if k.startswith("auroc")}, flush=True)
-    json.dump(res, open(os.path.join(a.root, "probes.json"), "w"), indent=1)
+    json.dump(res, open(os.path.join(a.root, "probes.json" if a.head == "linear" else f"probes_{a.head}.json"), "w"), indent=1)
 
 
 if __name__ == "__main__":

@@ -74,3 +74,19 @@ E. Frozen vs finetuned: per-block movement ||ft_l - frozen_l|| on blur vs sharp 
 - fig8 (same crops, whole-frame blur): blur-rep vs GT-video difference maps are spatially diffuse and nearly the same as the sharp-rep vs GT-video (static-clip) maps, so no blur-specific localisation is visible there; the block-8 probe fires on broad regions that only loosely track the pixel |blur-sharp| map (best on the strongly blurred crop, poor on the weakly blurred ones), matching the weak whole-frame transfer (AUROC .70-.75 at block 8).
 - Component bars also show negative writers (attn11 in both models, mlp16 in frozen): patching them to sharp RAISES the blur logit, i.e. they suppress the blur signal.
 - Palette: Okabe-Ito blue/vermillion/grey; the dataviz palette validator could not be run (no node on the cluster).
+
+## Follow-up 2026-10-10: real whole-frame blur classifiers + nonlinear heads
+Code: `extract_global.py`, `heads_global.py`, `--head mlp` in `probes.py` / `attribute.py` / `followup.py`, `chain2_k0*.sh`. Test AUROC on held-out GoPro scenes, train 300 / test 150 clips, train filtered to whole-frame strength >= 0.01. Values below are blocks 0,1,2,4,6,8,12,16,20,final (24).
+
+**Per-block video-level classifier on real blur** (mean-pooled block features, blurred repeated clip vs the same frame sharp-repeated, and vs the real sharp GT clip). This is the "is the video blurry" classifier; the earlier probes were per-token only.
+- Frozen, linear, vs sharp: .92 .95 .96 .94 .96 .96 .98 .97 .95 .94. Peak at block 12 (.98). Versus the GT clip it reaches 1.00 at blocks 2-16.
+- Finetuned: flat at about .95-.96 vs sharp; vs GT it is lower than frozen in late blocks (.93 at final vs .97).
+- MLP head is within about .01 of linear everywhere, so the linear readout is not hiding extra structure. Max-pooling gives the same curve as mean-pooling. Shuffled-label null is .41-.53.
+- **Random-init control scores .87-.90 at every block** (video level) and .64-.81 at token level. Part of the video-level signal is low-level sharpness statistics that survive a random network. V-JEPA adds about +.06 to +.10 video-level and +.2 at token level; at block 0 the real-blur token probe is .84 vs .64 random.
+- Weak-blur tercile: .81 (b0) -> .94 (b12) -> .86 (final), frozen. Same shape as the spliced-patch result: the best layer is the middle one (block 12 for real blur; block 6-8 for spliced patches), and the last third loses some of it.
+- Token-level real blur (rep_blur vs rep_sharp at the same cells): .84 (b0), .93 (b1), .95 (b2-4), peak .98 at block 12, .95 final. This is much stronger than the transfer of the spliced-patch probe to real blur (.70-.80), so a probe trained on real blur resolves most of the earlier transfer gap.
+
+**Nonlinear (MLP) heads on the spliced-patch task**: per-block probes match the linear ones within .01 (frozen .78 .87 .93 .97 .98 .99 .98 .97 .95 .94 vs linear .79 .88 .92 .96 .98 .99 .98 .97 .95 .93). Transfer to whole-frame blur: .78-.82 vs .74-.80 linear. Random-init MLP probes: .62-.67 (linear .58-.62).
+Attribution and patching with the MLP head give the same writers as the linear head. Frozen top writers: attn14, mlp2, attn22, attn21, attn4; finetuned: attn14, mlp2, attn9, attn10, attn4. Total-vs-necessity Spearman .86 (frozen) and .95 (finetuned); top-k beats random-k in both models (frozen top-8 7.1 vs random-8 1.1 of 13.5). The conclusion that attn14 and mlp2 carry most of the blur-logit does not depend on the linear head.
+
+Caveats: the video-level numbers include the low-level shortcut shown by the random control, so the video-level curve is weaker evidence of "V-JEPA identifies blur" than the token-level one. All 150 test clips come from 11 scenes. Not tested: attribution on the video-level classifier itself.
