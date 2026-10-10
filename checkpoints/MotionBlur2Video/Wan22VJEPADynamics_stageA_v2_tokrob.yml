@@ -366,6 +366,8 @@ train:
   checkpoints_total_limit: 3
   patched: false
   check_speed: false
+  save_best: true
+  best_metric: epe
 val:
   batch_size: 1
   patched: false

@@ -1,6 +1,7 @@
 from datetime import datetime
 import gc
 import glob
+import json
 import importlib
 import math
 import os
@@ -867,6 +868,7 @@ class BaseModel():
 
                             if self.global_step % self.opt.train.validation_steps == 0:
                                 self.validation()
+                                self._update_best_checkpoint()
                         self.global_step += 1
 
                     # perform training step
@@ -925,6 +927,8 @@ class BaseModel():
                     self.save_other_parameters(final_path)
                     self.logger.info(f"Saved FINAL state to {final_path}")
             self.validation() # Final validation. If testing script, training loop will be skipped to here
+            if self.is_train:
+                self._update_best_checkpoint()
             if self.opt.push_to_hub:
                 repo_id = self.opt.hub_model_id or Path(self.opt.experiment_key).name
                 # if repo_exists(whoami()['name'] + "/" + repo_id):
@@ -950,6 +954,41 @@ class BaseModel():
 
         self.accelerator.end_training()
         
+    def _update_best_checkpoint(self):
+        """Keep ONE extra copy of the best-validated weights as `<experiments_root>/best-<step>` (+ best.json with the whole history).
+
+        Opt-in: `train.save_best: true`. Metric: `train.best_metric` (default 'epe', lower is better; 'psnr'/'ssim' are higher-better),
+        read from `self.last_val_metrics` which the model's validation() fills. Named `best-<step>` on purpose: keep_last_checkpoints and
+        resume-from-'latest' only consider dirs starting with 'checkpoint', so rotation never deletes it, and resume/eval code that parses
+        int(name.split('-')[1]) still gets the step. Main process only (the in-loop save already is)."""
+        tr = self.opt.train
+        if not (self.is_train and tr.get("save_best", False)) or not self.accelerator.is_main_process:
+            return
+        name = str(tr.get("best_metric", "epe"))
+        val = (getattr(self, "last_val_metrics", None) or {}).get(name)
+        if val is None or not np.isfinite(val):
+            self.logger.warning("save_best: validation produced no finite %r; best checkpoint not updated", name)
+            return
+        higher = name in ("psnr", "ssim")
+        root = self.opt.path.experiments_root
+        info_path = os.path.join(root, "best.json")
+        info = json.load(open(info_path)) if os.path.isfile(info_path) else {"metric": name, "history": []}
+        info["history"].append({"step": int(self.global_step), name: float(val)})
+        prev = info.get("value")
+        if prev is None or (val > prev if higher else val < prev):
+            for d in os.listdir(root):
+                if d.startswith("best-") and os.path.isdir(os.path.join(root, d)):
+                    shutil.rmtree(os.path.join(root, d))
+            best_path = os.path.join(root, f"best-{self.global_step}")
+            self.accelerator.save_state(best_path, save_optimizer=False)
+            self.save_other_parameters(best_path)
+            info.update(step=int(self.global_step), value=float(val), dir=os.path.basename(best_path))
+            self.logger.info("save_best: NEW best %s=%.4f at step %d -> %s", name, val, self.global_step, best_path)
+        else:
+            self.logger.info("save_best: %s=%.4f at step %d (best stays %.4f at step %s)", name, val, self.global_step, prev, info.get("step"))
+        with open(info_path, "w") as f:
+            json.dump(info, f, indent=1)
+
     @torch.no_grad()
     def validation(self):
         gc.collect()

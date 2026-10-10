@@ -112,7 +112,15 @@ class Wan22VJEPADynamics_model(BaseModel):
         revision = _cfg(opt, "revision", "main")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_id, subfolder="tokenizer", revision=revision)
-        self.text_encoder = UMT5EncoderModel.from_pretrained(model_id, subfolder="text_encoder", revision=revision)
+        # low_mem_eval (opt-in): load the UMT5-XXL encoder directly in weight_dtype (bf16: ~11 GB host RAM instead of ~23 GB in fp32;
+        # it is cast to weight_dtype on the GPU below anyway, so the numerics are identical) and drop it once the empty-prompt
+        # embedding is cached (frees ~11 GB GPU). For running evals next to another job under a shared RAM / GPU budget.
+        self.low_mem_eval = bool(_cfg(opt, "low_mem_eval", False))
+        if self.low_mem_eval:
+            self.text_encoder = UMT5EncoderModel.from_pretrained(model_id, subfolder="text_encoder", revision=revision,
+                                                                 torch_dtype=weight_dtype)
+        else:
+            self.text_encoder = UMT5EncoderModel.from_pretrained(model_id, subfolder="text_encoder", revision=revision)
         self.transformer = WanTransformer3DModel.from_pretrained(
             model_id, subfolder="transformer", torch_dtype=weight_dtype, revision=revision
         )
@@ -122,6 +130,13 @@ class Wan22VJEPADynamics_model(BaseModel):
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             model_id, subfolder="scheduler", revision=revision
         )
+        # The checkpoint's own scheduler is UniPC with flow_shift 5, but the Euler scheduler loaded above has NO flow_shift key and falls
+        # back to shift=1.0. Runs trained with uniform t are self-consistent with shift 1 (default kept bit-for-bit); runs trained with a
+        # shifted t distribution (t_sampling shifted/logit_normal, t_shift=S) MUST sample with the same shift: set inference_flow_shift: S.
+        _ifs = _cfg(opt, "inference_flow_shift", None)
+        if _ifs is not None:
+            self.scheduler = FlowMatchEulerDiscreteScheduler.from_config(self.scheduler.config, shift=float(_ifs))
+            logger.info("inference scheduler: FlowMatchEuler shift=%.2f", float(_ifs))
 
         if _cfg(opt, "enable_slicing", False):
             self.vae.enable_slicing()
@@ -274,7 +289,10 @@ class Wan22VJEPADynamics_model(BaseModel):
         # clean blur latent tiled over time, added at block 0. Starts as an exact no-op.
         self.blur_every_frame = bool(_cfg(opt, "blur_every_frame_conditioning", False))
         # Trainable full-weight modules (unfreeze_modules) must be fp32 masters, else 1e-5-scale updates vanish in bf16.
-        self._unfreeze_fp32 = bool(_cfg(opt, "unfreeze_modules", None))
+        # `fp32_trainable: true` extends this to the LoRA A/B weights: a bf16 LoRA_A (|w|~0.02, ulp ~1e-4) silently drops Adam steps of
+        # ~lr=1e-4. Off by default so existing configs/checkpoints reproduce bit-for-bit.
+        self._fp32_lora = bool(_cfg(opt, "fp32_trainable", False))
+        self._unfreeze_fp32 = bool(_cfg(opt, "unfreeze_modules", None)) or self._fp32_lora
         # Wan's VAE is CAUSAL: latent 0 absorbs exactly ONE pixel frame and every
         # later latent absorbs vae_scale_factor_temporal. So a prefix lands on a
         # latent boundary iff p % 4 == 1 (p in 1, 5, 9, ...), NOT p % 4 == 0.
@@ -293,6 +311,25 @@ class Wan22VJEPADynamics_model(BaseModel):
                 f"(legacy, straddles a latent boundary -- kept only for checkpoint compatibility)."
             )
         self._prefix_latent_aligned = rem == 1
+        # v3 REAL-context layout (replaces the copy-prefix): the generated video is
+        #   [ctx_front real frames][wan_num_frames exposure frames][ctx_back real frames]
+        # where the first ctx_front frames = 1 condition-slot frame (pixel 0 -> latent 0, replaced by the blur latent but it still
+        # leaks into later latents through the causal VAE, so it is a REAL frame) + (ctx_front-1) real past frames. All context
+        # frames are contiguous GT video from the dataset (`context_key`, e.g. 19 frames = 5 past | 9 exposure | 5 future).
+        # Needs (ctx_front + wan_num_frames + ctx_back - 1) % 4 == 0 (e.g. 5 + 9 + 3 = 17 -> 5 latents). deblur_prefix_frames must be 0.
+        self.context_key = _cfg(opt, "context_key", None)
+        _lay = _cfg(opt, "context_layout", None)
+        if self.context_key:
+            self.ctx_front = int(_lay.get("front", 5)) if _lay is not None else 5
+            self.ctx_back = int(_lay.get("back", 3)) if _lay is not None else 3
+            if self.deblur_prefix_frames != 0:
+                raise ValueError("context_key (v3 real-context layout) requires deblur_prefix_frames: 0")
+            if self.dynamics_injection != "cross_attention":
+                raise ValueError("context_key (v3) requires dynamics_injection=cross_attention")
+        else:
+            self.ctx_front, self.ctx_back = self.deblur_prefix_frames, 0
+        # flow-matching weight on latents that contain ONLY context frames (the blur says little about them)
+        self.ctx_loss_weight = float(_cfg(opt, "ctx_loss_weight", 0.5))
 
         self.lora_finetune = bool(_cfg(opt, "lora_finetune", False))
         if self.lora_finetune:
@@ -577,6 +614,8 @@ class Wan22VJEPADynamics_model(BaseModel):
                     self.dynamics_stroke.requires_grad_(False)
                     _sc.attach_stroke_control(self.dynamics_encoder, self.dynamics_stroke, _mid)
                     self.dynamics_stroke_cfg = _sc.StrokeCfg.from_opt(_cfg(opt, "dynamics_stroke_extract", None))
+                    # must match the renderer the Stage B checkpoint was trained with (phase 2: soft band; None = phase 1)
+                    self.dynamics_stroke_band = _sc.stroke_band_from_opt(_cfg(opt, "dynamics_stroke_band", None))
                     self.dynamics_stroke_raft = _sc.load_raft(self.accelerator.device)
                     logger.info("loaded stroke control from %s (mode=%s, |heads|=%.3f)", _st_ckpt, self.dynamics_stroke_mode,
                                 self.dynamics_stroke.last_layer_norm())
@@ -775,10 +814,11 @@ class Wan22VJEPADynamics_model(BaseModel):
         if self._unfreeze_fp32:
             n_fp32 = 0
             for n_, p_ in self.transformer.named_parameters():
-                if "modules_to_save" in n_ and p_.requires_grad:
+                if p_.requires_grad and ("modules_to_save" in n_ or (self._fp32_lora and "lora_" in n_)):
                     p_.data = p_.data.float()
                     n_fp32 += 1
-            logger.info("unfreeze_modules: %d trainable full-weight tensors held in fp32 (forward runs under bf16 autocast)", n_fp32)
+            logger.info("fp32 masters: %d trainable transformer tensors held in fp32 (forward runs under bf16 autocast; lora=%s)",
+                        n_fp32, self._fp32_lora)
         self.text_encoder = self.text_encoder.to(self.accelerator.device, dtype=weight_dtype)
         self.vae = self.vae.to(self.accelerator.device, dtype=torch.float32)
         # Keep adapters in fp32 (matches blur_adapters' convention); they
@@ -819,7 +859,10 @@ class Wan22VJEPADynamics_model(BaseModel):
             check_w = int(_cfg(opt.datasets.train, "resize_w", crop_size))
         else:
             check_h = check_w = crop_size
-        check_total_frames = wan_num_frames_cfg + self.deblur_prefix_frames
+        check_total_frames = wan_num_frames_cfg + self.ctx_front + self.ctx_back
+        if (check_total_frames - 1) % self.vae_scale_factor_temporal != 0:
+            raise ValueError(f"total generated frames {check_total_frames} (= {self.ctx_front} front + {wan_num_frames_cfg} exposure + "
+                             f"{self.ctx_back} back) must be 1 mod {self.vae_scale_factor_temporal}")
         with torch.no_grad():
             t_lat_check = (check_total_frames - 1) // self.vae_scale_factor_temporal + 1
             h_lat_check = check_h // self.vae_scale_factor_spatial
@@ -1002,9 +1045,30 @@ class Wan22VJEPADynamics_model(BaseModel):
         else:
             self.current_burst_size = self.burst_size
         self.sample = data
+        self._check_pm1(data, is_train)
         patched = self.opt.train.patched if is_train else self.opt.val.patched
         if patched:
             raise NotImplementedError("Patched/grid training is not supported for Wan22VJEPADynamics_model.")
+
+    def _check_pm1(self, data, is_train):
+        """The model assumes wan_frames / context frames in [-1,1]. A [0,1] tensor (e.g. a manifest with wan_frames_range '01') is washed by
+        (x+1)/2 with NO error. A real pm1 clip of the batch has dark pixels (min < 0), a [0,1] tensor has min >= 0 and max <= 1.
+        Eval raises (an invalid eval is worse than a crash); training only warns once (a very bright crop could trip it legitimately)."""
+        if not isinstance(data, dict):
+            return
+        for key in ("wan_frames", getattr(self, "context_key", None)):
+            x = data.get(key) if key else None
+            if x is None or not torch.is_tensor(x):
+                continue
+            lo, hi = float(x.min()), float(x.max())
+            if lo >= -1e-4 and hi <= 1.0 + 1e-4:
+                msg = (f"{key} range [{lo:.3f},{hi:.3f}] looks like [0,1] data but the model expects [-1,1] "
+                       f"(wan_frames_range '01' manifest?) -- the GT / V-JEPA oracle input would be washed")
+                if not is_train:
+                    raise ValueError(msg)
+                if not getattr(self, "_warned_pm1", False):
+                    self._warned_pm1 = True
+                    self.logger.warning(msg)
 
     # --- dynamics tokens (source depends on self.dynamics_source) ---
 
@@ -1348,7 +1412,8 @@ class Wan22VJEPADynamics_model(BaseModel):
         H, W = sample["blur"].shape[-2:]
         has = torch.tensor([len(s) > 0 for s in strokes], device=dev)
         if bool(has.any()):
-            ctrl.set_control(_sc.render_strokes(strokes, (H, W), self.vjepa_image_size, dev), has)
+            ctrl.set_control(_sc.render_strokes(strokes, (H, W), self.vjepa_image_size, dev,
+                                                band=getattr(self, "dynamics_stroke_band", None)), has)
         os.makedirs(self.opt.path.experiments_root, exist_ok=True)
         with open(os.path.join(self.opt.path.experiments_root, "stroke_log.jsonl"), "a") as f:
             for i in range(B):
@@ -1530,6 +1595,35 @@ class Wan22VJEPADynamics_model(BaseModel):
             extra_t_lat = self.deblur_prefix_frames // self.vae_scale_factor_temporal
         return extra_t_lat // self.patch_size[0]
 
+    def _build_target_video(self, sample, wan_frames):
+        """[B,T,3,H,W] exposure frames -> the full generated-video target [B,front+T+back,3,H,W] (v3 real context), or the legacy
+        copy-prefix video when context_key is unset."""
+        if not self.context_key:
+            return self._prepend_deblur_frames(wan_frames)
+        ctx = sample[self.context_key].to(self.accelerator.device, dtype=torch.float32)       # [B,Tc,3,H,W]
+        T = wan_frames.shape[1]
+        s0 = (ctx.shape[1] - T) // 2
+        if s0 < self.ctx_front or ctx.shape[1] - (s0 + T) < self.ctx_back:
+            raise ValueError(f"context window {ctx.shape[1]} too short for front={self.ctx_front}, T={T}, back={self.ctx_back}")
+        return torch.cat([ctx[:, s0 - self.ctx_front:s0], wan_frames, ctx[:, s0 + T:s0 + T + self.ctx_back]], dim=1)
+
+    def _latent_loss_weights(self, t_lat: int, T: int, device):
+        """[1,1,t_lat,1,1] flow-matching weights: latents made ONLY of context frames get ctx_loss_weight, others 1. Latent 0 covers
+        pixel 0; latent k>=1 covers pixels 4k-3..4k."""
+        w = torch.ones(1, 1, t_lat, 1, 1, device=device)
+        if not self.context_key or self.ctx_loss_weight == 1.0:
+            return w
+        r, e0, e1 = self.vae_scale_factor_temporal, self.ctx_front, self.ctx_front + T   # exposure = pixels [e0, e1)
+        for k in range(1, t_lat):
+            a, b = r * (k - 1) + 1, r * k
+            if b < e0 or a >= e1:
+                w[:, :, k] = self.ctx_loss_weight
+        return w
+
+    def _crop_exposure(self, video, T: int):
+        """Decoded [B,3,Ttot,H,W] -> the T exposure frames."""
+        return video[:, :, self.ctx_front:self.ctx_front + T]
+
     def _prepend_deblur_frames(self, video_btchw: torch.Tensor) -> torch.Tensor:
         """[B,T,3,H,W] -> [B,T+deblur_prefix_frames,3,H,W], prepending
         `deblur_prefix_frames` copies of the clip's own first (real, sharp)
@@ -1617,6 +1711,12 @@ class Wan22VJEPADynamics_model(BaseModel):
                 self.tokenizer, self.text_encoder, [""], self.max_text_seq_length,
                 self.accelerator.device, self.weight_dtype, requires_grad=False,
             )
+            if getattr(self, "low_mem_eval", False) and not self.is_train:
+                self.text_encoder = None              # the prompt is always "" -> the cached embedding is all that is ever needed
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                self.logger.info("low_mem_eval: empty-prompt embedding cached, UMT5 text encoder dropped")
         return self._empty_prompt_embeds.expand(bsz, -1, -1)
 
     # --- optical flow (validation-time visualization only) ---
@@ -1846,7 +1946,7 @@ class Wan22VJEPADynamics_model(BaseModel):
         # when 0) -- gives the model a dedicated priming region whose
         # target is always "the true sharp first frame," before the frames
         # requiring real motion prediction. See _prepend_deblur_frames.
-        wan_frames_extended = self._prepend_deblur_frames(wan_frames)
+        wan_frames_extended = self._build_target_video(sample, wan_frames)
         video_bcthw = wan_frames_extended.permute(0, 2, 1, 3, 4)  # [B,3,T',H,W] -- the sharp clip, denoising target only
         # The I2V first-frame condition must be the actual accessible input
         # (the blurred/frame-averaged image) -- Adobe240Dataset applies the
@@ -1950,7 +2050,16 @@ class Wan22VJEPADynamics_model(BaseModel):
         # `velocity_target` there is an arbitrary, unobservable target --
         # leaving it unmasked injects pure-variance gradient with no
         # learnable signal.
-        frame_mask = first_frame_mask.expand_as(model_output)
+        _lw = self._latent_loss_weights(t_lat, wan_frames.shape[1], x0.device)
+        if not getattr(self, "_layout_logged", False):
+            self._layout_logged = True
+            self.logger.info(
+                "LAYOUT: exposure T=%d, front=%d, back=%d -> target video %d px frames -> latent %s -> post-patch (t,h,w)=(%d,%d,%d)=%d tokens; "
+                "per-latent loss weights (latent 0 = condition, masked) %s",
+                wan_frames.shape[1], self.ctx_front, self.ctx_back, wan_frames_extended.shape[1], tuple(x0.shape),
+                post_patch_num_frames, post_patch_height, post_patch_width,
+                post_patch_num_frames * post_patch_height * post_patch_width, [round(float(v), 2) for v in _lw.flatten()])
+        frame_mask = (first_frame_mask * _lw).expand_as(model_output)
         per_elem = F.mse_loss(model_output.float(), velocity_target.float(), reduction="none")
         loss = (per_elem * frame_mask).sum() / frame_mask.sum().clamp(min=1)
         wan_loss, aux = loss, None
@@ -2025,7 +2134,7 @@ class Wan22VJEPADynamics_model(BaseModel):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 return self._decode_latents(z.to(self.weight_dtype))
         video = torch.utils.checkpoint.checkpoint(dec, x0_hat, use_reentrant=False)       # [b,3,T',H,W] in [-1,1]
-        video = video[:, :, self.deblur_prefix_frames:].float()
+        video = self._crop_exposure(video, wan_frames.shape[1]).float()
         reblur = pixel = None
         if want_reblur:
             ok = (t[sel] < self.reblur_t_max)
@@ -2065,6 +2174,7 @@ class Wan22VJEPADynamics_model(BaseModel):
         # burst-length-specific regression shows up during training. Single-value configs (or no
         # dynamic_burst at all) run exactly one pass as before -- this is purely additive.
         val_sizes = self.dyn_burst["val_sizes"] if self.dyn_burst is not None else [None]
+        self._val_acc = {"epe": [], "psnr": [], "ssim": []}
         for S in val_sizes:
             if S is not None:
                 self.dyn_burst["val_size"] = S
@@ -2076,6 +2186,12 @@ class Wan22VJEPADynamics_model(BaseModel):
                 if idx >= self.max_val_steps:
                     break
         self._val_stem_suffix = ""
+        # clip-averaged metrics of this whole validation pass (base_model._update_best_checkpoint reads them for save_best)
+        self.last_val_metrics = {k: float(np.mean(v)) for k, v in self._val_acc.items() if v}
+        if self.last_val_metrics:
+            log_metric(self.accelerator, {f"val_mean/{k}": v for k, v in self.last_val_metrics.items()}, self.global_step)
+            self.logger.info("validation mean over %d clips: %s", len(self._val_acc["psnr"]),
+                             ", ".join(f"{k}={v:.4f}" for k, v in self.last_val_metrics.items()))
 
         for model in self.models:
             model.train()
@@ -2275,8 +2391,9 @@ class Wan22VJEPADynamics_model(BaseModel):
         snapped to the nearest count Wan can produce, i.e. (F + deblur_prefix - 1) % vae_scale_factor_temporal == 0."""
         r = int(self.vae_scale_factor_temporal)
         target = scale * (t_gt - 1) + 1
-        k = int(round((target + self.deblur_prefix_frames - 1) / r))
-        f = k * r - (self.deblur_prefix_frames - 1)
+        fb = self.ctx_front + self.ctx_back
+        k = int(round((target + fb - 1) / r))
+        f = k * r - (fb - 1)
         while f < 1:
             f += r
         return int(f)
@@ -2324,7 +2441,7 @@ class Wan22VJEPADynamics_model(BaseModel):
         if self.suite is not None and self.active_arm is not None and self.active_arm["mode"] == "resample_time":
             T = self._resample_out_frames(T_gt, float(self.active_arm["scale"]))
             self._out_frames_override = T
-        t_lat = (T + self.deblur_prefix_frames - 1) // self.vae_scale_factor_temporal + 1
+        t_lat = (T + self.ctx_front + self.ctx_back - 1) // self.vae_scale_factor_temporal + 1
 
         first_frame_mask = torch.ones(1, 1, t_lat, h_lat, w_lat, device=device, dtype=torch.float32)
         first_frame_mask[:, :, 0] = 0
@@ -2409,7 +2526,7 @@ class Wan22VJEPADynamics_model(BaseModel):
         # only to prime the model's implicit deblurring, not to be scored
         # or compared as generated motion content. No-op when
         # deblur_prefix_frames == 0.
-        video = video_with_prefix[:, :, self.deblur_prefix_frames:]  # [B,3,T,H,W] in [-1,1]
+        video = self._crop_exposure(video_with_prefix, T)  # [B,3,T,H,W] in [-1,1]
 
         # Optical flow (validation-time visualization only): computed separately
         # for GT and pred, both as a per-frame flow video and as a single
@@ -2430,8 +2547,8 @@ class Wan22VJEPADynamics_model(BaseModel):
         # deblur_prefix_frames > 0.
         gen_with_prefix_01 = (
             ((video_with_prefix.cpu().float().numpy() + 1.0) / 2.0).clip(0, 1)
-            if self.deblur_prefix_frames > 0 else None
-        )  # [B,3,T+deblur_prefix_frames,H,W]
+            if (self.ctx_front + self.ctx_back) > 0 else None
+        )  # [B,3,T+front+back,H,W]
         # vjepa_input_clip_01 is already in [0,1] (it's the pre-ImageNet-normalization
         # clip built inside _dynamics_full_grid) -- only set for dynamics_source="vjepa_gt".
         vjepa_input_01 = vjepa_input_clip_01.cpu().float().numpy() if vjepa_input_clip_01 is not None else None
@@ -2565,6 +2682,15 @@ class Wan22VJEPADynamics_model(BaseModel):
             # also sit at very different absolute levels here, so the collapsed
             # value drifts with sample ordering rather than with model quality.
             metrics = {"video_psnr": float(np.mean(psnrs)), "video_ssim": float(np.mean(ssims))}
+            # forward motion error: mean end-point error between RAFT flows of the generated and GT clips (same frame pairs)
+            if self.suite is None:
+                epe_i = float(torch.linalg.vector_norm(pred_flows[i].float() - gt_flows[i].float(), dim=1).mean())
+                metrics["video_epe"] = epe_i
+            acc = getattr(self, "_val_acc", None)
+            if acc is not None:
+                acc["psnr"].append(metrics["video_psnr"]); acc["ssim"].append(metrics["video_ssim"])
+                if "video_epe" in metrics:
+                    acc["epe"].append(metrics["video_epe"])
             src = self.sample.get("source") if isinstance(self.sample, dict) else None
             if src is not None:
                 # collate turns the per-sample string into a list

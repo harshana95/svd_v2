@@ -1,0 +1,372 @@
+name: Motion
+model_type: Wan22VJEPADynamics_model
+tracker_project_name: Motion
+experiment_key: Wan22VJEPADynamics_stageA_v2_blurevery
+is_train: true
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+pretrained_model_name_or_path: Wan-AI/Wan2.2-TI2V-5B-Diffusers
+dynamics_source: vjepa_gt
+burst_size: 1
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: true
+vjepa_num_tubelets: 4
+vjepa_grid_h: 24
+vjepa_grid_w: 24
+vjepa_feature_dim: 1024
+pga_rank: 8
+lora_finetune: true
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.0
+lora_target_modules:
+- to_q
+- to_k
+- to_v
+- to_out
+- ffn.net.0.proj
+- ffn.net.2
+disable_dynamics_injection: false
+deblur_prefix_frames: 4
+dynamics_injection: cross_attention
+xattn_rank: 64
+dynamics_connector_type: pooled
+transformer_gradient_checkpointing: true
+datasets:
+  train:
+    type: MixedDataset
+    epoch_size: 4000
+    seed: 42
+    use_shuffle: true
+    num_worker_per_gpu: 4
+    burst_size: 1
+    crop_size: 512
+    sources:
+    - weight: 0.25
+      name: adobe
+      type: Adobe240Dataset
+      data_dir: /depot/chan129/data/Adobe240/Adobe_240fps_dataset/Adobe_240fps_blur
+      split: train
+      use_shuffle: true
+      crop_size: 704
+      window_size: 11
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.2
+      name: gopro
+      type: GoProSequenceDataset
+      data_dir: /scratch/gilbreth/wweligam/data/GOPRO_Large_all
+      split: train
+      frames_subdir: train
+      use_shuffle: true
+      random_crop: true
+      crop_size: 704
+      window_size: 11
+      center_stride: 8
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.2
+      name: x4k
+      type: X4K1000FPSDataset
+      data_dir: /scratch/gilbreth/wweligam/data/X4K1000FPS
+      split: train
+      is_train: true
+      scene_split:
+      - 0.0
+      - 0.95
+      use_shuffle: true
+      random_crop: true
+      crop_size: 704
+      window_size: 11
+      center_stride: 8
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.25
+      name: omoblur
+      type: OMoBlurDataset
+      data_dir: /scratch/gilbreth/wweligam/OMoBlur
+      split: train
+      use_shuffle: true
+      random_crop: true
+      crop_size: 360
+      out_size: 512
+      blur_lengths:
+      - 11
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+      mask_crop: true
+      mask_min_coverage: 0.25
+      mask_blur_free_prob: 0.1
+    - weight: 0.05
+      name: fmo
+      type: FallingObjectsDataset
+      data_dir: /scratch/gilbreth/wweligam/data/FMO_TbD/falling_objects
+      scenes:
+      - v_box_GTgamma
+      - v_cell_GTgamma
+      - v_pen_GTgamma
+      - v_rubber_GTgamma
+      peak_center_scenes:
+        v_box_GTgamma: 301
+        v_cell_GTgamma: 156
+        v_pen_GTgamma: 341
+        v_rubber_GTgamma: 304
+      centers_around_peak: 96
+      burst_center_step: 1
+      crop_mode: random_square
+      sharp_subdir: imgs_gt
+      out_size: 512
+      window_size: 11
+      center_stride: 8
+      margin_frames: 20
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.05
+      name: tbd3d
+      type: FallingObjectsDataset
+      data_dir: /scratch/gilbreth/wweligam/data/FMO_TbD/tbd3d
+      scenes:
+      - HighFPS_GT_depth2
+      - HighFPS_GT_depthb2
+      - HighFPS_GT_depthf1
+      - HighFPS_GT_depthf2
+      - HighFPS_GT_depthf3
+      - HighFPS_GT_out1
+      - HighFPS_GT_outa1
+      - HighFPS_GT_outb1
+      peak_center_scenes:
+        HighFPS_GT_depth2: 32
+        HighFPS_GT_depthb2: 35
+        HighFPS_GT_depthf1: 319
+        HighFPS_GT_depthf2: 48
+        HighFPS_GT_depthf3: 53
+        HighFPS_GT_out1: 102
+        HighFPS_GT_outa1: 27
+        HighFPS_GT_outb1: 147
+      centers_around_peak: 96
+      burst_center_step: 1
+      crop_mode: random_square
+      sharp_subdir: imgs_gt
+      out_size: 512
+      window_size: 11
+      center_stride: 8
+      margin_frames: 20
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    vjepa_window_size: 8
+    patch_aspect_ratios: true
+    is_train: true
+    batch_size: 2
+    patches_per_group: 2
+    crop_size_choices:
+    - 384
+    - 512
+    - 640
+    - 704
+    crop_aspect_min: 0.5
+    crop_aspect_max: 2.0
+    shape_divisor: 32
+    frame_keys:
+    - wan_frames
+    augment:
+      hflip: 0.5
+      vflip: 0.0
+      time_reverse: 0.5
+      scale_range:
+      - 0.75
+      - 1.5
+  val:
+    type: MixedDataset
+    epoch_size: 12
+    seed: 0
+    use_shuffle: false
+    num_worker_per_gpu: 0
+    burst_size: 1
+    crop_size: 512
+    sources:
+    - weight: 0.16666666666666666
+      name: adobe
+      type: Adobe240Dataset
+      data_dir: /depot/chan129/data/Adobe240/Adobe_240fps_dataset/Adobe_240fps_blur
+      split: test
+      use_shuffle: false
+      crop_size: 352
+      out_size: 512
+      window_size: 11
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.16666666666666666
+      name: gopro
+      type: GoProSequenceDataset
+      data_dir: /scratch/gilbreth/wweligam/data/GOPRO_Large_all
+      split: test
+      frames_subdir: test
+      use_shuffle: false
+      random_crop: false
+      crop_size: 512
+      window_size: 11
+      center_stride: 8
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.16666666666666666
+      name: x4k
+      type: X4K1000FPSDataset
+      data_dir: /scratch/gilbreth/wweligam/data/X4K1000FPS
+      split: val
+      is_train: false
+      scene_split:
+      - 0.95
+      - 1.0
+      use_shuffle: false
+      random_crop: false
+      crop_size: 512
+      window_size: 11
+      center_stride: 8
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.16666666666666666
+      name: omoblur
+      type: OMoBlurDataset
+      data_dir: /scratch/gilbreth/wweligam/OMoBlur
+      split: val
+      use_shuffle: false
+      random_crop: false
+      crop_size: 360
+      out_size: 512
+      blur_lengths:
+      - 11
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.16666666666666666
+      name: fmo
+      type: FallingObjectsDataset
+      data_dir: /scratch/gilbreth/wweligam/data/FMO_TbD/falling_objects
+      scenes:
+      - v_key_GTgamma
+      - v_marker_GTgamma
+      peak_center_scenes:
+        v_key_GTgamma: 270
+        v_marker_GTgamma: 313
+      crop_mode: motion_square
+      sharp_subdir: imgs_gt
+      out_size: 512
+      window_size: 11
+      center_stride: 8
+      margin_frames: 20
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    - weight: 0.16666666666666666
+      name: tbd3d
+      type: FallingObjectsDataset
+      data_dir: /scratch/gilbreth/wweligam/data/FMO_TbD/tbd3d
+      scenes:
+      - HighFPS_GT_out2
+      - HighFPS_GT_outf1
+      peak_center_scenes:
+        HighFPS_GT_out2: 57
+        HighFPS_GT_outf1: 150
+      crop_mode: motion_square
+      sharp_subdir: imgs_gt
+      out_size: 512
+      window_size: 11
+      center_stride: 8
+      margin_frames: 20
+      burst_size: 1
+      vjepa_window_size: 8
+      include_wan_frames: true
+      wan_num_frames: 9
+      wan_key: wan_frames
+      wan_frames_range: pm1
+    vjepa_window_size: 8
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/Wan22VJEPADynamics_stageA_v2_blurevery_2026_10_06_11_24_14
+  resume_from_checkpoint: checkpoint-24000
+  use_same_dir: true
+train:
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 0.0001
+    override_lr_on_resume: true
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1.0e-08
+    max_grad_norm: 1.0
+  scheduler:
+    type: constant_with_warmup
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+  gradient_accumulation_steps: 1
+  num_train_epochs: 100
+  batch_size: 2
+  max_train_steps: 30000
+  validation_steps: 5000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+  patched: false
+  check_speed: false
+val:
+  batch_size: 1
+  patched: false
+  save_images: true
+  max_val_steps: 8
+  num_inference_steps: 50
+  metrics:
+    psnr:
+      crop: 8
+    ssim:
+      crop: 8
+blur_every_frame_conditioning: true

@@ -119,7 +119,7 @@ def dump(cfg, path, stage):
 
 
 def build_stageA_v2(key, *, multilayer=False, reblur=0.0, unfreeze=False, tshift=None, tokrob=False, pixel=0.0,
-                    blur_everyframe=False, steps=100000, smoke=False):
+                    blur_everyframe=False, fp32=False, context=False, notoken=False, steps=100000, smoke=False):
     """Stage A v2 (fixed after the 2026-10-06 audit): pool + multi-res patchified batches (F=9 only, so the blur window == the
     clip's exposure as at eval) + isotropic scale/flip/time-reverse aug + LoRA r=32 on attn+FFN. Every new lever is an opt-in kwarg so
     arms differ by ONE thing: multilayer V-JEPA (4 depths), reblur (gt_mean target), unfreeze (fp32 masters, 0.1x LR, no wd issue),
@@ -128,6 +128,11 @@ def build_stageA_v2(key, *, multilayer=False, reblur=0.0, unfreeze=False, tshift
     cfg = build(A_TEMPLATE, "A", key, steps, 2000, 10000)
     cfg["disable_dynamics_injection"] = False
     cfg["lora_r"], cfg["lora_alpha"] = 32, 64
+    if notoken:
+        # no-token control under the SAME recipe: V-JEPA signal zeroed (modules stay trainable, no V-JEPA forward is paid)
+        cfg["disable_dynamics_injection"] = True
+    if fp32:
+        cfg["fp32_trainable"] = True   # fp32 LoRA masters under bf16 autocast (bf16 LoRA_A drops lr-sized Adam steps)
     cfg["lora_target_modules"] = ["to_q", "to_k", "to_v", "to_out", "ffn.net.0.proj", "ffn.net.2"]  # attn1+attn2+FFN
     if unfreeze:
         cfg["unfreeze_modules"] = ["patch_embedding", "proj_out", "condition_embedder", "norm2"]
@@ -143,12 +148,27 @@ def build_stageA_v2(key, *, multilayer=False, reblur=0.0, unfreeze=False, tshift
                    pixel_max_pixels=384 * 384)
     if tshift is not None:
         cfg.update(t_sampling="logit_normal", t_shift=float(tshift), t_logit_mean=0.0, t_logit_std=1.0)
+        cfg["inference_flow_shift"] = float(tshift)   # validation/eval must sample with the SAME shift the t distribution was warped by
         if reblur > 0 or pixel > 0:
             cfg.update(t_low_frac=0.25, t_low_max=0.3)   # keep the low-noise-only decoded losses firing under a high-noise-heavy schedule
     if tokrob:
         cfg.update(token_dropout=0.2, token_noise_std=0.3)
     if blur_everyframe:
         cfg["blur_every_frame_conditioning"] = True
+    if context:
+        # v3: REAL context frames instead of the 4 copy-prefix frames. Generated video = 5 front (1 condition slot + 4 past) + 9 exposure
+        # + 3 future real frames = 17 pixel frames = 5 latents. Datasets load a 19-frame real window (5 past | 9 exposure | 5 future) and
+        # the blur stays the mean of the center 11 frames, so the exposure/blur are unchanged vs v2.
+        cfg.update(deblur_prefix_frames=0, context_key="wan_frames_ctx", context_layout={"front": 5, "back": 3},
+                   ctx_loss_weight=0.5)
+        for split in ("train",):
+            for src in cfg["datasets"][split]["sources"]:
+                if src["name"] == "omoblur":
+                    src.update(ctx_key="wan_frames_ctx", ctx_frames=19)
+                else:
+                    src.update(window_size=19, ctx_key="wan_frames_ctx")
+                    if src["name"] != "adobe":
+                        src["blur_window"] = 11      # Adobe's blur is the provided 11-frame file
     tr = cfg["datasets"]["train"]
     # patchified mode: sources emit LARGE natives, MixedDataset draws per-batch crop side / aug
     for src in tr["sources"]:
@@ -157,10 +177,12 @@ def build_stageA_v2(key, *, multilayer=False, reblur=0.0, unfreeze=False, tshift
             src.pop("out_size", None)
     tr.update(patch_aspect_ratios=True, is_train=True, batch_size=2, patches_per_group=2,
               crop_size=512, crop_size_choices=[384, 512, 640, 704], crop_aspect_min=0.5, crop_aspect_max=2.0,
-              shape_divisor=32, frame_keys=["wan_frames"],
+              shape_divisor=32, frame_keys=["wan_frames", "wan_frames_ctx"] if context else ["wan_frames"],
               augment={"hflip": 0.5, "vflip": 0.0, "time_reverse": 0.5, "scale_range": [0.75, 1.5]},
               epoch_size=4000, num_worker_per_gpu=4)
     cfg["train"]["batch_size"] = 2   # real per-step batch comes from datasets.train.batch_size in this mode
+    # keep a separate copy of the best-validated weights (best-<step>, never rotated); motion error is the selection metric
+    cfg["train"].update(save_best=True, best_metric="epe")
     if smoke:
         cfg["experiment_key"] += "_SMOKE"
         cfg["train"].update(max_train_steps=4, validation_steps=4, checkpointing_steps=4)
@@ -182,6 +204,13 @@ V2_ARMS = {  # name -> kwargs. Every arm adds ONE lever on top of v2_base (same 
     "v2_ml": dict(multilayer=True),
     # combined long run: levers 1-6 that are safe w.r.t. the oracle->Stage-C gap (NO multilayer until a decode probe exists)
     "v2_full": dict(tshift=5.0, reblur=0.1, pixel=0.1, tokrob=True, blur_everyframe=True, unfreeze=True),
+    # --- retrain set after the 2026-10-08 fixes: fp32 LoRA masters (v2f_*), and v3 = + REAL context frames (no copy-prefix) ---
+    "v2f_base": dict(fp32=True),
+    # decoded-pixel losses (reblur/pixel) are DROPPED from the full arms until reconstruction and motion are under control
+    "v2f_full": dict(fp32=True, tshift=5.0, tokrob=True, blur_everyframe=True, unfreeze=True),
+    "v2f_notoken": dict(fp32=True, notoken=True),   # same recipe as v2f_base with the V-JEPA tokens zeroed
+    "v3_base": dict(fp32=True, context=True),
+    "v3_full": dict(fp32=True, context=True, tshift=5.0, tokrob=True, blur_everyframe=True, unfreeze=True),
 }
 
 
@@ -189,7 +218,7 @@ if __name__ == "__main__":
     import sys
     if "--v2" in sys.argv:
         for name, kw in V2_ARMS.items():
-            steps = 100000 if name == "v2_full" else 30000   # tokens only engage after ~8k steps -> short arms are uninformative
+            steps = 30000   # all arms (incl. full) compared at 30k; tokens only engage after ~8k steps
             key = f"Wan22VJEPADynamics_stageA_{name}"
             cfg = build_stageA_v2(key, steps=steps, **kw)
             cfg["train"]["validation_steps"] = 5000 if steps == 30000 else 10000

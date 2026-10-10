@@ -1,0 +1,92 @@
+name: Motion
+model_type: Wan22VJEPADynamics_model
+tracker_project_name: Motion
+experiment_key: EVAL_V2_BASE_gopro
+is_train: false
+report_to: comet_ml
+push_to_hub: false
+num_gpu: 1
+seed: 42
+mixed_precision: bf16
+allow_tf32: true
+pretrained_model_name_or_path: Wan-AI/Wan2.2-TI2V-5B-Diffusers
+dynamics_source: vjepa_gt
+burst_size: 1
+vjepa_hub_entry: vjepa2_1_vit_large_384
+vjepa_image_size: 384
+vjepa_pretrained: true
+vjepa_num_tubelets: 4
+vjepa_grid_h: 24
+vjepa_grid_w: 24
+vjepa_feature_dim: 1024
+pga_rank: 8
+lora_finetune: true
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.0
+lora_target_modules:
+- to_q
+- to_k
+- to_v
+- to_out
+- ffn.net.0.proj
+- ffn.net.2
+disable_dynamics_injection: false
+deblur_prefix_frames: 4
+dynamics_injection: cross_attention
+xattn_rank: 64
+dynamics_connector_type: pooled
+transformer_gradient_checkpointing: true
+datasets:
+  train:
+    type: IndexSubsetDataset
+    manifest: /scratch/gilbreth/wweligam/common_testset_pm1/manifest_gopro.json
+    use_shuffle: false
+    num_worker_per_gpu: 0
+  val:
+    type: IndexSubsetDataset
+    manifest: /scratch/gilbreth/wweligam/common_testset_pm1/manifest_gopro.json
+    use_shuffle: false
+    num_worker_per_gpu: 0
+path:
+  root: /scratch/gilbreth/wweligam/experiments
+  logging_dir: logs
+  resume_from_path: /scratch/gilbreth/wweligam/experiments/Motion/Wan22VJEPADynamics_stageA_v2_base_2026_10_06_09_19_35
+  resume_from_checkpoint: checkpoint-30000
+train:
+  optim:
+    type: adamw
+    scale_lr: false
+    learning_rate: 0.0001
+    override_lr_on_resume: true
+    adam_beta1: 0.9
+    adam_beta2: 0.999
+    adam_weight_decay: 0.01
+    adam_epsilon: 1.0e-08
+    max_grad_norm: 1.0
+  scheduler:
+    type: constant_with_warmup
+    lr_warmup_steps: 500
+    lr_num_cycles: 1
+    lr_power: 1.0
+  gradient_accumulation_steps: 1
+  num_train_epochs: 100
+  batch_size: 2
+  max_train_steps: 1
+  validation_steps: 5000
+  checkpointing_steps: 2000
+  checkpoints_total_limit: 3
+  patched: false
+  check_speed: false
+val:
+  batch_size: 1
+  patched: false
+  save_images: true
+  max_val_steps: 20
+  num_inference_steps: 50
+  metrics:
+    psnr:
+      crop: 8
+    ssim:
+      crop: 8
+sampler_seed: 1

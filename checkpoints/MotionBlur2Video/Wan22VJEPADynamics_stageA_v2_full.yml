@@ -360,12 +360,14 @@ train:
   gradient_accumulation_steps: 1
   num_train_epochs: 100
   batch_size: 2
-  max_train_steps: 100000
-  validation_steps: 10000
+  max_train_steps: 30000
+  validation_steps: 5000
   checkpointing_steps: 2000
   checkpoints_total_limit: 3
   patched: false
   check_speed: false
+  save_best: true
+  best_metric: epe
 val:
   batch_size: 1
   patched: false
@@ -397,6 +399,7 @@ t_sampling: logit_normal
 t_shift: 5.0
 t_logit_mean: 0.0
 t_logit_std: 1.0
+inference_flow_shift: 5.0
 t_low_frac: 0.25
 t_low_max: 0.3
 token_dropout: 0.2

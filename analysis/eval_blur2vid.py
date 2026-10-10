@@ -74,6 +74,11 @@ def resolve(template, root, ds, stem):
     name = stem.split("_", 2)[2] if ds in ("gopro", "adobe") else stem
     pat = template.format(root=root, ds=ds, stem=stem, name=name)
     hits = [h for h in glob.glob(pat) if not any(x in h for x in ("flow", "with_deblur_prefix", "pred_vs_gt"))]
+    # "newest by mtime" silently picked a stale/washed run when several run dirs matched one template. Refuse instead: the template must
+    # match ONE run dir (rename or move the others, or pin the dir in the template). ALLOW_STALE_GLOB=1 restores the old behaviour.
+    runs = {os.path.dirname(os.path.dirname(h)) for h in hits}
+    if len(runs) > 1 and os.environ.get("ALLOW_STALE_GLOB") != "1":
+        raise RuntimeError(f"template {template!r} matches {len(runs)} run dirs: {sorted(os.path.basename(r) for r in runs)}")
     return sorted(hits, key=os.path.getmtime)[-1] if hits else None
 
 
